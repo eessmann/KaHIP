@@ -112,3 +112,13 @@ target_compile_definitions(parhip_interface_static PRIVATE "-DGRAPH_GENERATOR_MP
 target_include_directories(parhip_interface_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface)
 target_link_libraries(parhip_interface_static PRIVATE libmodified_kahip_interface)
 install(TARGETS parhip_interface_static DESTINATION lib)
+
+
+# Temporary Testing
+set(ENABLE_TESTING ON)
+if (ENABLE_TESTING)
+    find_package(Catch2 REQUIRED CONFIG)
+    enable_testing()
+    message("Building Tests")
+    add_subdirectory(tests)
+endif ()

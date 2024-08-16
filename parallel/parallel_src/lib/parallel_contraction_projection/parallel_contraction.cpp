@@ -56,6 +56,28 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
         update_ghost_nodes_weights( communicator, Q );
 }
 
+// Flattens Message Buffer so that MPI_AlltoAllv can be used
+auto flatten_messages( std::vector<std::vector<NodeID>> const& messages ) -> std::tuple< std::vector<NodeID>, std::vector<std::size_t>, std::vector<std::size_t>> {
+        std::vector<NodeID> flattened_vector;
+        std::vector<std::size_t> offsets;
+        std::vector<std::size_t> lengths;
+
+        int current_offset = 0;
+
+        for (auto const& subvector : messages) {
+                offsets.push_back(current_offset);
+                lengths.push_back(static_cast<int>(subvector.size()));
+
+                flattened_vector.insert(flattened_vector.end(), subvector.begin(), subvector.end());
+
+                current_offset += subvector.size();
+        }
+
+        return std::make_tuple(flattened_vector, offsets, lengths);
+
+}
+
+
 void parallel_contraction::compute_label_mapping( MPI_Comm communicator, parallel_graph_access & G, 
                                                   NodeID & global_num_distinct_ids,
                                                   std::unordered_map< NodeID, NodeID > & label_mapping ) {
@@ -63,19 +85,21 @@ void parallel_contraction::compute_label_mapping( MPI_Comm communicator, paralle
         MPI_Comm_rank( communicator, &rank);
         MPI_Comm_size( communicator, &size);
         
-        NodeID divisor  = ceil( G.number_of_global_nodes()/ (double)size);
+        NodeID divisor  = ceil( G.number_of_global_nodes()/ static_cast<double>(size));
 
         helpers helper;
+        m_messages.clear();
         m_messages.resize(size);
 
         std::vector< std::unordered_map< NodeID, bool > > filter;
         filter.resize(size);
+
         forall_local_nodes(G, node) {
                 PEID peID = G.getNodeLabel(node) / divisor;
                 filter[ peID ][G.getNodeLabel(node)] = true;
         } endfor
 
-        for( PEID peID = 0; peID < (PEID) size; peID++) {
+        for( PEID peID = 0; peID < size; peID++) {
                 std::unordered_map< NodeID, bool >::iterator it;
                 for( it = filter[peID].begin(); it != filter[peID].end(); it++) {
                         m_messages[peID].push_back(it->first);
@@ -85,14 +109,14 @@ void parallel_contraction::compute_label_mapping( MPI_Comm communicator, paralle
         // now flood the network
         for( PEID peID = 0; peID < size; peID++) {
                 if( peID != rank ) {
-                        if( m_messages[peID].size() == 0 ){
+                        if( m_messages[peID].empty() ){
                                 m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
                         }
 
-                        MPI_Request rq; 
-                        MPI_Isend( &m_messages[peID][0], 
-                                    m_messages[peID].size(), 
-                                    MPI_UNSIGNED_LONG_LONG, 
+                        MPI_Request rq;
+                        MPI_Isend( &m_messages[peID][0],
+                                    m_messages[peID].size(),
+                                    MPI_UNSIGNED_LONG_LONG,
                                     peID, peID+4*size, communicator, &rq);
                 }
         }
@@ -118,7 +142,7 @@ void parallel_contraction::compute_label_mapping( MPI_Comm communicator, paralle
                 std::vector<NodeID> incmessage; incmessage.resize(message_length);
 
                 MPI_Status rst;
-                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+4*size, communicator, &rst); 
+                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+4*size, communicator, &rst);
                 counter++;
 
                 PEID peID = st.MPI_SOURCE;
