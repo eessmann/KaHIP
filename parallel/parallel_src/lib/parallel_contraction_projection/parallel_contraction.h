@@ -21,6 +21,13 @@ public:
                                                parallel_graph_access & G, 
                                                parallel_graph_access & Q);
 private:
+	// Temporary Duplicated function
+	void compute_label_mapping_collective( MPI_Comm communicator, parallel_graph_access & G,
+							NodeID & global_num_distinct_ids,
+							std::unordered_map< NodeID, NodeID > & label_mapping);
+	void compute_label_mapping_original( MPI_Comm communicator, parallel_graph_access & G,
+							NodeID & global_num_distinct_ids,
+							std::unordered_map< NodeID, NodeID > & label_mapping);
         // compute mapping of labels id into contiguous intervall [0, ...., num_lables)
         void compute_label_mapping( MPI_Comm communicator, parallel_graph_access & G, 
                                     NodeID & global_num_distinct_ids,
@@ -46,7 +53,7 @@ private:
         std::vector< std::vector< NodeID > >  m_send_buffers; // buffers to send messages
 };
 
-auto flatten_messages(std::vector<std::vector<NodeID>> const& messages ) -> std::tuple< std::vector<NodeID>, std::vector<std::size_t>, std::vector<std::size_t>>;
+auto flatten_messages(std::vector<std::vector<NodeID>> const& messages ) -> std::tuple< std::vector<NodeID>, std::vector<int>, std::vector<int>>;
 
 
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */
