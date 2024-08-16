@@ -8,17 +8,19 @@
 
 #include "parallel_contraction_projection/parallel_contraction.h"
 
+#include <communication/mpi_tools.h>
+
 TEST_CASE("flattening vector of messages", "[unit][mpi]") {
     SECTION("Empty Vector") {
         std::vector<std::vector<NodeID> > m_empty{};
-        auto [flattened, offsets, lengths] = flatten_messages(m_empty);
+        auto [flattened, offsets, lengths] = collective_tools::pack_messages(m_empty);
         REQUIRE(flattened.empty());
         REQUIRE(offsets.empty());
         REQUIRE(lengths.empty());
     }
     SECTION("Simple Vector") {
         std::vector<std::vector<NodeID> > m_simple{{1, 2, 3, 4}};
-        auto [flattened, offsets, lengths] = flatten_messages(m_simple);
+        auto [flattened, offsets, lengths] = collective_tools::pack_messages(m_simple);
 
         // Testing sizes
         REQUIRE(flattened.size() == 4);
@@ -37,7 +39,7 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
             {6, 7, 8, 9}
         };
 
-        auto [flattened, offsets, lengths] = flatten_messages(data);
+        auto [flattened, offsets, lengths] = collective_tools::pack_messages(data);
 
         // Testing sizes
         REQUIRE(flattened.size() == 9);
@@ -62,7 +64,7 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
         auto fun = std::ranges::less{};
         auto sliced = orig | std::views::chunk_by(fun) | std::ranges::to<std::vector<std::vector<NodeID> > >();
 
-        auto [flattened, offsets, lengths] = flatten_messages(sliced);
+        auto [flattened, offsets, lengths] = collective_tools::pack_messages(sliced);
         REQUIRE(flattened.size() == orig.size());
         REQUIRE(orig == flattened);
     }
