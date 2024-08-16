@@ -46,5 +46,7 @@ private:
         std::vector< std::vector< NodeID > >  m_send_buffers; // buffers to send messages
 };
 
+auto flatten_messages(std::vector<std::vector<NodeID>> const& messages ) -> std::tuple< std::vector<NodeID>, std::vector<std::size_t>, std::vector<std::size_t>>;
+
 
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */
