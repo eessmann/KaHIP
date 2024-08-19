@@ -18,3 +18,19 @@ catch_discover_tests(
         TEST_PREFIX "unit-"
         OUTPUT_DIR .
         OUTPUT_PREFIX "unit-")
+
+
+# Parallel contraction
+add_executable(parallel_contraction_mpi_test parallel_contraction/parallel_contraction_mpi_test.cpp)
+target_link_libraries(parallel_contraction_mpi_test PRIVATE catch_mpi_runner)
+target_link_libraries(parallel_contraction_mpi_test PRIVATE libparallel)
+target_link_libraries(parallel_contraction_mpi_test PRIVATE libmodified_kahip_interface)
+
+catch_discover_tests(
+        parallel_contraction_mpi_test
+        TEST_PREFIX "unit-"
+        PROPERTIES crosscompiling_emulator "mpirun -n 4"
+        REPORTER xml
+        OUTPUT_DIR .
+        OUTPUT_PREFIX "unit-"
+        OUTPUT_SUFFIX .xml)

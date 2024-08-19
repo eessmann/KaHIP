@@ -1,7 +1,6 @@
 //
 // Created by Erich Essmann on 16/08/2024.
 //
-#pragma once
 #include <mpi.h>
 #include <catch2/catch_session.hpp>
 
