@@ -46,7 +46,7 @@ public:
                    const MPI_Datatype &recvtype, MPI_Comm communicator);
 };
 
-namespace collective_tools {
+namespace mpi_collective_tools {
     template<class ContainerType>
     concept Container = requires(ContainerType a, const ContainerType b)
     {
@@ -84,7 +84,7 @@ namespace collective_tools {
     template<Container Input>
         requires Container<typename Input::value_type>
     auto pack_messages(
-        Input const& messages) -> mpi_packed_message<typename Input::value_type::value_type> {
+        Input const &messages) -> mpi_packed_message<typename Input::value_type::value_type> {
         using inner = typename Input::value_type;
         using element_type = typename inner::value_type;
 
@@ -108,8 +108,8 @@ namespace collective_tools {
 
     // Unpacks received message buffer received from alltoall
     template<typename Elem>
-    auto unpack_messages(mpi_packed_message<Elem> const& packed_message) -> std::vector<std::vector<Elem>> {
-        auto const& [recv_buf, recv_displs, recv_counts] = packed_message;
+    auto unpack_messages(mpi_packed_message<Elem> const &packed_message) -> std::vector<std::vector<Elem> > {
+        auto const &[recv_buf, recv_displs, recv_counts] = packed_message;
         int num_ranks = static_cast<int>(recv_counts.size());
         std::vector<std::vector<NodeID> > result(num_ranks);
 
@@ -125,6 +125,36 @@ namespace collective_tools {
         }
 
         return result;
+    }
+
+    template<Container Input>
+        requires Container<typename Input::value_type>
+    auto all_to_all(Input const &sends, MPI_Comm communicator) {
+        using inner = typename Input::value_type;
+        using element_type = typename inner::value_type;
+
+        PEID rank, size;
+        MPI_Comm_rank(communicator, &rank);
+        MPI_Comm_size(communicator, &size);
+
+        // Packing messages into vector and computing offsets and lengths for the sub messages
+        auto [send_packed_messages, send_offsets, send_lengths] = mpi_collective_tools::pack_messages(sends);
+
+        // Preparing receive buffers for the node ids, offsets, and lengths
+        int total_message_size = 0;
+        const int local_message_size = static_cast<int>(send_packed_messages.size());
+        MPI_Allreduce(&local_message_size, &total_message_size, 1, MPI_INT, MPI_SUM, communicator);
+
+        auto recv_packed_messages = std::vector<element_type>(total_message_size);
+        auto recv_offsets = std::vector<int>(size);
+        auto recv_lengths = std::vector<int>(size);
+
+        auto mpi_error = MPI_Alltoallv(send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
+                                           MPI_UNSIGNED_LONG_LONG, recv_packed_messages.data(), recv_lengths.data(),
+                                           recv_offsets.data(), MPI_UNSIGNED_LONG_LONG,
+                                           communicator);
+
+        return mpi_collective_tools::unpack_messages<element_type>({recv_packed_messages, recv_offsets, recv_lengths});
     }
 }
 
