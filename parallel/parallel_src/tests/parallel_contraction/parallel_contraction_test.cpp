@@ -5,6 +5,7 @@
 #include <vector>
 #include <span>
 #include <ranges>
+#include <type_traits>
 
 #include "parallel_contraction_projection/parallel_contraction.h"
 
@@ -17,6 +18,12 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
         REQUIRE(flattened.empty());
         REQUIRE(offsets.empty());
         REQUIRE(lengths.empty());
+
+        std::vector<std::vector<NodeID> > m_empty2{{}};
+        auto [flattened2, offsets2, lengths2] = mpi_collective_tools::pack_messages(m_empty2);
+        REQUIRE(flattened2.empty());
+        REQUIRE(offsets2.size() == 1);
+        REQUIRE(lengths2.size() == 1);
     }
     SECTION("Simple Vector") {
         std::vector<std::vector<NodeID> > m_simple{{1, 2, 3, 4}};
@@ -67,5 +74,37 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
         auto [flattened, offsets, lengths] = mpi_collective_tools::pack_messages(sliced);
         REQUIRE(flattened.size() == orig.size());
         REQUIRE(orig == flattened);
+    }
+}
+
+TEST_CASE("Packing and Unpacking for messages", "[unit][mpi]") {
+    SECTION("Empty Vector") {
+        constexpr std::vector<std::vector<NodeID> > m_empty{};
+        auto const packed = mpi_collective_tools::pack_messages(m_empty);
+        auto const unpacked = mpi_collective_tools::unpack_messages(packed);
+
+        REQUIRE(m_empty == unpacked);
+    }
+
+    SECTION("Message of an empty Vector") {
+        std::vector<std::vector<NodeID> > const m_empty{{}};
+        auto const packed = mpi_collective_tools::pack_messages(m_empty);
+        auto const unpacked = mpi_collective_tools::unpack_messages(packed);
+
+        REQUIRE(m_empty == unpacked);
+    }
+
+    SECTION("Complex Message") {
+        std::vector<std::vector<NodeID> > data = {
+            {1, 2, 3},
+            {},
+            {4, 5},
+            {},{},
+            {6, 7, 8, 9}
+        };
+        auto const packed = mpi_collective_tools::pack_messages(data);
+        auto const unpacked = mpi_collective_tools::unpack_messages(packed);
+        REQUIRE(data == unpacked);
+
     }
 }
