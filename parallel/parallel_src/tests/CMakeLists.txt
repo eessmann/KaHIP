@@ -1,4 +1,6 @@
 # Automatically enable catch2 to generate ctest targets
+find_package(fmt REQUIRED CONFIG)
+
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(CTest)
 include(Catch)
@@ -24,7 +26,7 @@ catch_discover_tests(
 add_executable(parallel_contraction_mpi_test parallel_contraction/parallel_contraction_mpi_test.cpp)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE catch_mpi_runner)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE libparallel)
-target_link_libraries(parallel_contraction_mpi_test PRIVATE libmodified_kahip_interface)
+target_link_libraries(parallel_contraction_mpi_test PRIVATE libmodified_kahip_interface fmt::fmt)
 
 catch_discover_tests(
         parallel_contraction_mpi_test
