@@ -133,10 +133,10 @@ void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicato
         // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
         // build the mapping locally
-        std::unordered_map<NodeID, NodeID> label_mapping_to_cnode;
+        std::unordered_map< NodeID, NodeID > label_mapping_to_cnode;
         NodeID cur_id = num_smaller_ids;
-        for (ULONG i = 0; i < local_labels.size(); i++) {
-                label_mapping_to_cnode.at(local_labels.at(i)) = cur_id++;
+        for( ULONG i = 0; i < local_labels.size(); i++) {
+                label_mapping_to_cnode[local_labels[i]] = cur_id++;
         }
 
         // now send the processes the mapping back
@@ -157,19 +157,8 @@ void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicato
                 }
         }
 
-        for (PEID peID = 0; peID < size; peID++) {
-                if (peID != rank) {
-                        MPI_Request rq;
-                        MPI_Isend(&m_out_messages[peID][0],
-                                  m_out_messages[peID].size(),
-                                  MPI_UNSIGNED_LONG_LONG,
-                                  peID, peID + 5 * size, communicator, &rq);
-                }
-        }
-
         auto recv_mapping = mpi_collective_tools::all_to_all(m_out_messages, communicator);
-
-
+        
         // first the local labels
         for (ULONG i = 0; i < m_messages.at(rank).size(); i++) {
                 label_mapping[m_messages.at(rank).at(i)] = label_mapping_to_cnode.at(m_messages.at(rank).at(i));
