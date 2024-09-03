@@ -158,7 +158,7 @@ void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicato
         }
 
         auto recv_mapping = mpi_collective_tools::all_to_all(m_out_messages, communicator);
-        
+
         // first the local labels
         for (ULONG i = 0; i < m_messages.at(rank).size(); i++) {
                 label_mapping[m_messages.at(rank).at(i)] = label_mapping_to_cnode.at(m_messages.at(rank).at(i));
