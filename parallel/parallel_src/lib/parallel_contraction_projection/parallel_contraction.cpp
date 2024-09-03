@@ -78,12 +78,10 @@ void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicato
         std::vector<std::unordered_map<NodeID, bool> > filter;
         filter.resize(size);
 
-        forall_local_nodes(G, node)
-                {
-                        PEID peID = G.getNodeLabel(node) / divisor;
-                        filter.at(peID).at(G.getNodeLabel(node)) = true;
-                }
-        endfor
+        forall_local_nodes(G, node) {
+                PEID peID = G.getNodeLabel(node) / divisor;
+                filter[ peID ][G.getNodeLabel(node)] = true;
+        } endfor
 
         for (PEID peID = 0; peID < size; peID++) {
                 std::unordered_map<NodeID, bool>::iterator it;
