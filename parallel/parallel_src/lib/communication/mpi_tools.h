@@ -154,12 +154,15 @@ namespace mpi_collective_tools {
 
         // Preparing receive buffers for the node ids, offsets, and lengths
         std::vector<int> num_recv_from_rank(send_lengths.size(),0); // number of messeages from each rank
-        MPI_Alltoall(send_lengths.data(), size, MPI_INT, num_recv_from_rank.data(), size, MPI_INT, communicator);
-        auto const recv_buff_size = std::reduce(send_packed_messages.begin(), send_packed_messages.end(), 0);
+        MPI_Alltoall(send_lengths.data(), 1, MPI_INT, num_recv_from_rank.data(), 1, MPI_INT, communicator);
+        auto const recv_buff_size = std::reduce(num_recv_from_rank.begin(), num_recv_from_rank.end(), 0);
 
         auto recv_packed_messages = std::vector<element_type>(recv_buff_size, 0);
         auto recv_offsets = std::vector<int>(size, 0);
-        auto recv_lengths = std::vector<int>(size, 0);
+        auto const recv_lengths = num_recv_from_rank;
+
+        // Calculating recv offsets
+        std::exclusive_scan(recv_lengths.begin(), recv_lengths.end(), recv_offsets.begin(), 0);
 
         auto mpi_error = MPI_Alltoallv(send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
                                        MPI_UNSIGNED_LONG_LONG, recv_packed_messages.data(), recv_lengths.data(),
