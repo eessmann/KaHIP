@@ -16,6 +16,7 @@
 
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
+#include "mpi_types.h"
 
 class mpi_tools {
 public:
@@ -152,11 +153,11 @@ namespace mpi_collective_tools {
         }
 
         // Preparing receive buffers for the node ids, offsets, and lengths
-        int total_message_size = 0;
-        const int local_message_size = static_cast<int>(send_packed_messages.size());
-        MPI_Allreduce(&local_message_size, &total_message_size, 1, MPI_INT, MPI_SUM, communicator);
+        std::vector<int> num_recv_from_rank(send_lengths.size(),0); // number of messeages from each rank
+        MPI_Alltoall(send_lengths.data(), size, MPI_INT, num_recv_from_rank.data(), size, MPI_INT, communicator);
+        auto const recv_buff_size = std::reduce(send_packed_messages.begin(), send_packed_messages.end(), 0);
 
-        auto recv_packed_messages = std::vector<element_type>(total_message_size, 0);
+        auto recv_packed_messages = std::vector<element_type>(recv_buff_size, 0);
         auto recv_offsets = std::vector<int>(size, 0);
         auto recv_lengths = std::vector<int>(size, 0);
 
