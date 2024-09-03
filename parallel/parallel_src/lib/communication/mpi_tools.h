@@ -164,10 +164,13 @@ namespace mpi_collective_tools {
         // Calculating recv offsets
         std::exclusive_scan(recv_lengths.begin(), recv_lengths.end(), recv_offsets.begin(), 0);
 
-        auto mpi_error = MPI_Alltoallv(send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
+        auto const mpi_error = MPI_Alltoallv(send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
                                        MPI_UNSIGNED_LONG_LONG, recv_packed_messages.data(), recv_lengths.data(),
                                        recv_offsets.data(), MPI_UNSIGNED_LONG_LONG,
                                        communicator);
+        if (mpi_error != MPI_SUCCESS) {
+            throw(std::runtime_error("MPI_collective_tools::all_to_all()"));
+        }
         return mpi_collective_tools::unpack_messages<element_type>({recv_packed_messages, recv_offsets, recv_lengths});
     }
 }
