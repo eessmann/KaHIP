@@ -20,10 +20,6 @@
 
 class mpi_tools {
 public:
-    mpi_tools();
-
-    virtual ~mpi_tools();
-
     void collect_and_write_labels(MPI_Comm communicator, PPartitionConfig &config,
                                   parallel_graph_access &G);
 

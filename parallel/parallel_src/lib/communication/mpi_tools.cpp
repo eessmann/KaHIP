@@ -12,15 +12,6 @@
 #include "io/parallel_graph_io.h"
 #include "mpi_tools.h"
 
-mpi_tools::mpi_tools() {
-                
-}
-
-mpi_tools::~mpi_tools() {
-                
-
-}
-
 // currently this method is for debugging purposses only
 // later on this may be a parallel io routine
 void mpi_tools::collect_and_write_labels( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G) {
