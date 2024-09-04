@@ -14,20 +14,20 @@
 TEST_CASE("flattening vector of messages", "[unit][mpi]") {
     SECTION("Empty Vector") {
         std::vector<std::vector<NodeID> > m_empty{};
-        auto [flattened, offsets, lengths] = mpi_collective_tools::pack_messages(m_empty);
+        auto [flattened, offsets, lengths] = mpi::pack_messages(m_empty);
         REQUIRE(flattened.empty());
         REQUIRE(offsets.empty());
         REQUIRE(lengths.empty());
 
         std::vector<std::vector<NodeID> > m_empty2{{}};
-        auto [flattened2, offsets2, lengths2] = mpi_collective_tools::pack_messages(m_empty2);
+        auto [flattened2, offsets2, lengths2] = mpi::pack_messages(m_empty2);
         REQUIRE(flattened2.empty());
         REQUIRE(offsets2.size() == 1);
         REQUIRE(lengths2.size() == 1);
     }
     SECTION("Simple Vector") {
         std::vector<std::vector<NodeID> > m_simple{{1, 2, 3, 4}};
-        auto [flattened, offsets, lengths] = mpi_collective_tools::pack_messages(m_simple);
+        auto [flattened, offsets, lengths] = mpi::pack_messages(m_simple);
 
         // Testing sizes
         REQUIRE(flattened.size() == 4);
@@ -46,7 +46,7 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
             {6, 7, 8, 9}
         };
 
-        auto [flattened, offsets, lengths] = mpi_collective_tools::pack_messages(data);
+        auto [flattened, offsets, lengths] = mpi::pack_messages(data);
 
         // Testing sizes
         REQUIRE(flattened.size() == 9);
@@ -71,7 +71,7 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
         auto fun = std::ranges::less{};
         auto sliced = orig | std::views::chunk_by(fun) | std::ranges::to<std::vector<std::vector<NodeID> > >();
 
-        auto [flattened, offsets, lengths] = mpi_collective_tools::pack_messages(sliced);
+        auto [flattened, offsets, lengths] = mpi::pack_messages(sliced);
         REQUIRE(flattened.size() == orig.size());
         REQUIRE(orig == flattened);
     }
@@ -80,16 +80,16 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
 TEST_CASE("Packing and Unpacking for messages", "[unit][mpi]") {
     SECTION("Empty Vector") {
         constexpr std::vector<std::vector<NodeID> > m_empty{};
-        auto const packed = mpi_collective_tools::pack_messages(m_empty);
-        auto const unpacked = mpi_collective_tools::unpack_messages(packed);
+        auto const packed = mpi::pack_messages(m_empty);
+        auto const unpacked = mpi::unpack_messages(packed);
 
         REQUIRE(m_empty == unpacked);
     }
 
     SECTION("Message of an empty Vector") {
         std::vector<std::vector<NodeID> > const m_empty{{}};
-        auto const packed = mpi_collective_tools::pack_messages(m_empty);
-        auto const unpacked = mpi_collective_tools::unpack_messages(packed);
+        auto const packed = mpi::pack_messages(m_empty);
+        auto const unpacked = mpi::unpack_messages(packed);
 
         REQUIRE(m_empty == unpacked);
     }
@@ -102,8 +102,8 @@ TEST_CASE("Packing and Unpacking for messages", "[unit][mpi]") {
             {},{},
             {6, 7, 8, 9}
         };
-        auto const packed = mpi_collective_tools::pack_messages(data);
-        auto const unpacked = mpi_collective_tools::unpack_messages(packed);
+        auto const packed = mpi::pack_messages(data);
+        auto const unpacked = mpi::unpack_messages(packed);
         REQUIRE(data == unpacked);
 
     }

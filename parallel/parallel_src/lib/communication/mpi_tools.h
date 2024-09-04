@@ -52,32 +52,7 @@ public:
                    const MPI_Datatype &recvtype, MPI_Comm communicator);
 };
 
-namespace mpi_collective_tools {
-    template<class ContainerType>
-    concept Container = requires(ContainerType a, const ContainerType b)
-    {
-        requires std::regular<ContainerType>;
-        requires std::swappable<ContainerType>;
-        requires std::destructible<typename ContainerType::value_type>;
-        requires std::same_as<typename ContainerType::reference, typename ContainerType::value_type &>;
-        requires std::same_as<typename ContainerType::const_reference, const typename ContainerType::value_type &>;
-        requires std::forward_iterator<typename ContainerType::iterator>;
-        requires std::forward_iterator<typename ContainerType::const_iterator>;
-        requires std::signed_integral<typename ContainerType::difference_type>;
-        requires std::same_as<typename ContainerType::difference_type, typename std::iterator_traits<typename
-            ContainerType::iterator>::difference_type>;
-        requires std::same_as<typename ContainerType::difference_type, typename std::iterator_traits<typename
-            ContainerType::const_iterator>::difference_type>;
-        { a.begin() } -> std::same_as<typename ContainerType::iterator>;
-        { a.end() } -> std::same_as<typename ContainerType::iterator>;
-        { b.begin() } -> std::same_as<typename ContainerType::const_iterator>;
-        { b.end() } -> std::same_as<typename ContainerType::const_iterator>;
-        { a.cbegin() } -> std::same_as<typename ContainerType::const_iterator>;
-        { a.cend() } -> std::same_as<typename ContainerType::const_iterator>;
-        { a.size() } -> std::same_as<typename ContainerType::size_type>;
-        { a.max_size() } -> std::same_as<typename ContainerType::size_type>;
-        { a.empty() } -> std::same_as<bool>;
-    };
+namespace mpi {
 
     template<typename Elem>
     struct mpi_packed_message {
@@ -87,8 +62,8 @@ namespace mpi_collective_tools {
     };
 
     // Packs message buffer so that MPI_AlltoAllv can be used
-    template<Container Input>
-        requires Container<typename Input::value_type>
+    template<container Input>
+        requires container<typename Input::value_type>
     auto pack_messages(Input const &messages)
         -> mpi_packed_message<typename Input::value_type::value_type> {
         using inner = typename Input::value_type;
@@ -133,8 +108,8 @@ namespace mpi_collective_tools {
         return result;
     }
 
-    template<Container Input>
-        requires Container<typename Input::value_type>
+    template<container Input>
+        requires container<typename Input::value_type>
     auto all_to_all(Input const &sends, MPI_Comm communicator) {
         using inner = typename Input::value_type;
         using element_type = typename inner::value_type;
@@ -144,7 +119,7 @@ namespace mpi_collective_tools {
         MPI_Comm_size(communicator, &size);
 
         // Packing messages into vector and computing offsets and lengths for the sub messages
-        auto [send_packed_messages, send_offsets, send_lengths] = mpi_collective_tools::pack_messages(sends);
+        auto [send_packed_messages, send_offsets, send_lengths] = mpi::pack_messages(sends);
 
         if (send_offsets.size() != send_lengths.size()) {
             throw(std::runtime_error("MPI_collective_tools::pack_messages()"));
@@ -165,13 +140,13 @@ namespace mpi_collective_tools {
         std::exclusive_scan(recv_lengths.begin(), recv_lengths.end(), recv_offsets.begin(), 0);
 
         auto const mpi_error = MPI_Alltoallv(send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
-                                       MPI_UNSIGNED_LONG_LONG, recv_packed_messages.data(), recv_lengths.data(),
-                                       recv_offsets.data(), MPI_UNSIGNED_LONG_LONG,
+                                       get_mpi_datatype<element_type>(), recv_packed_messages.data(), recv_lengths.data(),
+                                       recv_offsets.data(), get_mpi_datatype<element_type>(),
                                        communicator);
         if (mpi_error != MPI_SUCCESS) {
             throw(std::runtime_error("MPI_collective_tools::all_to_all()"));
         }
-        return mpi_collective_tools::unpack_messages<element_type>({recv_packed_messages, recv_offsets, recv_lengths});
+        return mpi::unpack_messages<element_type>({recv_packed_messages, recv_offsets, recv_lengths});
     }
 }
 

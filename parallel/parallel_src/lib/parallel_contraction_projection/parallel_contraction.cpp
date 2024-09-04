@@ -90,7 +90,7 @@ void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicato
                 }
         }
 
-        auto const local_labels_byPE = mpi_collective_tools::all_to_all(m_messages, communicator);
+        auto const local_labels_byPE = mpi::all_to_all(m_messages, communicator);
 
         std::vector<NodeID> local_labels;
         for (PEID peID = 0; peID < size; peID++) {
@@ -157,7 +157,7 @@ void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicato
                 }
         }
 
-        auto recv_mapping = mpi_collective_tools::all_to_all(m_out_messages, communicator);
+        auto recv_mapping = mpi::all_to_all(m_out_messages, communicator);
 
         // first the local labels
         for (ULONG i = 0; i < m_messages.at(rank).size(); i++) {
