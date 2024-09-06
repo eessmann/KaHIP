@@ -12,7 +12,7 @@
 #include "data_structure/hashed_graph.h"
 #include "tools/helpers.h"
 
-#define CONTRACTION true
+#define CONTRACTION false
 
 #ifndef CONTRACTION
 #define CONTRACTION false
