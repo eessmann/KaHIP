@@ -90,14 +90,14 @@ namespace mpi {
     auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
         -> std::vector<std::vector<Elem> > {
         auto const &[recv_buf, recv_displs, recv_counts] = packed_message;
-        auto const recv_span = std::span(recv_buf);
         int num_ranks = static_cast<int>(recv_counts.size());
 
         std::vector<std::vector<Elem> > result;
         result.reserve(num_ranks);
 
         for (int i = 0; i < num_ranks; ++i) {
-            auto const subspan = recv_span.subspan(recv_displs.at(i), recv_counts.at(i));
+            std::vector<Elem> subspan{};
+            subspan.insert(subspan.begin(), recv_buf.begin() + recv_displs[i], recv_buf.begin() + recv_displs[i] + recv_counts[i]);
             result.emplace_back(subspan.begin(), subspan.end());
         }
 
@@ -124,7 +124,7 @@ namespace mpi {
         }
 
         // Preparing receive buffers for the node ids, offsets, and lengths
-        std::vector<int> num_recv_from_rank(send_lengths.size(),0); // number of messeages from each rank
+        std::vector<int> num_recv_from_rank(send_lengths.size(),0); // number of messages from each rank
         MPI_Alltoall(send_lengths.data(), 1, MPI_INT, num_recv_from_rank.data(), 1, MPI_INT, communicator);
         auto const recv_buff_size = std::reduce(num_recv_from_rank.begin(), num_recv_from_rank.end(), 0);
 

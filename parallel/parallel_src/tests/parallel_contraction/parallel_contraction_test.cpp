@@ -54,26 +54,16 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
         REQUIRE(lengths.size() == 4);
 
         // Creating Subspans
-        auto s0 = std::span(flattened);
-        auto s1 = s0.subspan(offsets[0], lengths[0]) | std::ranges::to<std::vector<NodeID> >();
-        auto s2 = s0.subspan(offsets[1], lengths[1]) | std::ranges::to<std::vector<NodeID> >();
-        auto s3 = s0.subspan(offsets[2], lengths[2]) | std::ranges::to<std::vector<NodeID> >();
-        auto s4 = s0.subspan(offsets[3], lengths[3]) | std::ranges::to<std::vector<NodeID> >();
+        std::vector<NodeID> s1, s2, s3, s4;
+        s1.insert(s1.begin(), flattened.begin() + offsets[0], flattened.begin() + offsets[0] + lengths[0]);
+        s2.insert(s2.begin(), flattened.begin() + offsets[1], flattened.begin() + offsets[1] + lengths[1]);
+        s3.insert(s3.begin(), flattened.begin() + offsets[2], flattened.begin() + offsets[2] + lengths[2]);
+        s4.insert(s4.begin(), flattened.begin() + offsets[3], flattened.begin() + offsets[3] + lengths[3]);
 
         REQUIRE(s1 == data[0]);
         REQUIRE(s2 == data[1]);
         REQUIRE(s3 == data[2]);
         REQUIRE(s4 == data[3]);
-    }
-
-    SECTION("Sliced Vector") {
-        std::vector<NodeID> orig = {1, 2, 3, 1, 2, 3, 3, 3, 1, 2, 3};
-        auto fun = std::ranges::less{};
-        auto sliced = orig | std::views::chunk_by(fun) | std::ranges::to<std::vector<std::vector<NodeID> > >();
-
-        auto [flattened, offsets, lengths] = mpi::pack_messages(sliced);
-        REQUIRE(flattened.size() == orig.size());
-        REQUIRE(orig == flattened);
     }
 }
 
