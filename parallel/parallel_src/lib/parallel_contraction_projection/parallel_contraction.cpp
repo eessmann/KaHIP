@@ -12,11 +12,7 @@
 #include "data_structure/hashed_graph.h"
 #include "tools/helpers.h"
 
-#define CONTRACTION false
-
-#ifndef CONTRACTION
-#define CONTRACTION false
-#endif
+#define CONTRACTION true
 
 parallel_contraction::parallel_contraction() = default;
 
