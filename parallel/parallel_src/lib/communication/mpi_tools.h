@@ -83,7 +83,7 @@ namespace mpi {
         std::vector<int> offsets(messages.size());
         std::exclusive_scan(lengths.begin(), lengths.end(), offsets.begin(), 0);
 
-        return mpi_packed_message{flattened_vector, offsets, lengths};
+        return mpi_packed_message<element_type>{flattened_vector, offsets, lengths};
     }
 
     template<typename Elem>
