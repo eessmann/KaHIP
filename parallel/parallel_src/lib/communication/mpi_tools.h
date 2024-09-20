@@ -9,6 +9,10 @@
 #ifndef MPI_TOOLS_HMESDXF2
 #define MPI_TOOLS_HMESDXF2
 
+#ifndef _CRAYC
+#define _CRAYC 0
+#endif
+
 #include <algorithm>
 #include <functional>
 #include <ranges>
@@ -65,9 +69,9 @@ namespace mpi {
         using inner = typename Input::value_type;
         using element_type = typename inner::value_type;
 
-        // Flattening the vector of vectors using join_view
+        // Flattening the container of containers using join_view
         auto const flattened_view = messages | std::ranges::views::join;
-        std::vector<element_type> flattened_vector;
+        std::vector<element_type> flattened_vector{};
         // converting view into vector
         for (auto &&elem: flattened_view) {
             flattened_vector.push_back(static_cast<decltype(elem) &&>(elem));
@@ -94,19 +98,27 @@ namespace mpi {
 
         std::vector<std::vector<Elem> > result;
         result.reserve(num_ranks);
-
-        for (int i = 0; i < num_ranks; ++i) {
-            std::vector<Elem> subspan{};
-            subspan.insert(subspan.begin(), recv_buf.begin() + recv_displs[i], recv_buf.begin() + recv_displs[i] + recv_counts[i]);
-            result.emplace_back(subspan.begin(), subspan.end());
+        if constexpr (_CRAYC) {
+            for (int i = 0; i < num_ranks; ++i) {
+                std::vector<Elem> subspan{};
+                subspan.insert(subspan.begin(), recv_buf.begin() + recv_displs[i], recv_buf.begin() + recv_displs[i] + recv_counts[i]);
+                result.emplace_back(subspan.begin(), subspan.end());
+            }
+        } else {
+        auto const recv_span = std::span(recv_buf);
+            for (int i = 0; i < num_ranks; ++i) {
+                auto const subspan = recv_span.subspan(recv_displs.at(i), recv_counts.at(i));
+                result.emplace_back(subspan.begin(), subspan.end());
+            }
         }
+
 
         return result;
     }
 
     template<container Input>
         requires container<typename Input::value_type>
-    auto all_to_all(Input const &sends, MPI_Comm communicator) {
+    auto all_to_all(Input const &sends, MPI_Comm communicator) -> std::vector<std::vector<typename Input::value_type::value_type> > {
         using inner = typename Input::value_type;
         using element_type = typename inner::value_type;
 

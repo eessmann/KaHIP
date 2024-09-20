@@ -37,7 +37,7 @@ typedef unsigned long long NodeWeight;
 typedef unsigned long long EdgeWeight;
 typedef int PEID; 
 
-const PEID ROOT = 0;
+constexpr PEID ROOT = 0;
 
 typedef enum {
         PERMUTATION_QUALITY_NONE, 
