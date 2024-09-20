@@ -168,7 +168,7 @@ void mpi_tools::distribute_local_graph( MPI_Comm communicator, PPartitionConfig 
         ULONG number_of_edges = 0;
 
         std::vector< int > buffer(2,0);
-        if(rank == (int)ROOT) {
+        if(rank == static_cast<int>(ROOT)) {
                 buffer[0] = G.number_of_global_nodes();
                 buffer[1] = G.number_of_global_edges();
         }
@@ -182,7 +182,7 @@ void mpi_tools::distribute_local_graph( MPI_Comm communicator, PPartitionConfig 
         int* vwgt;        
         int* adjwgt;
 
-        if( rank == (int)ROOT) {
+        if( rank == static_cast<int>(ROOT)) {
                 xadj           = G.UNSAFE_metis_style_xadj_array();
                 adjncy         = G.UNSAFE_metis_style_adjncy_array();
 

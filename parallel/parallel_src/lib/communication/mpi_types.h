@@ -4,6 +4,7 @@
 
 #ifndef MPI_TYPES_H
 #define MPI_TYPES_H
+#include <cinttypes>
 #include <concepts>
 #include <type_traits>
 
