@@ -1,0 +1,3 @@
+BasedOnStyle: Chromium
+UseTab: ForContinuationAndIndentation
+TabWidth: 2

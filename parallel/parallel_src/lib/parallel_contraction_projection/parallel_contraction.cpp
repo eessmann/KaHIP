@@ -58,113 +58,119 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
 }
 
 // MPI AlltoAll based implementation
-void parallel_contraction::compute_label_mapping_collective(MPI_Comm communicator, parallel_graph_access &G,
-                                                            NodeID &global_num_distinct_ids,
-                                                            std::unordered_map<NodeID, NodeID> &label_mapping) {
-        PEID rank, size;
-        MPI_Comm_rank(communicator, &rank);
-        MPI_Comm_size(communicator, &size);
+void parallel_contraction::compute_label_mapping_collective(
+		MPI_Comm communicator,
+		parallel_graph_access& G,
+		NodeID& global_num_distinct_ids,
+		std::unordered_map<NodeID, NodeID>& label_mapping) {
+	PEID rank, size;
+	MPI_Comm_rank(communicator, &rank);
+	MPI_Comm_size(communicator, &size);
 
-        NodeID divisor = ceil(G.number_of_global_nodes() / static_cast<double>(size));
+	NodeID divisor = ceil(G.number_of_global_nodes() / static_cast<double>(size));
 
-        helpers helper;
-        m_messages.clear();
-        m_messages.resize(size);
+	helpers helper;
+	m_messages.clear();
+	m_messages.resize(size);
 
-        std::vector<std::unordered_map<NodeID, bool> > filter;
-        filter.resize(size);
+	std::vector<std::unordered_map<NodeID, bool> > filter;
+	filter.resize(size);
 
-        forall_local_nodes(G, node) {
-                PEID peID = G.getNodeLabel(node) / divisor;
-                filter[ peID ][G.getNodeLabel(node)] = true;
-        } endfor
+	forall_local_nodes(G, node) {
+		PEID peID = G.getNodeLabel(node) / divisor;
+		filter[peID][G.getNodeLabel(node)] = true;
+	}
+	endfor
 
-        for (PEID peID = 0; peID < size; peID++) {
-                std::unordered_map<NodeID, bool>::iterator it;
-                for (it = filter.at(peID).begin(); it != filter.at(peID).end(); ++it) {
-                        m_messages.at(peID).push_back(it->first);
-                }
-        }
+			for (PEID peID = 0; peID < size; peID++) {
+		std::unordered_map<NodeID, bool>::iterator it;
+		for (it = filter.at(peID).begin(); it != filter.at(peID).end(); ++it) {
+			m_messages.at(peID).push_back(it->first);
+		}
+	}
 
-        auto const local_labels_byPE = mpi::all_to_all(m_messages, communicator);
+	auto const local_labels_byPE = mpi::all_to_all(m_messages, communicator);
 
-        std::vector<NodeID> local_labels;
-        for (PEID peID = 0; peID < size; peID++) {
-                for (ULONG i = 0; i < local_labels_byPE.at(peID).size(); i++) {
-                        local_labels.push_back(local_labels_byPE.at(peID).at(i));
-                }
-        }
+	std::vector<NodeID> local_labels;
+	for (PEID peID = 0; peID < size; peID++) {
+		for (ULONG i = 0; i < local_labels_byPE.at(peID).size(); i++) {
+			local_labels.push_back(local_labels_byPE.at(peID).at(i));
+		}
+	}
 
+	// filter duplicates locally
+	helper.filter_duplicates(
+			local_labels,
+			[](const NodeID& lhs, const NodeID& rhs) -> bool { return (lhs < rhs); },
+			[](const NodeID& lhs, const NodeID& rhs) -> bool {
+				return (lhs == rhs);
+			});
+	// afterward they are sorted!
 
-        // filter duplicates locally
-        helper.filter_duplicates(local_labels,
-                                 [](const NodeID &lhs, const NodeID &rhs) -> bool {
-                                         return (lhs < rhs);
-                                 },
-                                 [](const NodeID &lhs, const NodeID &rhs) -> bool {
-                                         return (lhs == rhs);
-                                 });
-        //afterwards they are sorted!
+	// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	// %%%%%%%%%%%%%%%%%%%%%%%Labels are unique on all PEs%%%%%%%%%%%%%%%%%%%%
+	// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	// now counting
 
-        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        // %%%%%%%%%%%%%%%%%%%%%%%Labels are unique on all PEs%%%%%%%%%%%%%%%%%%%%
-        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        // now counting
+	NodeID local_num_labels = local_labels.size();
+	NodeID prefix_sum = 0;
 
-        NodeID local_num_labels = local_labels.size();
-        NodeID prefix_sum = 0;
+	MPI_Scan(&local_num_labels, &prefix_sum, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+					 communicator);
 
-        MPI_Scan(&local_num_labels, &prefix_sum, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, communicator);
+	global_num_distinct_ids = prefix_sum;
+	// Broadcast global number of ids
+	MPI_Bcast(&global_num_distinct_ids, 1, MPI_UNSIGNED_LONG_LONG, size - 1,
+						communicator);
 
-        global_num_distinct_ids = prefix_sum;
-        // Broadcast global number of ids
-        MPI_Bcast(&global_num_distinct_ids, 1, MPI_UNSIGNED_LONG_LONG, size - 1, communicator);
+	NodeID num_smaller_ids = prefix_sum - local_num_labels;
 
-        NodeID num_smaller_ids = prefix_sum - local_num_labels;
+	// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	// %%%%%Now Build the mapping and send information back to PEs%%%%%%%%%%%%
+	// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        // %%%%%Now Build the mapping and send information back to PEs%%%%%%%%%%%%
-        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	// build the mapping locally
+	std::unordered_map<NodeID, NodeID> label_mapping_to_cnode;
+	NodeID cur_id = num_smaller_ids;
+	for (ULONG i = 0; i < local_labels.size(); i++) {
+		label_mapping_to_cnode[local_labels[i]] = cur_id++;
+	}
 
-        // build the mapping locally
-        std::unordered_map< NodeID, NodeID > label_mapping_to_cnode;
-        NodeID cur_id = num_smaller_ids;
-        for( ULONG i = 0; i < local_labels.size(); i++) {
-                label_mapping_to_cnode[local_labels[i]] = cur_id++;
-        }
+	// now send the processes the mapping back
+	// std::vector< std::vector< NodeID > >  m_out_messages;
+	m_out_messages.clear();
+	m_out_messages.resize(size);
 
-        // now send the processes the mapping back
-        //std::vector< std::vector< NodeID > >  m_out_messages;
-        m_out_messages.clear();
-        m_out_messages.resize(size);
+	for (PEID peID = 0; peID < size; peID++) {
+		if (peID == rank)
+			continue;
 
-        for (PEID peID = 0; peID < size; peID++) {
-                if (peID == rank) continue;
+		if (local_labels_byPE.at(peID).empty()) {
+			m_out_messages.at(peID) = {};
+			continue;
+		}
 
-                if (local_labels_byPE.at(peID).empty()) {
-                        m_out_messages.at(peID) = {};
-                        continue;
-                }
+		for (ULONG i = 0; i < local_labels_byPE[peID].size(); i++) {
+			m_out_messages.at(peID).push_back(
+					label_mapping_to_cnode.at(local_labels_byPE.at(peID).at(i)));
+		}
+	}
 
-                for (ULONG i = 0; i < local_labels_byPE[peID].size(); i++) {
-                        m_out_messages.at(peID).push_back(label_mapping_to_cnode.at(local_labels_byPE.at(peID).at(i)));
-                }
-        }
+	auto recv_mapping = mpi::all_to_all(m_out_messages, communicator);
 
-        auto recv_mapping = mpi::all_to_all(m_out_messages, communicator);
+	// first the local labels
+	for (ULONG i = 0; i < m_messages.at(rank).size(); i++) {
+		label_mapping[m_messages.at(rank).at(i)] =
+				label_mapping_to_cnode.at(m_messages.at(rank).at(i));
+	}
 
-        // first the local labels
-        for (ULONG i = 0; i < m_messages.at(rank).size(); i++) {
-                label_mapping[m_messages.at(rank).at(i)] = label_mapping_to_cnode.at(m_messages.at(rank).at(i));
-        }
-
-        for (PEID peID = 0; peID < size; peID++) {
-                for (ULONG i = 0; i < recv_mapping.at(peID).size(); i++) {
-                        label_mapping[m_messages.at(peID).at(i)] = recv_mapping.at(peID).at(i);
-                }
-        }
+	for (PEID peID = 0; peID < size; peID++) {
+		for (ULONG i = 0; i < recv_mapping.at(peID).size(); i++) {
+			label_mapping[m_messages.at(peID).at(i)] = recv_mapping.at(peID).at(i);
+		}
+	}
 }
 
 // Original Implementation
