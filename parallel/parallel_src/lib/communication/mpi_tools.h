@@ -149,6 +149,7 @@ auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
   std::vector<std::vector<Elem>> result;
   result.reserve(num_ranks);
   if constexpr (_CRAYC) {
+    puts("Cray compiler detected");
     for (int i = 0; i < num_ranks; ++i) {
       std::vector<Elem> subvec{};
       subvec.insert(subvec.begin(), recv_buf.begin() + recv_displs[i],
@@ -157,6 +158,7 @@ auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
     }
   } else {
     auto const recv_span = std::span(recv_buf);
+    puts("Not using Cray compiler");
     for (int i = 0; i < num_ranks; ++i) {
       auto const subspan =
           recv_span.subspan(recv_displs.at(i), recv_counts.at(i));
