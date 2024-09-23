@@ -36,19 +36,6 @@ public:
   void distribute_local_graph(MPI_Comm communicator, PPartitionConfig &config,
                               complete_graph_access &G);
 
-  // alltoallv that can send more than int-count elements
-  void alltoallv(void *sendbuf, ULONG sendcounts[], ULONG displs[],
-                 const MPI_Datatype &sendtype, void *recvbuf,
-                 ULONG recvcounts[], ULONG rdispls[],
-                 const MPI_Datatype &recvtype) {
-    alltoallv(sendbuf, sendcounts, displs, sendtype, recvbuf, recvcounts,
-              rdispls, recvtype, MPI_COMM_WORLD);
-  };
-
-  void alltoallv(void *sendbuf, ULONG sendcounts[], ULONG displs[],
-                 const MPI_Datatype &sendtype, void *recvbuf,
-                 ULONG recvcounts[], ULONG rdispls[],
-                 const MPI_Datatype &recvtype, MPI_Comm communicator);
 };
 
 namespace mpi {
@@ -149,7 +136,6 @@ auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
   std::vector<std::vector<Elem>> result;
   result.reserve(num_ranks);
   if constexpr (_CRAYC) {
-    puts("Cray compiler detected");
     for (int i = 0; i < num_ranks; ++i) {
       std::vector<Elem> subvec{};
       subvec.insert(subvec.begin(), recv_buf.begin() + recv_displs[i],
@@ -158,7 +144,6 @@ auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
     }
   } else {
     auto const recv_span = std::span(recv_buf);
-    puts("Not using Cray compiler");
     for (int i = 0; i < num_ranks; ++i) {
       auto const subspan =
           recv_span.subspan(recv_displs.at(i), recv_counts.at(i));
@@ -202,9 +187,9 @@ auto all_to_all(Input const &sends, MPI_Comm communicator)
       mpi::pack_messages(sends);
 
   if (send_offsets.size() != send_lengths.size()) {
-    throw(std::runtime_error("MPI_collective_tools::pack_messages()"));
+    throw(std::runtime_error("mpi::pack_messages(): send_offsets.size() != send_lengths.size()"));
   } else if ((send_offsets.size() != size) || (send_lengths.size() != size)) {
-    throw(std::runtime_error("MPI_collective_tools::pack_messages()"));
+    throw(std::runtime_error("mpi::pack_messages(): send_offsets.size() != mpi size"));
   }
 
   // Preparing receive buffers for the node ids, offsets, and lengths
@@ -229,7 +214,7 @@ auto all_to_all(Input const &sends, MPI_Comm communicator)
       recv_lengths.data(), recv_offsets.data(),
       get_mpi_datatype<element_type>(), communicator);
   if (mpi_error != MPI_SUCCESS) {
-    throw(std::runtime_error("MPI_collective_tools::all_to_all()"));
+    throw(std::runtime_error("mpi::all_to_all()"));
   }
   return mpi::unpack_messages<element_type>(
       {recv_packed_messages, recv_offsets, recv_lengths});
