@@ -24,6 +24,7 @@
 struct Node {
     EdgeID firstEdge;
 };
+
 struct NodeData {
     NodeID     label;
     PartitionID block; // a given partition of the graph (for v-cycles)
@@ -89,7 +90,7 @@ public:
 
         };
 
-        virtual ~ghost_node_communication() {};
+        ~ghost_node_communication() = default;
 
         inline 
         void setGraphReference( parallel_graph_access * G ) {

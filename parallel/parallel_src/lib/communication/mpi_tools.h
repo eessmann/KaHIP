@@ -196,7 +196,7 @@ auto all_to_all(Input const &sends, MPI_Comm communicator)
   std::vector<int> num_recv_from_rank(send_lengths.size(),
                                       0); // number of messages from each rank
   MPI_Alltoall(send_lengths.data(), 1, MPI_INT, num_recv_from_rank.data(), 1,
-               MPI_INT, communicator);
+               MPI_INT, communicator); // Check send count number
   auto const recv_buff_size =
       std::reduce(num_recv_from_rank.begin(), num_recv_from_rank.end(), 0);
 
