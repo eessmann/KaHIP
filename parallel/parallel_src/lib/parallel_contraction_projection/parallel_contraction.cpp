@@ -12,10 +12,6 @@
 #include "data_structure/hashed_graph.h"
 #include "tools/helpers.h"
 
-parallel_contraction::parallel_contraction() = default;
-
-parallel_contraction::~parallel_contraction() = default;
-
 void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config, 
                                                              parallel_graph_access & G, 
                                                              parallel_graph_access & Q) {
@@ -79,7 +75,7 @@ void parallel_contraction::compute_label_mapping(
 		filter[peID][G.getNodeLabel(node)] = true;
 	} endfor
 
-        for (PEID peID = 0; peID < size; peID++) {
+    for (PEID peID = 0; peID < size; peID++) {
 		std::unordered_map<NodeID, bool>::iterator it;
 		for (it = filter.at(peID).begin(); it != filter.at(peID).end(); ++it) {
 			m_messages.at(peID).push_back(it->first);
@@ -176,6 +172,7 @@ void parallel_contraction::get_nodes_to_cnodes_ghost_nodes( MPI_Comm communicato
         MPI_Comm_size( communicator, &size);
         
         std::vector< bool > PE_packed( size, false );
+		m_send_buffers.clear();
         m_send_buffers.resize( size );
 
         forall_local_nodes(G, node) {
@@ -314,9 +311,9 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                         }
 
                         MPI_Request rq;
-                        MPI_Isend( &m_messages[peID][0], 
-                                    m_messages[peID].size(), 
-                                    MPI_UNSIGNED_LONG_LONG, 
+                        MPI_Isend( &m_messages[peID][0],
+                                    m_messages[peID].size(),
+                                    MPI_UNSIGNED_LONG_LONG,
                                     peID, peID+7*size, communicator, &rq);
                 }
         }

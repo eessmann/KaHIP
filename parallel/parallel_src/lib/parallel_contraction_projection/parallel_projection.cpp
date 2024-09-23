@@ -66,15 +66,15 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
                 // wait for incomming message of an adjacent processor
                 MPI_Status st;
                 MPI_Probe(MPI_ANY_SOURCE, rank+size, communicator, &st);
-                
+
                 int message_length;
                 MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
                 std::vector<NodeID> incmessage; incmessage.resize(message_length);
 
                 MPI_Status rst;
-                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+size, communicator, &rst); 
+                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+size, communicator, &rst);
                 counter++;
-
+								//----- size of messeges
                 PEID peID = st.MPI_SOURCE;
                 // now integrate the changes
                 if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
@@ -89,17 +89,18 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
                 }
 
 
+
                 for( int i = 0; i < message_length; i++) {
                         NodeID cnode = coarser.getLocalID(incmessage[i]);
                         out_messages[peID].push_back(coarser.getNodeLabel(cnode));
                 }
-
+								// -- Handling messages and building response
                 MPI_Request rq;
                 MPI_Isend( &out_messages[peID][0], 
                                 out_messages[peID].size(), 
                                 MPI_UNSIGNED_LONG_LONG, 
                                 peID, peID+2*size, communicator, &rq);
-
+								// -- Sending responses
         }
 
         counter = 0;
@@ -115,7 +116,7 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
                 MPI_Status rst;
                 MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, communicator, &rst); 
                 counter++;
-
+								// -- get sizes and revcs
                 // now integrate the changes
                 if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
                         continue; // nothing to do
