@@ -11,6 +11,7 @@
 #include "data_structure/hashed_graph.h"
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
+#include "communication/mpi_tools.h"
 
 class parallel_contraction {
  public:
@@ -51,4 +52,43 @@ class parallel_contraction {
 	std::vector<std::vector<NodeID>> m_send_buffers;  // buffers to send messages
 };
 
+// Comm types
+namespace contraction {
+struct bundled_edge {
+	NodeID source;
+	NodeID target;
+	NodeWeight weight;
+};
+}  // namespace contraction
+
+// Specialize mpi_data_kind_trait for bundled_edge
+namespace mpi::details {
+template <>
+struct mpi_data_kind_trait<contraction::bundled_edge> {
+	static constexpr mpi_data_kinds kind = mpi_data_kinds::composite;
+};
+
+template <>
+struct mpi_datatype_trait<contraction::bundled_edge> {
+	static MPI_Datatype get_mpi_type() {
+		static MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
+		if (mpi_type == MPI_DATATYPE_NULL) {
+			int block_lengths[3] = {1, 1, 1};
+			MPI_Datatype types[3] = {
+					get_mpi_datatype<decltype(contraction::bundled_edge::source)>(),
+					get_mpi_datatype<decltype(contraction::bundled_edge::target)>(),
+					get_mpi_datatype<decltype(contraction::bundled_edge::weight)>()};
+			MPI_Aint offsets[3];
+
+			offsets[0] = offsetof(contraction::bundled_edge, source);
+			offsets[1] = offsetof(contraction::bundled_edge, target);
+			offsets[2] = offsetof(contraction::bundled_edge, weight);
+
+			MPI_Type_create_struct(3, block_lengths, offsets, types, &mpi_type);
+			MPI_Type_commit(&mpi_type);
+		}
+		return mpi_type;
+	}
+};
+}  // namespace mpi::details
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */

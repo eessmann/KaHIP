@@ -46,110 +46,57 @@ template <typename Elem> struct mpi_packed_message {
   std::vector<int> lengths;
 };
 
-/**
- * Packs a container of containers into a single flat vector suitable for
- * MPI communication.
- *
- * This function takes a nested container (e.g.,
- * `std::vector<std::vector<T>>`) and flattens it into a single
- * `std::vector<T>`. It also calculates the lengths and offsets necessary to
- * reconstruct the original nested container structure.
- *
- * Transformations:
- * - Flattens the nested container using `std::ranges::views::join`.
- * - Converts the flattened view into a `std::vector`.
- * - Calculates the lengths of the inner containers.
- * - Calculates the offsets for each inner container using exclusive_scan.
- *
- * Requirements:
- * - `Input` must be a container of containers.
- * - The inner containers must support the `value_type` type alias.
- *
- * @param messages The input container of containers to be packed.
- * @return A `mpi_packed_message` object containing:
- *         - `flattened_vector`: A single vector containing all elements of
- * the nested containers.
- *         - `offsets`: A vector of offsets for where each inner container
- * starts in the flattened vector.
- *         - `lengths`: A vector of lengths for each inner container in the
- * original nested container.
- */
-template <container Input>
-  requires container<typename Input::value_type>
-auto pack_messages(Input const &messages)
-    -> mpi_packed_message<typename Input::value_type::value_type> {
-  using inner = typename Input::value_type;
-  using element_type = typename inner::value_type;
+auto exchange_num_messages(std::vector<int> const& num_sent_per_rank,
+													 MPI_Comm communicator) -> std::vector<int>;
 
-  // Flattening the container of containers using join_view
-  auto const flattened_view = messages | std::ranges::views::join;
-  std::vector<element_type> flattened_vector{};
-  // converting view into vector
-  for (auto &&elem : flattened_view) {
-    flattened_vector.push_back(static_cast<decltype(elem) &&>(elem));
+
+template <std::ranges::forward_range Input>
+  requires std::ranges::forward_range<std::ranges::range_value_t<Input>>
+auto pack_messages(const Input& messages)
+    -> mpi_packed_message<std::ranges::range_value_t<std::ranges::range_value_t<Input>>> {
+  using InnerRange = std::ranges::range_value_t<Input>;
+  using ElementType = std::ranges::range_value_t<InnerRange>;
+
+  // Flattening the container of containers using views::join
+  auto flattened_view = messages | std::ranges::views::join;
+  std::vector<ElementType> flattened_vector{flattened_view.begin(), flattened_view.end()};
+
+  // Calculating lengths of the inner ranges
+  std::vector<int> lengths;
+  lengths.reserve(std::ranges::distance(messages));
+  for (const auto& inner : messages) {
+    lengths.push_back(static_cast<int>(std::ranges::distance(inner)));
   }
 
-  // Calculating lengths using transform view
-  std::vector<int> lengths;
-  lengths.reserve(messages.size());
-  std::ranges::transform(
-      messages, std::back_inserter(lengths),
-      [](auto const &elem) { return static_cast<int>(elem.size()); });
-
   // Calculating offsets using exclusive_scan
-  std::vector<int> offsets(messages.size());
+  std::vector<int> offsets(lengths.size());
   std::exclusive_scan(lengths.begin(), lengths.end(), offsets.begin(), 0);
 
-  return mpi_packed_message<element_type>{flattened_vector, offsets, lengths};
+  return mpi_packed_message<ElementType>{flattened_vector, offsets, lengths};
 }
 
-/**
- * Unpacks a flat MPI packed message into a nested vector.
- *
- * This function transforms a packed MPI message, represented as an
- * `mpi_packed_message<Elem>`, back into a vector of vectors.
- * The original structure of the nested container is reconstructed.
- *
- * The function deconstructs the `mpi_packed_message` into its constituent
- * parts:
- *  - A flat buffer containing all elements.
- *  - Displacements indicating the start of each inner vector within the
- * flat buffer.
- *  - Counts indicating the lengths of each inner vector.
- *
- * It handles two different approaches depending on whether the `_CRAYC`
- * macro is defined:
- *  - If `_CRAYC` is defined, it uses vector insertion.
- *  - Otherwise, it uses `std::span` to subspan elements.
- *
- * @tparam Elem Type of elements contained in the message.
- * @param packed_message The packed message to be unpacked.
- * @return A nested vector of elements, reconstructing the original
- * structure.
- */
+
 template <typename Elem>
-auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
+auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
     -> std::vector<std::vector<Elem>> {
-  auto const &[recv_buf, recv_displs, recv_counts] = packed_message;
-  int num_ranks = static_cast<int>(recv_counts.size());
+  const auto& [recv_buf, recv_displs, recv_counts] = packed_message;
+  std::size_t num_ranks = recv_counts.size();
+
+  // Ensure recv_displs and recv_counts have the same size
+  assert(recv_displs.size() == num_ranks);
 
   std::vector<std::vector<Elem>> result;
   result.reserve(num_ranks);
-  if constexpr (_CRAYC) {
-    for (int i = 0; i < num_ranks; ++i) {
-      std::vector<Elem> subvec{};
-      subvec.insert(subvec.begin(), recv_buf.begin() + recv_displs[i],
-                    recv_buf.begin() + recv_displs[i] + recv_counts[i]);
-      result.emplace_back(subvec.begin(), subvec.end());
-    }
-  } else {
-    auto const recv_span = std::span(recv_buf);
-    for (int i = 0; i < num_ranks; ++i) {
-      auto const subspan =
-          recv_span.subspan(recv_displs.at(i), recv_counts.at(i));
-      result.emplace_back(subspan.begin(), subspan.end());
-    }
-  }
+
+  // Use std::transform to construct the sub-vectors
+  std::transform(
+      recv_displs.begin(), recv_displs.end(), recv_counts.begin(),
+      std::back_inserter(result),
+      [&](int displ, int count) {
+          auto const start = recv_buf.begin() + displ;
+          auto const end = start + count;
+          return std::vector<Elem>(start, end);
+      });
 
   return result;
 }
@@ -170,54 +117,57 @@ auto unpack_messages(mpi_packed_message<Elem> const &packed_message)
  * @throws std::runtime_error if there's an inconsistency in the send
  * offsets/lengths or if the MPI operation fails.
  */
-template <container Input>
-  requires container<typename Input::value_type>
-auto all_to_all(Input const &sends, MPI_Comm communicator)
-    -> std::vector<std::vector<typename Input::value_type::value_type>> {
-  using inner = typename Input::value_type;
-  using element_type = typename inner::value_type;
+template <std::ranges::forward_range Input>
+  requires std::ranges::forward_range<std::ranges::range_value_t<Input>>
+auto all_to_all(const Input& sends, MPI_Comm communicator)
+    -> std::vector<std::vector<std::ranges::range_value_t<std::ranges::range_value_t<Input>>>> {
+  using InnerRange = std::ranges::range_value_t<Input>;
+  using ElementType = std::ranges::range_value_t<InnerRange>;
 
   PEID rank, size;
   MPI_Comm_rank(communicator, &rank);
   MPI_Comm_size(communicator, &size);
 
-  // Packing messages into vector and computing offsets and lengths for the sub
-  // messages
-  auto [send_packed_messages, send_offsets, send_lengths] =
-      mpi::pack_messages(sends);
+  // Packing messages
+  auto [send_packed_messages, send_offsets, send_lengths] = mpi::pack_messages(sends);
 
   if (send_offsets.size() != send_lengths.size()) {
-    throw(std::runtime_error("mpi::pack_messages(): send_offsets.size() != send_lengths.size()"));
-  } else if ((send_offsets.size() != size) || (send_lengths.size() != size)) {
-    throw(std::runtime_error("mpi::pack_messages(): send_offsets.size() != mpi size"));
+    throw std::runtime_error("mpi::pack_messages(): send_offsets.size() (" + std::to_string(send_offsets.size()) +
+                             ") != send_lengths.size() (" + std::to_string(send_lengths.size()) + ")");
+  } else if ((send_offsets.size() != static_cast<std::size_t>(size)) || (send_lengths.size() != static_cast<std::size_t>(size))) {
+    throw std::runtime_error("mpi::pack_messages(): send_offsets.size() (" + std::to_string(send_offsets.size()) +
+                             ") != mpi size (" + std::to_string(size) + ")");
   }
 
-  // Preparing receive buffers for the node ids, offsets, and lengths
-  std::vector<int> num_recv_from_rank(send_lengths.size(),
-                                      0); // number of messages from each rank
-  MPI_Alltoall(send_lengths.data(), 1, MPI_INT, num_recv_from_rank.data(), 1,
-               MPI_INT, communicator); // Check send count number
-  auto const recv_buff_size =
-      std::reduce(num_recv_from_rank.begin(), num_recv_from_rank.end(), 0);
+  // Exchanging message sizes
+  auto const recv_lengths = exchange_num_messages(send_lengths, communicator);
 
-  auto recv_packed_messages = std::vector<element_type>(recv_buff_size, 0);
-  auto recv_offsets = std::vector<int>(size, 0);
-  auto const recv_lengths = num_recv_from_rank;
+  // Calculating total receive buffer size
+  auto const recv_buff_size = std::accumulate(recv_lengths.begin(), recv_lengths.end(), 0);
 
-  // Calculating recv offsets
-  std::exclusive_scan(recv_lengths.begin(), recv_lengths.end(),
-                      recv_offsets.begin(), 0);
+  // Preparing receive buffers
+  std::vector<ElementType> recv_packed_messages(recv_buff_size);
+  std::vector<int> recv_offsets(size, 0);
 
-  auto const mpi_error = MPI_Alltoallv(
+  // Calculating receive offsets
+  std::exclusive_scan(recv_lengths.begin(), recv_lengths.end(), recv_offsets.begin(), 0);
+
+  // Performing MPI communication
+  auto mpi_error = MPI_Alltoallv(
       send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
-      get_mpi_datatype<element_type>(), recv_packed_messages.data(),
+      get_mpi_datatype<ElementType>(), recv_packed_messages.data(),
       recv_lengths.data(), recv_offsets.data(),
-      get_mpi_datatype<element_type>(), communicator);
+      get_mpi_datatype<ElementType>(), communicator);
+
   if (mpi_error != MPI_SUCCESS) {
-    throw(std::runtime_error("mpi::all_to_all()"));
+    char error_string[MPI_MAX_ERROR_STRING];
+    int length_of_error_string;
+    MPI_Error_string(mpi_error, error_string, &length_of_error_string);
+    throw std::runtime_error(std::string("mpi::all_to_all() failed with error: ") + error_string);
   }
-  return mpi::unpack_messages<element_type>(
-      {recv_packed_messages, recv_offsets, recv_lengths});
+
+  // Unpacking messages
+  return mpi::unpack_messages<ElementType>({recv_packed_messages, recv_offsets, recv_lengths});
 }
 } // namespace mpi
 
