@@ -157,54 +157,64 @@ void mpi_tools::collect_parallel_graph_to_local_graph( MPI_Comm communicator, PP
 
 
 
-void mpi_tools::distribute_local_graph( MPI_Comm communicator, PPartitionConfig & config, 
-                                        complete_graph_access & G) {
+void mpi_tools::distribute_local_graph(MPI_Comm communicator,
+																			 PPartitionConfig& config,
+																			 complete_graph_access& G) {
+	int rank;
+	MPI_Comm_rank(communicator, &rank);
 
-        int rank;
-        MPI_Comm_rank( communicator, &rank);
+	// first B-Cast number of nodes and number of edges
+	ULONG number_of_nodes = 0;
+	ULONG number_of_edges = 0;
 
-        //first B-Cast number of nodes and number of edges 
-        ULONG number_of_nodes = 0;
-        ULONG number_of_edges = 0;
+	std::vector<int> buffer(2, 0);
+	if (rank == static_cast<int>(ROOT)) {
+		buffer[0] = G.number_of_global_nodes();
+		buffer[1] = G.number_of_global_edges();
+	}
+	MPI_Bcast(&buffer[0], 2, MPI_INT, ROOT, communicator);
 
-        std::vector< int > buffer(2,0);
-        if(rank == static_cast<int>(ROOT)) {
-                buffer[0] = G.number_of_global_nodes();
-                buffer[1] = G.number_of_global_edges();
-        }
-        MPI_Bcast(&buffer[0], 2, MPI_INT, ROOT, communicator);
+	number_of_nodes = buffer[0];
+	number_of_edges = buffer[1];
 
-        number_of_nodes = buffer[0];
-        number_of_edges = buffer[1];
+	int* xadj;
+	int* adjncy;
+	int* vwgt;
+	int* adjwgt;
 
-        int* xadj;        
-        int* adjncy;
-        int* vwgt;        
-        int* adjwgt;
+	if (rank == static_cast<int>(ROOT)) {
+		xadj = G.UNSAFE_metis_style_xadj_array();
+		adjncy = G.UNSAFE_metis_style_adjncy_array();
 
-        if( rank == static_cast<int>(ROOT)) {
-                xadj           = G.UNSAFE_metis_style_xadj_array();
-                adjncy         = G.UNSAFE_metis_style_adjncy_array();
+		vwgt = G.UNSAFE_metis_style_vwgt_array();
+		adjwgt = G.UNSAFE_metis_style_adjwgt_array();
+	} else {
+		xadj = new int[number_of_nodes + 1];
+		adjncy = new int[number_of_edges];
 
-                vwgt           = G.UNSAFE_metis_style_vwgt_array();
-                adjwgt         = G.UNSAFE_metis_style_adjwgt_array();
-        } else {
-                xadj   = new int[number_of_nodes+1];
-                adjncy = new int[number_of_edges];
+		vwgt = new int[number_of_nodes];
+		adjwgt = new int[number_of_edges];
+	}
+	MPI_Bcast(xadj, number_of_nodes + 1, MPI_INT, ROOT, communicator);
+	MPI_Bcast(adjncy, number_of_edges, MPI_INT, ROOT, communicator);
+	MPI_Bcast(vwgt, number_of_nodes, MPI_INT, ROOT, communicator);
+	MPI_Bcast(adjwgt, number_of_edges, MPI_INT, ROOT, communicator);
 
-                vwgt   = new int[number_of_nodes];
-                adjwgt = new int[number_of_edges];
-        }
-        MPI_Bcast(xadj, number_of_nodes+1, MPI_INT, ROOT, communicator);
-        MPI_Bcast(adjncy, number_of_edges, MPI_INT, ROOT, communicator);
-        MPI_Bcast(vwgt, number_of_nodes, MPI_INT, ROOT, communicator);
-        MPI_Bcast(adjwgt, number_of_edges, MPI_INT, ROOT, communicator);
+	G.build_from_metis_weighted(number_of_nodes, xadj, adjncy, vwgt, adjwgt);
 
-        G.build_from_metis_weighted( number_of_nodes, xadj, adjncy, vwgt, adjwgt); 
-
-        delete[] xadj;
-        delete[] adjncy;
-        delete[] vwgt;
-        delete[] adjwgt;
+	delete[] xadj;
+	delete[] adjncy;
+	delete[] vwgt;
+	delete[] adjwgt;
+}
+auto mpi::exchange_num_messages(std::vector<int> const& num_sent_per_rank,
+																MPI_Comm communicator) -> std::vector<int> {
+	PEID size;
+	MPI_Comm_size(communicator, &size);
+	// Preparing receive buffers for the lengths
+	std::vector<int> num_recv_from_rank(size, 0);
+	MPI_Alltoall(num_sent_per_rank.data(), 1, MPI_INT, num_recv_from_rank.data(),
+							 1, MPI_INT, communicator);
+	return num_recv_from_rank;
 }
 

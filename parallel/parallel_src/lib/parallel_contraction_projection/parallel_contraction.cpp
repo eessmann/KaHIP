@@ -6,9 +6,6 @@
  *****************************************************************************/
 
 #include "parallel_contraction.h"
-
-#include <communication/mpi_tools.h>
-
 #include "data_structure/hashed_graph.h"
 #include "tools/helpers.h"
 
@@ -40,12 +37,9 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
         
         MPI_Barrier(communicator);
 
-        m_messages.resize(0);
-        std::vector< std::vector< NodeID > >(m_messages).swap(m_messages);
-        m_out_messages.resize(0);
-        std::vector< std::vector< NodeID > >(m_out_messages).swap(m_out_messages);
-        m_send_buffers.resize(0); 
-        std::vector< std::vector< NodeID > >(m_send_buffers).swap(m_send_buffers);
+        m_messages.clear();
+        m_out_messages.clear();
+        m_send_buffers.clear();
 
         redistribute_hased_graph_and_build_graph_locally( communicator, hG, node_weights, number_of_distinct_labels, Q );
         update_ghost_nodes_weights( communicator, Q );
@@ -282,22 +276,24 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         
         NodeID divisor          = ceil( number_of_cnodes/(double)size);
 
-        //std::vector< std::vector< NodeID > >  messages;
+        std::vector< std::vector< contraction::bundled_edge > >  messages(size);
         m_messages.clear();
         m_messages.resize(size);
 
         //build messages
         hashed_graph::iterator it;
-        for( it = hG.begin(); it != hG.end(); it++) {
+        for(it = hG.begin(); it != hG.end(); it++) {
                 data_hashed_edge & e = it->second;
                 hashed_edge he       = it->first;
 
                 PEID peID = he.source / divisor;
+        	      messages[peID].emplace_back(he.source, he.target, e.weight);
                 m_messages[ peID ].push_back( he.source );
                 m_messages[ peID ].push_back( he.target );
                 m_messages[ peID ].push_back( e.weight );
 
                 peID = he.target / divisor;
+        	      messages[peID].emplace_back(he.target, he.source, e.weight);
                 m_messages[ peID ].push_back( he.target );
                 m_messages[ peID ].push_back( he.source );
                 m_messages[ peID ].push_back( e.weight );
@@ -320,6 +316,7 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
 
         // build the local part of the graph
         //
+				auto const local_msg_edges_byPE = mpi::all_to_all(messages, communicator);
         std::vector< std::vector< NodeID > > local_msg_byPE;
         local_msg_byPE.resize(size);
 

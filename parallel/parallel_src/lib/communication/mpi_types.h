@@ -2,193 +2,216 @@
 // Created by Erich Essmann on 03/09/2024.
 //
 
-#ifndef MPI_TYPES_H
-#define MPI_TYPES_H
-#include <cinttypes>
-#include <concepts>
-#include <type_traits>
+// mpi_datatype_trait.h
+#pragma once
 
 #include <mpi.h>
+#include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
+
 
 namespace mpi {
 namespace details {
+// Define an enum to represent the kind of MPI data
 enum class mpi_data_kinds { none, base, composite };
 
+// Trait to determine the MPI data kind
 template <typename DataType>
-constexpr auto get_data_kind() -> mpi_data_kinds {
-  if constexpr (std::is_same_v<DataType, char>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, wchar_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, signed short>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, signed int>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, signed long>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, signed char>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, unsigned char>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, unsigned short>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, unsigned int>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, unsigned long int>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, float>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, double>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, long double>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, bool>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, int8_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, int16_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, int32_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, int64_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, uint8_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, uint16_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, uint32_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, uint64_t>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, long long int>) {
-    return mpi_data_kinds::base;
-  } else if constexpr (std::is_same_v<DataType, unsigned long long int>) {
-    return mpi_data_kinds::base;
-  } else {
-    return mpi_data_kinds::none;
-  }
-}
+struct mpi_data_kind_trait {
+	static constexpr mpi_data_kinds kind = mpi_data_kinds::none;
+};
+
+// Macro to specialize mpi_data_kind_trait for unique base types
+#define MPI_BASE_TYPE_KIND(type)									 \
+	template <>														 \
+	struct mpi_data_kind_trait<type> {								 \
+		static constexpr mpi_data_kinds kind = mpi_data_kinds::base; \
+	};
+
+// Specializations for unique base types
+MPI_BASE_TYPE_KIND(char)
+MPI_BASE_TYPE_KIND(wchar_t)
+MPI_BASE_TYPE_KIND(float)
+MPI_BASE_TYPE_KIND(double)
+MPI_BASE_TYPE_KIND(long double)
+MPI_BASE_TYPE_KIND(bool)
+MPI_BASE_TYPE_KIND(int8_t)
+MPI_BASE_TYPE_KIND(int16_t)
+MPI_BASE_TYPE_KIND(int32_t)
+MPI_BASE_TYPE_KIND(int64_t)
+MPI_BASE_TYPE_KIND(uint8_t)
+MPI_BASE_TYPE_KIND(uint16_t)
+MPI_BASE_TYPE_KIND(uint32_t)
+MPI_BASE_TYPE_KIND(uint64_t)
+
+#undef MPI_BASE_TYPE_KIND
+}  // namespace details
+// Concept to check if a type is a native MPI datatype
+template <typename DataType>
+concept mpi_native_datatype = (details::mpi_data_kind_trait<DataType>::kind ==
+															 details::mpi_data_kinds::base);
+
+namespace details {
+// Trait to get the MPI_Datatype for a given DataType
+template <typename DataType>
+struct mpi_datatype_trait;
+
+// Macro to specialize mpi_datatype_trait for unique base types
+#define MPI_DATATYPE_TRAIT(type, mpi_type_const) \
+	template <>                                  \
+	struct mpi_datatype_trait<type> {            \
+		static MPI_Datatype get_mpi_type() {     \
+			return mpi_type_const;               \
+		}                                        \
+	};
+
+// Map unique base types to MPI_Datatypes
+MPI_DATATYPE_TRAIT(char, MPI_CHAR)
+MPI_DATATYPE_TRAIT(wchar_t, MPI_WCHAR)
+MPI_DATATYPE_TRAIT(float, MPI_FLOAT)
+MPI_DATATYPE_TRAIT(double, MPI_DOUBLE)
+MPI_DATATYPE_TRAIT(long double, MPI_LONG_DOUBLE)
+MPI_DATATYPE_TRAIT(bool, MPI_CXX_BOOL)
+MPI_DATATYPE_TRAIT(int8_t, MPI_INT8_T)
+MPI_DATATYPE_TRAIT(int16_t, MPI_INT16_T)
+MPI_DATATYPE_TRAIT(int32_t, MPI_INT32_T)
+MPI_DATATYPE_TRAIT(int64_t, MPI_INT64_T)
+MPI_DATATYPE_TRAIT(uint8_t, MPI_UINT8_T)
+MPI_DATATYPE_TRAIT(uint16_t, MPI_UINT16_T)
+MPI_DATATYPE_TRAIT(uint32_t, MPI_UINT32_T)
+MPI_DATATYPE_TRAIT(uint64_t, MPI_UINT64_T)
+
+#undef MPI_DATATYPE_TRAIT
+
 }  // namespace details
 
+// Function to get the MPI_Datatype for a given DataType
+// Concept to check if a type is an MPI composite datatype (for completeness)
 template <typename DataType>
-concept mpi_native_datatype = requires {
-  details::get_data_kind<DataType>() == details::mpi_data_kinds::base;
-};
+concept mpi_composite_datatype =
+		(details::mpi_data_kind_trait<DataType>::kind ==
+		 details::mpi_data_kinds::composite);
 
-template <typename DataType>
-concept mpi_composite_datatype = requires {
-  details::get_data_kind<DataType>() == details::mpi_data_kinds::composite;
-};
-
-template <mpi_native_datatype DataType>
-constexpr auto get_mpi_native_datatype() -> MPI_Datatype {
-  if constexpr (std::is_same_v<DataType, char>) {
-    return MPI_CHAR;
-  } else if constexpr (std::is_same_v<DataType, wchar_t>) {
-    return MPI_WCHAR;
-  } else if constexpr (std::is_same_v<DataType, signed short>) {
-    return MPI_SHORT;
-  } else if constexpr (std::is_same_v<DataType, signed int>) {
-    return MPI_INT;
-  } else if constexpr (std::is_same_v<DataType, signed long>) {
-    return MPI_LONG;
-  } else if constexpr (std::is_same_v<DataType, signed char>) {
-    return MPI_SIGNED_CHAR;
-  } else if constexpr (std::is_same_v<DataType, unsigned char>) {
-    return MPI_UNSIGNED_CHAR;
-  } else if constexpr (std::is_same_v<DataType, unsigned short>) {
-    return MPI_UNSIGNED_SHORT;
-  } else if constexpr (std::is_same_v<DataType, unsigned int>) {
-    return MPI_UNSIGNED;
-  } else if constexpr (std::is_same_v<DataType, unsigned long int>) {
-    return MPI_UNSIGNED_LONG;
-  } else if constexpr (std::is_same_v<DataType, float>) {
-    return MPI_FLOAT;
-  } else if constexpr (std::is_same_v<DataType, double>) {
-    return MPI_DOUBLE;
-  } else if constexpr (std::is_same_v<DataType, long double>) {
-    return MPI_LONG_DOUBLE;
-  } else if constexpr (std::is_same_v<DataType, bool>) {
-    return MPI_CXX_BOOL;
-  } else if constexpr (std::is_same_v<DataType, int8_t>) {
-    return MPI_INT8_T;
-  } else if constexpr (std::is_same_v<DataType, int16_t>) {
-    return MPI_INT16_T;
-  } else if constexpr (std::is_same_v<DataType, int32_t>) {
-    return MPI_INT32_T;
-  } else if constexpr (std::is_same_v<DataType, int64_t>) {
-    return MPI_INT64_T;
-  } else if constexpr (std::is_same_v<DataType, uint8_t>) {
-    return MPI_UINT8_T;
-  } else if constexpr (std::is_same_v<DataType, uint16_t>) {
-    return MPI_UINT16_T;
-  } else if constexpr (std::is_same_v<DataType, uint32_t>) {
-    return MPI_UINT32_T;
-  } else if constexpr (std::is_same_v<DataType, uint64_t>) {
-    return MPI_UINT64_T;
-  } else if constexpr (std::is_same_v<DataType, long long int>) {
-    return MPI_LONG_LONG_INT;
-  } else if constexpr (std::is_same_v<DataType, unsigned long long int>) {
-    return MPI_UNSIGNED_LONG_LONG;
-  } else {
-    return MPI_DATATYPE_NULL;
-  };
-}
-
-template <mpi_composite_datatype DataType>
-constexpr auto get_mpi_composite_datatype() -> MPI_Datatype;
-
+// mpi_datatype concept combines native and composite datatypes
 template <typename DataType>
 concept mpi_datatype =
-    mpi_native_datatype<DataType> || mpi_composite_datatype<DataType>;
+		mpi_native_datatype<DataType> || mpi_composite_datatype<DataType>;
 
-template <typename ContainerType>
-concept container = requires(ContainerType a, ContainerType const b) {
-  requires std::regular<ContainerType>;
-  requires std::swappable<ContainerType>;
-  requires std::destructible<typename ContainerType::value_type>;
-  requires std::same_as<typename ContainerType::reference,
-			typename ContainerType::value_type&>;
-  requires std::same_as<typename ContainerType::const_reference,
-			const typename ContainerType::value_type&>;
-  requires std::forward_iterator<typename ContainerType::iterator>;
-  requires std::forward_iterator<typename ContainerType::const_iterator>;
-  requires std::signed_integral<typename ContainerType::difference_type>;
-  requires std::same_as<typename ContainerType::difference_type,
-			typename std::iterator_traits<
-			    typename ContainerType::iterator>::difference_type>;
-  requires std::same_as<
-      typename ContainerType::difference_type,
-      typename std::iterator_traits<
-	  typename ContainerType::const_iterator>::difference_type>;
-  { a.begin() } -> std::same_as<typename ContainerType::iterator>;
-  { a.end() } -> std::same_as<typename ContainerType::iterator>;
-  { b.begin() } -> std::same_as<typename ContainerType::const_iterator>;
-  { b.end() } -> std::same_as<typename ContainerType::const_iterator>;
-  { a.cbegin() } -> std::same_as<typename ContainerType::const_iterator>;
-  { a.cend() } -> std::same_as<typename ContainerType::const_iterator>;
-  { a.size() } -> std::same_as<typename ContainerType::size_type>;
-  { a.max_size() } -> std::same_as<typename ContainerType::size_type>;
-  { a.empty() } -> std::same_as<bool>;
-};
+template <typename DataType>
+auto get_mpi_datatype() -> MPI_Datatype {
+	if constexpr (mpi_datatype<DataType>) {
+		return details::mpi_datatype_trait<DataType>::get_mpi_type();
+	} else if constexpr (std::is_same_v<DataType, signed char>) {
+		// int8_t may be the same as signed char
+		return get_mpi_datatype<int8_t>();
+	} else if constexpr (std::is_same_v<DataType, unsigned char>) {
+		// uint8_t may be the same as unsigned char
+		return get_mpi_datatype<uint8_t>();
+	} else if constexpr (std::is_same_v<DataType, short>) {
+		// int16_t may be the same as short
+		return get_mpi_datatype<int16_t>();
+	} else if constexpr (std::is_same_v<DataType, unsigned short>) {
+		// uint16_t may be the same as unsigned short
+		return get_mpi_datatype<uint16_t>();
+	} else if constexpr (std::is_same_v<DataType, int>) {
+		// int32_t may be the same as int or long
+		if constexpr (sizeof(DataType) == sizeof(int32_t)) {
+			return get_mpi_datatype<int32_t>();
+		} else if constexpr (sizeof(DataType) == sizeof(int64_t)) {
+			return get_mpi_datatype<int64_t>();
+		} else {
+			static_assert(sizeof(DataType) == 0, "Unsupported integer type");
+		}
+	} else if constexpr (std::is_same_v<DataType, unsigned int>) {
+		// uint32_t may be the same as unsigned int or unsigned long
+		if constexpr (sizeof(DataType) == sizeof(uint32_t)) {
+			return get_mpi_datatype<uint32_t>();
+		} else if constexpr (sizeof(DataType) == sizeof(uint64_t)) {
+			return get_mpi_datatype<uint64_t>();
+		} else {
+			static_assert(sizeof(DataType) == 0, "Unsupported unsigned integer type");
+		}
+	} else if constexpr (std::is_same_v<DataType, long>) {
+		// int64_t may be the same as long or long long
+		if constexpr (sizeof(DataType) == sizeof(int32_t)) {
+			return get_mpi_datatype<int32_t>();
+		} else if constexpr (sizeof(DataType) == sizeof(int64_t)) {
+			return get_mpi_datatype<int64_t>();
+		} else {
+			static_assert(sizeof(DataType) == 0, "Unsupported integer type");
+		}
+	} else if constexpr (std::is_same_v<DataType, unsigned long>) {
+		// uint64_t may be the same as unsigned long or unsigned long long
+		if constexpr (sizeof(DataType) == sizeof(uint32_t)) {
+			return get_mpi_datatype<uint32_t>();
+		} else if constexpr (sizeof(DataType) == sizeof(uint64_t)) {
+			return get_mpi_datatype<uint64_t>();
+		} else {
+			static_assert(sizeof(DataType) == 0, "Unsupported unsigned integer type");
+		}
+	} else if constexpr (std::is_same_v<DataType, long long>) {
+		// int64_t may be the same as long or long long
+		if constexpr (sizeof(DataType) == sizeof(int64_t)) {
+			return get_mpi_datatype<int64_t>();
+		} else {
+			static_assert(sizeof(DataType) == 0, "Unsupported integer type");
+		}
+	} else if constexpr (std::is_same_v<DataType, unsigned long long>) {
+		// uint64_t may be the same as unsigned long or unsigned long long
+		if constexpr (sizeof(DataType) == sizeof(uint64_t)) {
+			return get_mpi_datatype<uint64_t>();
+		} else {
+			static_assert(sizeof(DataType) == 0, "Unsupported unsigned integer type");
+		}
+	} else {
+		static_assert(sizeof(DataType) == 0,
+									"Unsupported data type for MPI communication");
+		return MPI_DATATYPE_NULL;  // This line will never be reached due to
+															 // static_assert
+	}
+	return MPI_DATATYPE_NULL;
+}
 
-template <mpi_datatype DataType>
-constexpr auto get_mpi_datatype() -> MPI_Datatype {
-  if constexpr (details::get_data_kind<DataType>() ==
-		details::mpi_data_kinds::base) {
-    return get_mpi_native_datatype<DataType>();
-  } else if constexpr (details::get_data_kind<DataType>() ==
-		       details::mpi_data_kinds::composite) {
-    return get_mpi_composite_datatype<DataType>();  // Point of customization
-						    // for user-defined types
-  } else {
-    return MPI_PACKED;  // Fallback to serialization of object
-  }
-};
-
-template <typename ContainerType>
-concept mpi_container = container<ContainerType> &&
-			mpi_datatype<typename ContainerType::value_type>;
 }  // namespace mpi
 
-#endif  // MPI_TYPES_H
+
+struct MyType {
+	int a;
+	double b;
+
+	friend bool operator==(const MyType& lhs, const MyType& rhs) {
+		return std::tie(lhs.a, lhs.b) == std::tie(rhs.a, rhs.b);
+	}
+	friend bool operator!=(const MyType& lhs, const MyType& rhs) {
+		return !(lhs == rhs);
+	}
+};
+
+// Specialize mpi_data_kind_trait for MyType
+namespace mpi::details {
+template <>
+struct mpi_data_kind_trait<MyType> {
+	static constexpr mpi_data_kinds kind = mpi_data_kinds::composite;
+};
+template <>
+struct mpi_datatype_trait<MyType> {
+	static MPI_Datatype get_mpi_type() {
+		static MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
+		if (mpi_type == MPI_DATATYPE_NULL) {
+			int block_lengths[2] = {1, 1};
+			MPI_Datatype types[2] = {MPI_INT, MPI_DOUBLE};
+			MPI_Aint offsets[2];
+
+			offsets[0] = offsetof(MyType, a);
+			offsets[1] = offsetof(MyType, b);
+
+			MPI_Type_create_struct(2, block_lengths, offsets, types, &mpi_type);
+			MPI_Type_commit(&mpi_type);
+		}
+		return mpi_type;
+	}
+};
+
+} // namespace mpi::details

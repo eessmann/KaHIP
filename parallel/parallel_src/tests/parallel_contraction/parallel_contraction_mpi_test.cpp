@@ -1,28 +1,49 @@
 //
 // Created by Erich Essmann on 16/08/2024.
 //
+#include <communication/mpi_tools.h>
 #include <definitions.h>
+#include <mpi.h>
 #include <catch2/catch_all.hpp>
 #include <vector>
-#include <mpi.h>
-#include <communication/mpi_tools.h>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
 #include "parallel_contraction_projection/parallel_contraction.h"
 
+template <>
+class fmt::formatter<MyType> {
+public:
+	constexpr auto parse (format_parse_context& ctx) { return ctx.begin(); }
+	template <typename Context>
+	constexpr auto format (MyType const& foo, Context& ctx) const {
+		return format_to(ctx.out(), "({},{})", foo.a, foo.b);
+	}
+};
 
 TEST_CASE("all to all vector of vectors", "[unit][mpi]") {
-    SECTION("emtpy case") {
-        PEID rank, size;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        MPI_Comm_size(MPI_COMM_WORLD, &size);
+	SECTION("empty cases") {
+		PEID rank, size;
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+		MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-        const std::vector<std::vector<int>> v_empty{{},{1},{2,2},{3,3,3},{4,4,4,4}};
-        auto vec = mpi::all_to_all(v_empty, MPI_COMM_WORLD);
-        MPI_Barrier(MPI_COMM_WORLD);
-        fmt::println("rank: {} -> {}", rank, vec);
-        REQUIRE(v_empty.size() == vec.size());
-    }
+		const std::vector<std::vector<MyType>> v_empty{{{1,2}}, {{1,2}}, {{1,2}}, {{1,2}}, {{1,2}}};
+		auto vec = mpi::all_to_all(v_empty, MPI_COMM_WORLD);
+		MPI_Barrier(MPI_COMM_WORLD);
+		fmt::println("rank: {} -> {}", rank, vec);
+		REQUIRE(v_empty == vec);
+	}
+	SECTION("complex case") {
+		PEID rank, size;
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+		MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+		const std::vector<std::vector<unsigned short>> v_empty{
+				{}, {1}, {2, 2}, {3, 3, 3}, {4, 4, 4, 4}};
+		auto vec = mpi::all_to_all(v_empty, MPI_COMM_WORLD);
+		MPI_Barrier(MPI_COMM_WORLD);
+		fmt::println("rank: {} -> {}", rank, vec);
+		REQUIRE(v_empty.size() == vec.size());
+	}
 }
