@@ -264,229 +264,145 @@ void parallel_contraction::build_quotient_graph_locally( parallel_graph_access &
         } endfor
 }
 
+void parallel_contraction::redistribute_hased_graph_and_build_graph_locally(
+		MPI_Comm communicator,
+		hashed_graph& hG,
+		std::unordered_map<NodeID, NodeWeight>& node_weights,
+		NodeID number_of_cnodes,
+		parallel_graph_access& Q) {
+	PEID rank, size;
+	MPI_Comm_rank(communicator, &rank);
+	MPI_Comm_size(communicator, &size);
 
+	NodeID divisor = ceil(number_of_cnodes / (double)size);
 
-void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI_Comm communicator, hashed_graph &  hG, 
-                                                                             std::unordered_map< NodeID, NodeWeight > & node_weights,
-                                                                             NodeID number_of_cnodes, 
-                                                                             parallel_graph_access & Q  ) {
-        PEID rank, size;
-        MPI_Comm_rank( communicator, &rank);
-        MPI_Comm_size( communicator, &size);
-        
-        NodeID divisor          = ceil( number_of_cnodes/(double)size);
+	std::vector<std::vector<contraction::bundled_edge>> messages(size);
+	m_messages.clear();
+	m_messages.resize(size);
 
-        std::vector< std::vector< contraction::bundled_edge > >  messages(size);
-        m_messages.clear();
-        m_messages.resize(size);
+	// build messages
+	hashed_graph::iterator it;
+	for (it = hG.begin(); it != hG.end(); it++) {
+		data_hashed_edge& e = it->second;
+		hashed_edge he = it->first;
+		PEID peID = he.source / divisor;
+		messages[peID].emplace_back(he.source, he.target, e.weight);
+		peID = he.target / divisor;
+		messages[peID].emplace_back(he.target, he.source, e.weight);
+	}
 
-        //build messages
-        hashed_graph::iterator it;
-        for(it = hG.begin(); it != hG.end(); it++) {
-                data_hashed_edge & e = it->second;
-                hashed_edge he       = it->first;
+	// build the local part of the graph
+	//
+	auto const local_msg_byPE = mpi::all_to_all(messages, communicator);
 
-                PEID peID = he.source / divisor;
-        	      messages[peID].emplace_back(he.source, he.target, e.weight);
-                m_messages[ peID ].push_back( he.source );
-                m_messages[ peID ].push_back( he.target );
-                m_messages[ peID ].push_back( e.weight );
+	hashed_graph local_graph;
+	for (PEID peID = 0; peID < size; peID++) {
+		if (!local_msg_byPE[peID].empty()) {
+			for (auto packed_edge : local_msg_byPE[peID]) {
+				hashed_edge he;
+				he.k = number_of_cnodes;
+				he.source = packed_edge.source;
+				he.target = packed_edge.target;
 
-                peID = he.target / divisor;
-        	      messages[peID].emplace_back(he.target, he.source, e.weight);
-                m_messages[ peID ].push_back( he.target );
-                m_messages[ peID ].push_back( he.source );
-                m_messages[ peID ].push_back( e.weight );
-        }
+				local_graph[he].weight += packed_edge.weight;
+			}
+		}
+	}
 
-        // now flood the network
-        for( PEID peID = 0; peID < size; peID++) {
-                if( peID != rank ) {
-                        if( m_messages[peID].size() == 0 ){
-                                m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
-                        }
+	ULONG from = rank * ceil(number_of_cnodes / (double)size);
+	ULONG to = (rank + 1) * ceil(number_of_cnodes / (double)size) - 1;
+	// handle the case where we dont have local edges
+	from = std::min(from, number_of_cnodes);
+	to = std::min(to, number_of_cnodes - 1);
+	ULONG local_num_cnodes = to - from + 1;
 
-                        MPI_Request rq;
-                        MPI_Isend( &m_messages[peID][0],
-                                    m_messages[peID].size(),
-                                    MPI_UNSIGNED_LONG_LONG,
-                                    peID, peID+7*size, communicator, &rq);
-                }
-        }
+	std::vector<std::vector<std::pair<NodeID, NodeWeight>>> sorted_graph;
+	sorted_graph.resize(local_num_cnodes);
 
-        // build the local part of the graph
-        //
-				auto const local_msg_edges_byPE = mpi::all_to_all(messages, communicator);
-        std::vector< std::vector< NodeID > > local_msg_byPE;
-        local_msg_byPE.resize(size);
+	EdgeID edge_counter = 0;
+	for (it = local_graph.begin(); it != local_graph.end(); it++) {
+		data_hashed_edge& e = it->second;
+		hashed_edge he = it->first;
 
+		if (from <= he.target && he.target <= to) {
+			std::pair<NodeID, NodeWeight> edge;
+			edge.first = he.target;
+			edge.second = e.weight / 4;
 
-        if( m_messages[ rank ].size() != 0 ) {
-                local_msg_byPE[rank] = m_messages[rank];
-        }
-       
-        PEID counter = 0;
-        while( counter < size - 1) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st;
-                MPI_Probe(MPI_ANY_SOURCE, rank+7*size, communicator, &st);
-                
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> incmessage; incmessage.resize(message_length);
+			std::pair<NodeID, NodeWeight> e_bar;
+			e_bar.first = he.source;
+			e_bar.second = e.weight / 4;
 
-                MPI_Status rst;
-                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+7*size, communicator, &rst); 
-                counter++;
+			sorted_graph[he.target - from].push_back(e_bar);
+			sorted_graph[he.source - from].push_back(edge);
+			edge_counter += 2;
+		} else {
+			std::pair<NodeID, NodeWeight> edge;
+			edge.first = he.target;
+			edge.second = e.weight / 2;
+			sorted_graph[he.source - from].push_back(edge);
+			edge_counter++;
+		}
+	}
 
-                // now integrate the changes
-                if( incmessage[0] == std::numeric_limits< NodeID >::max()) continue; // nothing to do
+	ULONG global_edges = 0;
+	MPI_Allreduce(&edge_counter, &global_edges, 1, MPI_UNSIGNED_LONG_LONG,
+								MPI_SUM, communicator);
 
+	Q.start_construction(local_num_cnodes, edge_counter, number_of_cnodes,
+											 global_edges);
+	Q.set_range(from, to);
 
-                PEID peID = rst.MPI_SOURCE;
-                local_msg_byPE[peID] = incmessage;
-        }
+	std::vector<NodeID> vertex_dist(size + 1, 0);
+	for (PEID peID = 0; peID <= size; peID++) {
+		vertex_dist[peID] = std::min(
+				number_of_cnodes,
+				(NodeID)(peID *
+								 ceil(number_of_cnodes / (double)size)));  // from positions
+	}
+	// vertex_dist[size] = std::min(to, number_of_cnodes - 1);
+	Q.set_range_array(vertex_dist);
 
-        hashed_graph local_graph;
-        for( PEID peID = 0; peID < size; peID++) {
-                if(local_msg_byPE[peID].size() > 0) {
-                for( ULONG i = 0; i < local_msg_byPE[peID].size()-2; i+=3) {
-                        hashed_edge he;
-                        he.k = number_of_cnodes;
-                        he.source = local_msg_byPE[peID][i];
-                        he.target = local_msg_byPE[peID][i+1];
+	for (NodeID i = 0; i < local_num_cnodes; ++i) {
+		NodeID node = Q.new_node();
+		NodeID globalID = from + node;
+		Q.setNodeWeight(node, 0);
+		Q.setNodeLabel(node, globalID);
 
-                        local_graph[he].weight += local_msg_byPE[peID][i+2];
-                }}
-        }
+		for (EdgeID e = 0; e < sorted_graph[node].size(); e++) {
+			NodeID target = sorted_graph[node][e].first;
+			EdgeID e_bar = Q.new_edge(node, target);
+			Q.setEdgeWeight(e_bar, sorted_graph[node][e].second);
+		}
+	}
 
+	Q.finish_construction();
 
-        ULONG from = rank     * ceil(number_of_cnodes / (double)size);
-        ULONG to   = (rank+1) * ceil(number_of_cnodes / (double)size) - 1;
-        // handle the case where we dont have local edges
-        from = std::min(from, number_of_cnodes);
-        to   = std::min(to, number_of_cnodes - 1);
-        ULONG local_num_cnodes = to - from + 1;
+	for (PEID peID = 0; peID < size; peID++) {
+		m_messages[peID].clear();
+	}
+	// now distribute the node weights
+	// pack messages
+	std::vector<std::vector<contraction::bundled_node_weight>> weight_messages(
+			size);
+	std::unordered_map<NodeID, NodeWeight>::iterator wit;
+	for (wit = node_weights.begin(); wit != node_weights.end(); wit++) {
+		NodeID node = wit->first;
+		NodeWeight weight = wit->second;
+		PEID peID = node / divisor;
+		weight_messages[peID].emplace_back(node, weight);
+	}
 
-        std::vector < std::vector< std::pair<NodeID, NodeWeight > > > sorted_graph;
-        sorted_graph.resize( local_num_cnodes );
+	auto const node_weights_byPE = mpi::all_to_all(weight_messages, communicator);
 
-        EdgeID edge_counter = 0;
-        for( it = local_graph.begin(); it != local_graph.end(); it++) {
-                data_hashed_edge & e = it->second;
-                hashed_edge he       = it->first;
-
-                if( from <= he.target && he.target <= to) {
-                        std::pair< NodeID, NodeWeight > edge;
-                        edge.first  = he.target;
-                        edge.second = e.weight/4;
-
-                        std::pair< NodeID, NodeWeight > e_bar;
-                        e_bar.first  = he.source;
-                        e_bar.second = e.weight/4;
-
-                        sorted_graph[ he.target - from ].push_back( e_bar);
-                        sorted_graph[ he.source - from ].push_back( edge );
-                        edge_counter+=2;
-                } else {
-                        std::pair< NodeID, NodeWeight > edge;
-                        edge.first  = he.target;
-                        edge.second = e.weight/2;
-                        sorted_graph[ he.source - from ].push_back( edge );
-                        edge_counter++;
-                }
-        }
- 
-        ULONG global_edges = 0;
-        MPI_Allreduce(&edge_counter, &global_edges, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, communicator);
-
-        Q.start_construction(local_num_cnodes, edge_counter, number_of_cnodes, global_edges);
-        Q.set_range(from, to);
-
-        std::vector< NodeID > vertex_dist( size+1, 0 );
-        for( PEID peID = 0; peID <= size; peID++) {
-                vertex_dist[peID] = std::min(number_of_cnodes, (NodeID) (peID * ceil(number_of_cnodes / (double)size))); // from positions
-        }
-        //vertex_dist[size] = std::min(to, number_of_cnodes - 1);
-        Q.set_range_array(vertex_dist);
-
-        for (NodeID i = 0; i < local_num_cnodes; ++i) {
-                NodeID node = Q.new_node();
-                NodeID globalID = from+node;
-                Q.setNodeWeight(node, 0); 
-                Q.setNodeLabel(node, globalID);
-               
-                for( EdgeID e = 0; e < sorted_graph[node].size(); e++) {
-                        NodeID target = sorted_graph[node][e].first;
-                        EdgeID e_bar = Q.new_edge(node, target);
-                        Q.setEdgeWeight(e_bar, sorted_graph[node][e].second);
-                }
-        }
-
-        Q.finish_construction();
-
-        for( PEID peID = 0; peID < size; peID++) {
-                m_messages[peID].clear();
-        }
-        //now distribute the node weights
-        //pack messages
-        std::unordered_map< NodeID, NodeWeight >::iterator wit;
-        for( wit = node_weights.begin(); wit != node_weights.end(); wit++) {
-                NodeID node       = wit->first;
-                NodeWeight weight = wit->second;
-                PEID peID         = node / divisor;
-
-                m_messages[ peID ].push_back( node );
-                m_messages[ peID ].push_back( weight );
-        }
-
-        for( PEID peID = 0; peID < size; peID++) {
-                if( peID != rank ) {
-                        if( m_messages[peID].size() == 0 ){
-                                m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
-                        }
-
-                        MPI_Request rq;
-                        MPI_Isend( &m_messages[peID][0], 
-                                    m_messages[peID].size(), 
-                                    MPI_UNSIGNED_LONG_LONG, 
-                                    peID, peID+8*size, communicator, &rq);
-                }
-        }
-
-        if( m_messages[ rank ].size() != 0 ) {
-                for( ULONG i = 0; i < m_messages[rank].size()-1; i+=2) {
-                        NodeID globalID   = m_messages[rank][i];
-                        NodeID node       = globalID - from;
-                        NodeWeight weight = m_messages[rank][i+1];
-                        Q.setNodeWeight( node , Q.getNodeWeight(node) + weight);
-                }
-        }
-
-        counter = 0;
-        while( counter < size - 1) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st;
-                MPI_Probe(MPI_ANY_SOURCE, rank+8*size, communicator, &st);
-
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> incmessage; incmessage.resize(message_length);
-
-                MPI_Status rst;
-                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+8*size, communicator, &rst); 
-                counter++;
-
-                // now integrate the changes
-                if( incmessage[0] == std::numeric_limits< NodeID >::max()) continue; // nothing to do
-
-                for( ULONG i = 0; i < incmessage.size()-1; i+=2) {
-                        NodeID globalID   = incmessage[i];
-                        NodeWeight weight = incmessage[i+1];
-                        NodeID node       = globalID - from;
-                        Q.setNodeWeight( node , Q.getNodeWeight(node) + weight);
-                }
-        }
+	for (auto& message_byPE : node_weights_byPE) {
+		if (message_byPE.empty()) {
+			for (auto& [globalID, weight] : message_byPE) {
+				NodeID node = globalID - from;
+				Q.setNodeWeight(node, Q.getNodeWeight(node) + weight);
+			}
+		}
+	}
 }
 
 
