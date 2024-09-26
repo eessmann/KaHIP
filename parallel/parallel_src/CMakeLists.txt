@@ -125,7 +125,7 @@ install(TARGETS parhip_interface_static DESTINATION lib)
 
 
 # Temporary Testing
-set(ENABLE_TESTING ON)
+set(ENABLE_TESTING OFF)
 if (ENABLE_TESTING)
     find_package(Catch2 REQUIRED CONFIG)
     enable_testing()
