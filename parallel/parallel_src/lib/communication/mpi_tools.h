@@ -92,7 +92,7 @@ auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
   std::transform(
       recv_displs.begin(), recv_displs.end(), recv_counts.begin(),
       std::back_inserter(result),
-      [&](int displ, int count) {
+      [&recv_buf](int displ, int count) {
           auto const start = recv_buf.begin() + displ;
           auto const end = start + count;
           return std::vector<Elem>(start, end);

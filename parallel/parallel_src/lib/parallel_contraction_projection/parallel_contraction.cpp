@@ -166,7 +166,7 @@ void parallel_contraction::get_nodes_to_cnodes_ghost_nodes( MPI_Comm communicato
         MPI_Comm_size( communicator, &size);
         
         std::vector< bool > PE_packed( size, false );
-		m_send_buffers.clear();
+				m_send_buffers.clear();
         m_send_buffers.resize( size );
 
         forall_local_nodes(G, node) {
