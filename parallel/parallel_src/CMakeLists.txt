@@ -12,8 +12,7 @@ include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/io)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement)
-include_directories(${MPI_CXX_INCLUDE_PATH})
-link_libraries(OpenMP::OpenMP_CXX MPI::MPI_CXX)
+
 
 set(LIBPARALLEL_SOURCE_FILES
   lib/data_structure/parallel_graph_access.cpp
@@ -37,6 +36,7 @@ set(LIBPARALLEL_SOURCE_FILES
   extern/argtable3-3.2.2/argtable3.c)
 add_library(libparallel ${LIBPARALLEL_SOURCE_FILES})
 target_include_directories(libparallel PUBLIC $<TARGET_PROPERTY:libmodified_kahip_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+target_link_libraries(libparallel PUBLIC MPI::MPI_CXX)
 
 set(LIBGRAPH2BGF_SOURCE_FILES
   lib/data_structure/parallel_graph_access.cpp
@@ -45,6 +45,8 @@ set(LIBGRAPH2BGF_SOURCE_FILES
   lib/data_structure/balance_management_refinement.cpp
   lib/data_structure/balance_management_coarsening.cpp)
 add_library(libgraph2bgf ${LIBGRAPH2BGF_SOURCE_FILES})
+target_link_libraries(libgraph2bgf PUBLIC MPI::MPI_CXX)
+
 
 set(LIBEDGELIST_SOURCE_FILES
   lib/data_structure/parallel_graph_access.cpp
@@ -54,27 +56,34 @@ set(LIBEDGELIST_SOURCE_FILES
   lib/data_structure/balance_management_coarsening.cpp
   extern/argtable3-3.2.2/argtable3.c)
 add_library(libedgelist STATIC ${LIBEDGELIST_SOURCE_FILES})
+target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX)
+
 
 set(LIBDSPAC_SOURCE_FILES
   lib/dspac/dspac.cpp
   lib/dspac/edge_balanced_graph_io.cpp)
 add_library(libdspac STATIC ${LIBDSPAC_SOURCE_FILES})
+target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
+
 
 add_executable(parhip app/parhip.cpp)
 target_compile_definitions(parhip PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
 target_link_libraries(parhip PRIVATE libmodified_kahip_interface)
 target_link_libraries(parhip PRIVATE libparallel)
+target_link_libraries(parhip PRIVATE MPI::MPI_CXX)
 install(TARGETS parhip DESTINATION bin)
 
 add_executable(toolbox app/toolbox.cpp)
 target_compile_definitions(toolbox PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DTOOLBOX")
 target_link_libraries(toolbox PRIVATE libmodified_kahip_interface)
 target_link_libraries(toolbox PRIVATE libparallel)
+target_link_libraries(toolbox PRIVATE MPI::MPI_CXX)
 install(TARGETS toolbox DESTINATION bin)
 
 add_executable(graph2binary app/graph2binary.cpp)
 target_compile_definitions(graph2binary PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF")
 target_link_libraries(graph2binary PRIVATE libgraph2bgf)
+target_link_libraries(graph2binary PRIVATE MPI::MPI_CXX)
 install(TARGETS graph2binary DESTINATION bin)
 
 add_executable(graph2binary_external app/graph2binary_external.cpp)
