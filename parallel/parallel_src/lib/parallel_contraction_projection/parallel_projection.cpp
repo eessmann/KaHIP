@@ -7,6 +7,8 @@
 
 #include "parallel_projection.h"
 
+#include "communication/mpi_tools.h"
+
 parallel_projection::parallel_projection() {
                 
 }
@@ -58,8 +60,12 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
                 }
         }
 
-        std::vector< std::vector< NodeID > > out_messages;
-        out_messages.resize(size);
+        std::vector< std::vector< NodeID > > out_messages(size);
+	      auto const inc_mess_byPE = mpi::all_to_all( m_messages, communicator);
+
+	      for(auto const& incmessage : inc_mess_byPE) {
+
+	      }
 
         PEID counter = 0;
         while( counter < size - 1) {
