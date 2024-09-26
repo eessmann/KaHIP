@@ -59,6 +59,11 @@ struct bundled_edge {
 	NodeID target;
 	NodeWeight weight;
 };
+
+struct bundled_node_weight {
+	NodeID node;
+	NodeWeight weight;
+};
 }  // namespace contraction
 
 // Specialize mpi_data_kind_trait for bundled_edge
@@ -83,6 +88,35 @@ struct mpi_datatype_trait<contraction::bundled_edge> {
 			offsets[0] = offsetof(contraction::bundled_edge, source);
 			offsets[1] = offsetof(contraction::bundled_edge, target);
 			offsets[2] = offsetof(contraction::bundled_edge, weight);
+
+			MPI_Type_create_struct(3, block_lengths, offsets, types, &mpi_type);
+			MPI_Type_commit(&mpi_type);
+		}
+		return mpi_type;
+	}
+};
+}  // namespace mpi::details
+
+// Specialize mpi_data_kind_trait for node_weight
+namespace mpi::details {
+template <>
+struct mpi_data_kind_trait<contraction::bundled_node_weight> {
+	static constexpr mpi_data_kinds kind = mpi_data_kinds::composite;
+};
+
+template <>
+struct mpi_datatype_trait<contraction::bundled_node_weight> {
+	static MPI_Datatype get_mpi_type() {
+		static MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
+		if (mpi_type == MPI_DATATYPE_NULL) {
+			int block_lengths[2] = { 1, 1};
+			MPI_Datatype types[2] = {
+				get_mpi_datatype<decltype(contraction::bundled_node_weight::node)>(),
+				get_mpi_datatype<decltype(contraction::bundled_node_weight::weight)>()};
+			MPI_Aint offsets[3];
+
+			offsets[0] = offsetof(contraction::bundled_node_weight, node);
+			offsets[1] = offsetof(contraction::bundled_node_weight, weight);
 
 			MPI_Type_create_struct(3, block_lengths, offsets, types, &mpi_type);
 			MPI_Type_commit(&mpi_type);
