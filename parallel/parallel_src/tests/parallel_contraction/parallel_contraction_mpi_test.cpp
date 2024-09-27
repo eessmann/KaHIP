@@ -46,4 +46,20 @@ TEST_CASE("all to all vector of vectors", "[unit][mpi]") {
 		fmt::println("rank: {} -> {}", rank, vec);
 		REQUIRE(v_empty.size() == vec.size());
 	}
+
+	SECTION("custom types") {
+		PEID rank, size;
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+		MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+		const std::vector<std::vector<contraction::bundled_edge>> empty_edges{
+						{{}}, {{}}, {{}}, {{}}, {{}}};
+		const std::vector<std::vector<contraction::bundled_node_weight>> empty_weights{
+					{{}}, {{}}, {{}}, {{}}, {{}}};
+		auto vec_1 = mpi::all_to_all(empty_edges, MPI_COMM_WORLD);
+		auto vec_2 = mpi::all_to_all(empty_weights, MPI_COMM_WORLD);
+		MPI_Barrier(MPI_COMM_WORLD);
+		REQUIRE(empty_edges.size() == vec_1.size());
+		REQUIRE(empty_weights.size() == vec_2.size());
+	}
 }

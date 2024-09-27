@@ -113,12 +113,12 @@ struct mpi_datatype_trait<contraction::bundled_node_weight> {
 			MPI_Datatype types[2] = {
 				get_mpi_datatype<decltype(contraction::bundled_node_weight::node)>(),
 				get_mpi_datatype<decltype(contraction::bundled_node_weight::weight)>()};
-			MPI_Aint offsets[3];
+			MPI_Aint offsets[2];
 
 			offsets[0] = offsetof(contraction::bundled_node_weight, node);
 			offsets[1] = offsetof(contraction::bundled_node_weight, weight);
 
-			MPI_Type_create_struct(3, block_lengths, offsets, types, &mpi_type);
+			MPI_Type_create_struct(2, block_lengths, offsets, types, &mpi_type);
 			MPI_Type_commit(&mpi_type);
 		}
 		return mpi_type;
