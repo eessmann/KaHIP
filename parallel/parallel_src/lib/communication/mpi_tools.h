@@ -100,6 +100,17 @@ auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
 	return result;
 }
 
+template <typename Input>
+concept mpi_nested_range = requires {
+	std::ranges::forward_range<Input>;
+	std::ranges::forward_range<std::ranges::range_value_t<Input>>;
+	mpi_datatype<std::ranges::range_value_t<std::ranges::range_value_t<Input>>>;
+};
+
+template <mpi_nested_range Input>
+using mpi_alltoall_t = std::vector<std::vector<
+				std::ranges::range_value_t<std::ranges::range_value_t<Input>>>>;
+
 /**
  * @brief Performs an MPI all-to-all communication operation, distributing
  * data from all processes to all processes.
@@ -116,13 +127,9 @@ auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
  * @throws std::runtime_error if there's an inconsistency in the send
  * offsets/lengths or if the MPI operation fails.
  */
-template <std::ranges::forward_range Input>
-	requires std::ranges::forward_range<std::ranges::range_value_t<Input>> &&
-					 mpi::mpi_datatype<
-							 std::ranges::range_value_t<std::ranges::range_value_t<Input>>>
-auto all_to_all(const Input& sends, MPI_Comm communicator)
-		-> std::vector<std::vector<
-				std::ranges::range_value_t<std::ranges::range_value_t<Input>>>> {
+template <mpi_nested_range Input>
+auto all_to_all(Input const& sends, MPI_Comm communicator)
+		-> mpi_alltoall_t<Input> {
 	using InnerRange = std::ranges::range_value_t<Input>;
 	using ElementType = std::ranges::range_value_t<InnerRange>;
 
