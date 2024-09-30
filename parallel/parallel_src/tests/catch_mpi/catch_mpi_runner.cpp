@@ -13,6 +13,7 @@ int main(int argc, char* argv[]) {
         return returnCode;
     // global setup...
     MPI_Init(&argc, &argv);
+	  MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
     int result = session.run();
     // global clean-up...
     MPI_Finalize();

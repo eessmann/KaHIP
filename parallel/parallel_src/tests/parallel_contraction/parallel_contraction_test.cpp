@@ -1,15 +1,18 @@
 //
 // Created by Erich Essmann on 16/08/2024.
 //
+#include <fmt/format.h>
 #include <catch2/catch_all.hpp>
 #include <ranges>
 #include <span>
 #include <type_traits>
 #include <vector>
+#include <fmt/ostream.h>
+#include <fmt/ranges.h>
 
 #include "parallel_contraction_projection/parallel_contraction.h"
 
-#include <communication/mpi_tools.h>
+#include "communication/mpi_tools.h"
 
 TEST_CASE("flattening vector of messages", "[unit][mpi]") {
 	SECTION("Empty Vector") {
@@ -93,5 +96,62 @@ TEST_CASE("Packing and Unpacking for messages", "[unit][mpi]") {
 		auto const packed = mpi::pack_messages(data);
 		auto const unpacked = mpi::unpack_messages(packed);
 		REQUIRE(data == unpacked);
+	}
+}
+
+using mpi_native_types = std::tuple<char,
+																		wchar_t,
+																		float,
+																		double,
+																		long double,
+																		bool,
+																		int8_t,
+																		int16_t,
+																		int16_t,
+																		int32_t,
+																		int64_t,
+																		uint8_t,
+																		uint16_t,
+																		uint32_t,
+																		uint64_t,
+																		short,
+																		int,
+																		long,
+																		long long,
+																		unsigned short,
+																		unsigned int,
+																		unsigned long,
+																		unsigned long long,
+																		signed char,
+																		unsigned char>;
+static auto const mpi_datatypes =
+		std::array{MPI_CHAR,        MPI_WCHAR,    MPI_FLOAT,   MPI_DOUBLE,
+							 MPI_LONG_DOUBLE, MPI_CXX_BOOL, MPI_INT8_T,  MPI_INT16_T,
+							 MPI_INT32_T,     MPI_INT64_T,  MPI_UINT8_T, MPI_UINT16_T,
+							 MPI_UINT32_T,    MPI_UINT64_T, MPI_LONG,    MPI_UNSIGNED_LONG};
+
+struct MyTestType{
+	int  a;
+	float b;
+	char c;
+	double d;
+	long double e;
+	long long f;
+
+};
+TEMPLATE_LIST_TEST_CASE("MPI Native Datatype mapping",
+												"[unit][mpi]",
+												mpi_native_types) {
+	SECTION("Native MPI data kinds") {
+		STATIC_REQUIRE(mpi::mpi_native_datatype<TestType>);
+	}
+	SECTION("Native MPI data type") {
+		auto matches =
+				std::ranges::views::transform(mpi_datatypes, [](auto datatype) -> bool {
+					return (datatype == mpi::get_mpi_datatype<TestType>());
+				});
+		auto any_match = std::accumulate(std::begin(matches), std::end(matches),
+																		 false, std::logical_or<bool>());
+		REQUIRE(any_match == true);
 	}
 }

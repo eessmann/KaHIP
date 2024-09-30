@@ -12,8 +12,8 @@ target_link_libraries(catch_mpi_runner PUBLIC Catch2::Catch2)
 
 # Parallel contraction
 add_executable(parallel_contraction_test parallel_contraction/parallel_contraction_test.cpp)
-target_link_libraries(parallel_contraction_test PRIVATE Catch2::Catch2WithMain libparallel)
-target_link_libraries(parallel_contraction_test PRIVATE libmodified_kahip_interface)
+target_link_libraries(parallel_contraction_test PRIVATE Catch2::Catch2WithMain parallel)
+target_link_libraries(parallel_contraction_test PRIVATE libmodified_kahip_interface fmt::fmt)
 
 catch_discover_tests(
         parallel_contraction_test
@@ -25,7 +25,7 @@ catch_discover_tests(
 # Parallel contraction
 add_executable(parallel_contraction_mpi_test parallel_contraction/parallel_contraction_mpi_test.cpp)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE catch_mpi_runner)
-target_link_libraries(parallel_contraction_mpi_test PRIVATE libparallel)
+target_link_libraries(parallel_contraction_mpi_test PRIVATE parallel)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE libmodified_kahip_interface fmt::fmt)
 
 catch_discover_tests(
