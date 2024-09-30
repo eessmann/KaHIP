@@ -37,7 +37,7 @@ set(LIBPARALLEL_SOURCE_FILES
   lib/tools/distributed_quality_metrics.cpp
   extern/argtable3-3.2.2/argtable3.c)
 add_library(parallel ${LIBPARALLEL_SOURCE_FILES})
-target_include_directories(parallel PUBLIC $<TARGET_PROPERTY:libmodified_kahip_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC MPI::MPI_CXX cista::cista)
 
 set(LIBGRAPH2BGF_SOURCE_FILES

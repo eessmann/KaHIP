@@ -2,13 +2,13 @@
 // Created by Erich Essmann on 16/08/2024.
 //
 #include <fmt/format.h>
+#include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include <catch2/catch_all.hpp>
 #include <ranges>
 #include <span>
 #include <type_traits>
 #include <vector>
-#include <fmt/ostream.h>
-#include <fmt/ranges.h>
 
 #include "parallel_contraction_projection/parallel_contraction.h"
 
@@ -124,20 +124,19 @@ using mpi_native_types = std::tuple<char,
 																		unsigned long long,
 																		signed char,
 																		unsigned char>;
-static auto const mpi_datatypes =
-		std::array{MPI_CHAR,        MPI_WCHAR,    MPI_FLOAT,   MPI_DOUBLE,
-							 MPI_LONG_DOUBLE, MPI_CXX_BOOL, MPI_INT8_T,  MPI_INT16_T,
-							 MPI_INT32_T,     MPI_INT64_T,  MPI_UINT8_T, MPI_UINT16_T,
-							 MPI_UINT32_T,    MPI_UINT64_T, MPI_LONG,    MPI_UNSIGNED_LONG};
+static auto const mpi_datatypes = std::array{
+		MPI_CHAR,  MPI_WCHAR,          MPI_SIGNED_CHAR,   MPI_UNSIGNED_CHAR,
+		MPI_SHORT, MPI_UNSIGNED_SHORT, MPI_INT,           MPI_UNSIGNED,
+		MPI_LONG,  MPI_UNSIGNED_LONG,  MPI_LONG_LONG_INT, MPI_UNSIGNED_LONG_LONG,
+		MPI_FLOAT, MPI_DOUBLE,         MPI_LONG_DOUBLE,   MPI_CXX_BOOL};
 
-struct MyTestType{
-	int  a;
+struct MyTestType {
+	int a;
 	float b;
 	char c;
 	double d;
 	long double e;
 	long long f;
-
 };
 TEMPLATE_LIST_TEST_CASE("MPI Native Datatype mapping",
 												"[unit][mpi]",
