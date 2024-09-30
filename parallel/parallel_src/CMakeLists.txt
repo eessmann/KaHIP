@@ -6,6 +6,8 @@ if(DETERMINISTIC_PARHIP)
   add_definitions("-DDETERMINISTIC_PARHIP")
 endif()
 
+add_subdirectory(extern/cista)
+
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/app)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools)
@@ -34,9 +36,9 @@ set(LIBPARALLEL_SOURCE_FILES
   lib/tools/random_functions.cpp
   lib/tools/distributed_quality_metrics.cpp
   extern/argtable3-3.2.2/argtable3.c)
-add_library(libparallel ${LIBPARALLEL_SOURCE_FILES})
-target_include_directories(libparallel PUBLIC $<TARGET_PROPERTY:libmodified_kahip_interface,INTERFACE_INCLUDE_DIRECTORIES>)
-target_link_libraries(libparallel PUBLIC MPI::MPI_CXX)
+add_library(parallel ${LIBPARALLEL_SOURCE_FILES})
+target_include_directories(parallel PUBLIC $<TARGET_PROPERTY:libmodified_kahip_interface,INTERFACE_INCLUDE_DIRECTORIES>)
+target_link_libraries(parallel PUBLIC MPI::MPI_CXX cista::cista)
 
 set(LIBGRAPH2BGF_SOURCE_FILES
   lib/data_structure/parallel_graph_access.cpp
@@ -44,7 +46,7 @@ set(LIBGRAPH2BGF_SOURCE_FILES
   lib/data_structure/balance_management.cpp
   lib/data_structure/balance_management_refinement.cpp
   lib/data_structure/balance_management_coarsening.cpp)
-add_library(libgraph2bgf ${LIBGRAPH2BGF_SOURCE_FILES})
+add_library(libgraph2bgf OBJECT ${LIBGRAPH2BGF_SOURCE_FILES})
 target_link_libraries(libgraph2bgf PUBLIC MPI::MPI_CXX)
 
 
@@ -69,14 +71,14 @@ target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
 add_executable(parhip app/parhip.cpp)
 target_compile_definitions(parhip PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
 target_link_libraries(parhip PRIVATE libmodified_kahip_interface)
-target_link_libraries(parhip PRIVATE libparallel)
+target_link_libraries(parhip PRIVATE parallel)
 target_link_libraries(parhip PRIVATE MPI::MPI_CXX)
 install(TARGETS parhip DESTINATION bin)
 
 add_executable(toolbox app/toolbox.cpp)
 target_compile_definitions(toolbox PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DTOOLBOX")
 target_link_libraries(toolbox PRIVATE libmodified_kahip_interface)
-target_link_libraries(toolbox PRIVATE libparallel)
+target_link_libraries(toolbox PRIVATE parallel)
 target_link_libraries(toolbox PRIVATE MPI::MPI_CXX)
 install(TARGETS toolbox DESTINATION bin)
 
@@ -110,7 +112,7 @@ install(TARGETS edge_list_to_metis_graph DESTINATION bin)
 add_executable(dspac app/dspac.cpp)
 target_compile_definitions(dspac PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
 target_link_libraries(dspac PRIVATE libmodified_kahip_interface)
-target_link_libraries(dspac PRIVATE libparallel)
+target_link_libraries(dspac PRIVATE parallel)
 target_link_libraries(dspac PRIVATE libdspac)
 install(TARGETS dspac DESTINATION bin)
 
@@ -118,7 +120,7 @@ add_library(parhip_interface SHARED interface/parhip_interface.cpp)
 target_compile_definitions(parhip_interface PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
 target_include_directories(parhip_interface PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface)
 target_link_libraries(parhip_interface PRIVATE libmodified_kahip_interface)
-target_link_libraries(parhip_interface PRIVATE libparallel)
+target_link_libraries(parhip_interface PRIVATE parallel)
 set_target_properties(parhip_interface PROPERTIES PUBLIC_HEADER interface/parhip_interface.h)
 install(TARGETS parhip_interface
         LIBRARY DESTINATION lib
@@ -129,12 +131,12 @@ add_library(parhip_interface_static interface/parhip_interface.cpp)
 target_compile_definitions(parhip_interface_static PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
 target_include_directories(parhip_interface_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface)
 target_link_libraries(parhip_interface_static PRIVATE libmodified_kahip_interface)
-target_link_libraries(parhip_interface_static PRIVATE libparallel)
+target_link_libraries(parhip_interface_static PRIVATE parallel)
 install(TARGETS parhip_interface_static DESTINATION lib)
 
 
 # Temporary Testing
-set(ENABLE_TESTING OFF)
+set(ENABLE_TESTING ON)
 if (ENABLE_TESTING)
     find_package(Catch2 REQUIRED CONFIG)
     enable_testing()
