@@ -44,20 +44,20 @@ struct mpi_data_kind_trait<T> {
 // Specializations for unique base types
 MPI_BASE_TYPE_KIND(char)
 MPI_BASE_TYPE_KIND(wchar_t)
+MPI_BASE_TYPE_KIND(signed char)
+MPI_BASE_TYPE_KIND(unsigned char)
+MPI_BASE_TYPE_KIND(short)
+MPI_BASE_TYPE_KIND(unsigned short)
+MPI_BASE_TYPE_KIND(int)
+MPI_BASE_TYPE_KIND(unsigned int)
+MPI_BASE_TYPE_KIND(long)
+MPI_BASE_TYPE_KIND(unsigned long)
+MPI_BASE_TYPE_KIND(long long)
+MPI_BASE_TYPE_KIND(unsigned long long)
 MPI_BASE_TYPE_KIND(float)
 MPI_BASE_TYPE_KIND(double)
 MPI_BASE_TYPE_KIND(long double)
 MPI_BASE_TYPE_KIND(bool)
-MPI_BASE_TYPE_KIND(int8_t)
-MPI_BASE_TYPE_KIND(int16_t)
-MPI_BASE_TYPE_KIND(int32_t)
-MPI_BASE_TYPE_KIND(int64_t)
-MPI_BASE_TYPE_KIND(uint8_t)
-MPI_BASE_TYPE_KIND(uint16_t)
-MPI_BASE_TYPE_KIND(uint32_t)
-MPI_BASE_TYPE_KIND(uint64_t)
-MPI_BASE_TYPE_KIND(long)
-MPI_BASE_TYPE_KIND(unsigned long)
 MPI_BASE_TYPE_KIND(std::complex<double>)
 
 #undef MPI_BASE_TYPE_KIND
@@ -84,20 +84,20 @@ struct mpi_datatype_trait;
 // Map unique base types to MPI_Datatypes
 MPI_DATATYPE_TRAIT(char, MPI_CHAR)
 MPI_DATATYPE_TRAIT(wchar_t, MPI_WCHAR)
+MPI_DATATYPE_TRAIT(signed char, MPI_SIGNED_CHAR)
+MPI_DATATYPE_TRAIT(unsigned char, MPI_UNSIGNED_CHAR)
+MPI_DATATYPE_TRAIT(short, MPI_SHORT)
+MPI_DATATYPE_TRAIT(unsigned short, MPI_UNSIGNED_SHORT)
+MPI_DATATYPE_TRAIT(int, MPI_INT)
+MPI_DATATYPE_TRAIT(unsigned int, MPI_UNSIGNED)
+MPI_DATATYPE_TRAIT(long, MPI_LONG)
+MPI_DATATYPE_TRAIT(unsigned long, MPI_UNSIGNED_LONG)
+MPI_DATATYPE_TRAIT(long long, MPI_LONG_LONG_INT)
+MPI_DATATYPE_TRAIT(unsigned long long, MPI_UNSIGNED_LONG_LONG)
 MPI_DATATYPE_TRAIT(float, MPI_FLOAT)
 MPI_DATATYPE_TRAIT(double, MPI_DOUBLE)
 MPI_DATATYPE_TRAIT(long double, MPI_LONG_DOUBLE)
 MPI_DATATYPE_TRAIT(bool, MPI_CXX_BOOL)
-MPI_DATATYPE_TRAIT(int8_t, MPI_INT8_T)
-MPI_DATATYPE_TRAIT(int16_t, MPI_INT16_T)
-MPI_DATATYPE_TRAIT(int32_t, MPI_INT32_T)
-MPI_DATATYPE_TRAIT(int64_t, MPI_INT64_T)
-MPI_DATATYPE_TRAIT(uint8_t, MPI_UINT8_T)
-MPI_DATATYPE_TRAIT(uint16_t, MPI_UINT16_T)
-MPI_DATATYPE_TRAIT(uint32_t, MPI_UINT32_T)
-MPI_DATATYPE_TRAIT(uint64_t, MPI_UINT64_T)
-MPI_DATATYPE_TRAIT(long, MPI_LONG)
-MPI_DATATYPE_TRAIT(unsigned long, MPI_UNSIGNED_LONG)
 MPI_DATATYPE_TRAIT(std::complex<double>, MPI_CXX_DOUBLE_COMPLEX)
 
 #undef MPI_DATATYPE_TRAIT
@@ -120,74 +120,58 @@ template <typename DataType>
 constexpr auto get_mpi_datatype() -> MPI_Datatype {
 	if constexpr (mpi_datatype<DataType>) {
 		return details::mpi_datatype_trait<DataType>::get_mpi_type();
-	} else if constexpr (std::is_same_v<DataType, signed char>) {
-		// int8_t may be the same as signed char
-		return get_mpi_datatype<int8_t>();
-	} else if constexpr (std::is_same_v<DataType, unsigned char>) {
-		// uint8_t may be the same as unsigned char
-		return get_mpi_datatype<uint8_t>();
-	} else if constexpr (std::is_same_v<DataType, short>) {
-		// int16_t may be the same as short
-		return get_mpi_datatype<int16_t>();
-	} else if constexpr (std::is_same_v<DataType, unsigned short>) {
-		// uint16_t may be the same as unsigned short
-		return get_mpi_datatype<uint16_t>();
-	} else if constexpr (std::is_same_v<DataType, int>) {
-		// int32_t may be the same as int or long
-		if constexpr (sizeof(DataType) == sizeof(int32_t)) {
-			return get_mpi_datatype<int32_t>();
-		} else if constexpr (sizeof(DataType) == sizeof(int64_t)) {
-			return get_mpi_datatype<int64_t>();
-		} else {
-			static_assert(sizeof(DataType) == 0, "Unsupported integer type");
-		}
-	} else if constexpr (std::is_same_v<DataType, unsigned int>) {
-		// uint32_t may be the same as unsigned int or unsigned long
-		if constexpr (sizeof(DataType) == sizeof(uint32_t)) {
-			return get_mpi_datatype<uint32_t>();
-		} else if constexpr (sizeof(DataType) == sizeof(uint64_t)) {
-			return get_mpi_datatype<uint64_t>();
-		} else {
-			static_assert(sizeof(DataType) == 0, "Unsupported unsigned integer type");
-		}
-	} else if constexpr (std::is_same_v<DataType, long>) {
-		// int64_t may be the same as long or long long
-		if constexpr (sizeof(DataType) == sizeof(int32_t)) {
-			return get_mpi_datatype<int32_t>();
-		} else if constexpr (sizeof(DataType) == sizeof(int64_t)) {
-			return get_mpi_datatype<int64_t>();
-		} else {
-			static_assert(sizeof(DataType) == 0, "Unsupported integer type");
-		}
-	} else if constexpr (std::is_same_v<DataType, unsigned long>) {
-		// uint64_t may be the same as unsigned long or unsigned long long
-		if constexpr (sizeof(DataType) == sizeof(uint32_t)) {
-			return get_mpi_datatype<uint32_t>();
-		} else if constexpr (sizeof(DataType) == sizeof(uint64_t)) {
-			return get_mpi_datatype<uint64_t>();
-		} else {
-			static_assert(sizeof(DataType) == 0, "Unsupported unsigned integer type");
-		}
-	} else if constexpr (std::is_same_v<DataType, long long>) {
-		// int64_t may be the same as long or long long
-		if constexpr (sizeof(DataType) == sizeof(int64_t)) {
-			return get_mpi_datatype<int64_t>();
-		} else {
-			static_assert(sizeof(DataType) == 0, "Unsupported integer type");
-		}
-	} else if constexpr (std::is_same_v<DataType, unsigned long long>) {
-		// uint64_t may be the same as unsigned long or unsigned long long
-		if constexpr (sizeof(DataType) == sizeof(uint64_t)) {
-			return get_mpi_datatype<uint64_t>();
-		} else {
-			static_assert(sizeof(DataType) == 0, "Unsupported unsigned integer type");
-		}
-	} else {
-		static_assert(sizeof(DataType) == 0,
-									"Unsupported data type for MPI communication");
-		return MPI_DATATYPE_NULL;  // This line will never be reached due to
-															 // static_assert
-	}
+  } else if constexpr (std::is_same_v<DataType, int8_t>) {
+    // int8_t may be the same as signed char
+    return get_mpi_datatype<signed char>();
+  } else if constexpr (std::is_same_v<DataType, uint8_t>) {
+    // uint8_t may be the same as unsigned char
+    return get_mpi_datatype<unsigned char>();
+  } else if constexpr (std::is_same_v<DataType, int16_t>) {
+    // int16_t may be the same as short
+    return get_mpi_datatype<short>();
+  } else if constexpr (std::is_same_v<DataType, uint16_t>) {
+    // uint16_t may be the same as unsigned short
+    return get_mpi_datatype<unsigned short>();
+  } else if constexpr (std::is_same_v<DataType, int32_t>) {
+    // int32_t may be the same as int or long
+    if constexpr (sizeof(int32_t) == sizeof(int)) {
+      return get_mpi_datatype<int>();
+    } else if constexpr (sizeof(int32_t) == sizeof(long)) {
+      return get_mpi_datatype<long>();
+    } else {
+      static_assert(sizeof(DataType) == 0, "Unsupported 32-bit integer type");
+    }
+  } else if constexpr (std::is_same_v<DataType, uint32_t>) {
+    // uint32_t may be the same as unsigned int or unsigned long
+    if constexpr (sizeof(uint32_t) == sizeof(unsigned int)) {
+      return get_mpi_datatype<unsigned int>();
+    } else if constexpr (sizeof(uint32_t) == sizeof(unsigned long)) {
+      return get_mpi_datatype<unsigned long>();
+    } else {
+      static_assert(sizeof(DataType) == 0, "Unsupported 32-bit unsigned integer type");
+    }
+  } else if constexpr (std::is_same_v<DataType, int64_t>) {
+    // int64_t may be the same as long or long long
+    if constexpr (sizeof(int64_t) == sizeof(long)) {
+      return get_mpi_datatype<long>();
+    } else if constexpr (sizeof(int64_t) == sizeof(long long)) {
+      return get_mpi_datatype<long long>();
+    } else {
+      static_assert(sizeof(DataType) == 0, "Unsupported 64-bit integer type");
+    }
+  } else if constexpr (std::is_same_v<DataType, uint64_t>) {
+    // uint64_t may be the same as unsigned long or unsigned long long
+    if constexpr (sizeof(uint64_t) == sizeof(unsigned long)) {
+      return get_mpi_datatype<unsigned long>();
+    } else if constexpr (sizeof(uint64_t) == sizeof(unsigned long long)) {
+      return get_mpi_datatype<unsigned long long>();
+    } else {
+      static_assert(sizeof(DataType) == 0, "Unsupported 64-bit unsigned integer type");
+    }
+  } else {
+    static_assert(sizeof(DataType) == 0, "Unsupported data type for MPI communication");
+    return MPI_DATATYPE_NULL; // This line will never be reached due to static_assert
+  }
 	return MPI_DATATYPE_NULL;
 }
 
