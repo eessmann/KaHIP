@@ -182,7 +182,6 @@ template <typename DataType>
 	requires std::is_aggregate_v<DataType>
 struct mpi::details::mpi_datatype_trait<DataType> {
 	static MPI_Datatype get_mpi_type() {
-		static MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
 		if (mpi_type == MPI_DATATYPE_NULL) {
 			constexpr size_t num_fields = cista::arity<DataType>();
 			std::vector<int> block_lengths(num_fields, 1);
@@ -214,6 +213,11 @@ struct mpi::details::mpi_datatype_trait<DataType> {
 		}
 		return mpi_type;
 	}
+	private:
+	inline static MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
+	 ~mpi_datatype_trait() {
+	 	MPI_Type_free(&mpi_type);
+	 }
 };  // namespace mpi::details
 
 struct MyType {
