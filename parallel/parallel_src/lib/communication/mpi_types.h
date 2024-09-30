@@ -6,8 +6,8 @@
 #pragma once
 
 #include <mpi.h>
-#include <concepts>
 #include <complex>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -15,8 +15,6 @@
 #include <cista/reflection/arity.h>
 #include <cista/reflection/for_each_field.h>
 #include <cista/serialization.h>
-
-
 
 namespace mpi {
 namespace details {
@@ -31,15 +29,15 @@ struct mpi_data_kind_trait {
 
 // Detect aggregate types and set kind to composite
 template <typename T>
-requires std::is_aggregate_v<T>
+	requires std::is_aggregate_v<T>
 struct mpi_data_kind_trait<T> {
 	static constexpr mpi_data_kinds kind = mpi_data_kinds::composite;
 };
 
 // Macro to specialize mpi_data_kind_trait for unique base types
-#define MPI_BASE_TYPE_KIND(type)																 \
-	template <>																										 \
-	struct mpi_data_kind_trait<type> {														 \
+#define MPI_BASE_TYPE_KIND(type)                                 \
+	template <>                                                    \
+	struct mpi_data_kind_trait<type> {                             \
 		static constexpr mpi_data_kinds kind = mpi_data_kinds::base; \
 	};
 
@@ -76,11 +74,11 @@ struct mpi_datatype_trait;
 
 // Macro to specialize mpi_datatype_trait for unique base types
 #define MPI_DATATYPE_TRAIT(type, mpi_type_const) \
-	template <>																		 \
-	struct mpi_datatype_trait<type> {							 \
-		static MPI_Datatype get_mpi_type() {				 \
-			return mpi_type_const;										 \
-		}																						\
+	template <>                                    \
+	struct mpi_datatype_trait<type> {              \
+		static MPI_Datatype get_mpi_type() {         \
+			return mpi_type_const;                     \
+		}                                            \
 	};
 
 // Map unique base types to MPI_Datatypes
@@ -102,7 +100,6 @@ MPI_DATATYPE_TRAIT(long, MPI_LONG)
 MPI_DATATYPE_TRAIT(unsigned long, MPI_UNSIGNED_LONG)
 MPI_DATATYPE_TRAIT(std::complex<double>, MPI_CXX_DOUBLE_COMPLEX)
 
-
 #undef MPI_DATATYPE_TRAIT
 
 }  // namespace details
@@ -120,7 +117,7 @@ concept mpi_datatype =
 		mpi_native_datatype<DataType> || mpi_composite_datatype<DataType>;
 
 template <typename DataType>
-auto get_mpi_datatype() -> MPI_Datatype {
+constexpr auto get_mpi_datatype() -> MPI_Datatype {
 	if constexpr (mpi_datatype<DataType>) {
 		return details::mpi_datatype_trait<DataType>::get_mpi_type();
 	} else if constexpr (std::is_same_v<DataType, signed char>) {
@@ -196,11 +193,10 @@ auto get_mpi_datatype() -> MPI_Datatype {
 
 }  // namespace mpi
 
-namespace mpi::details {
 // Handle composite types using reflection
 template <typename DataType>
-requires std::is_aggregate_v<DataType>
-struct mpi_datatype_trait<DataType>{
+	requires std::is_aggregate_v<DataType>
+struct mpi::details::mpi_datatype_trait<DataType> {
 	static MPI_Datatype get_mpi_type() {
 		static MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
 		if (mpi_type == MPI_DATATYPE_NULL) {
@@ -214,15 +210,15 @@ struct mpi_datatype_trait<DataType>{
 			cista::for_each_field(tmp, [&types, &offsets, &tmp](auto&& field) {
 				using field_type = std::decay_t<decltype(field)>;
 				types.push_back(mpi::get_mpi_datatype<field_type>());
-				auto offset = reinterpret_cast<std::ptrdiff_t>(&field) - reinterpret_cast<std::ptrdiff_t>(&tmp);
+				auto offset = reinterpret_cast<std::ptrdiff_t>(&field) -
+											reinterpret_cast<std::ptrdiff_t>(&tmp);
 				offsets.push_back(offset);
 			});
 
 			// Create the MPI datatype
-			if(num_fields != 0) {}
 			int mpi_error = MPI_Type_create_struct(
-			    static_cast<int>(num_fields), block_lengths.data(), offsets.data(),
-			    types.data(), &mpi_type);
+					static_cast<int>(num_fields), block_lengths.data(), offsets.data(),
+					types.data(), &mpi_type);
 			if (mpi_error != MPI_SUCCESS) {
 				throw std::runtime_error("MPI_Type_create_struct() failed");
 			}
@@ -234,9 +230,7 @@ struct mpi_datatype_trait<DataType>{
 		}
 		return mpi_type;
 	}
-};
-}
-
+};  // namespace mpi::details
 
 struct MyType {
 	int a;
