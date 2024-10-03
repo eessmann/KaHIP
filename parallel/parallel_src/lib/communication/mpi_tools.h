@@ -101,10 +101,10 @@ auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
 }
 
 template <typename Input>
-concept mpi_nested_range = requires {
-	std::ranges::forward_range<Input>;
-	std::ranges::forward_range<std::ranges::range_value_t<Input>>;
-	mpi_datatype<std::ranges::range_value_t<std::ranges::range_value_t<Input>>>;
+concept mpi_nested_range = requires(Input) {
+	requires std::ranges::forward_range<Input>;
+	requires std::ranges::forward_range<std::ranges::range_value_t<Input>>;
+	requires mpi_datatype<std::ranges::range_value_t<std::ranges::range_value_t<Input>>>;
 };
 
 template <mpi_nested_range Input>
