@@ -78,11 +78,8 @@ if (${CISTA_GENERATE_TO_TUPLE})
   add_dependencies(cista generate_to_tuple)
 endif()
 
-add_subdirectory(tools/doctest EXCLUDE_FROM_ALL)
-
 file(GLOB_RECURSE cista-include-files include/*.h*)
 
-add_subdirectory(tools/uniter EXCLUDE_FROM_ALL)
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cista.h
   COMMAND uniter
@@ -95,75 +92,6 @@ add_custom_command(
   > ${CMAKE_CURRENT_BINARY_DIR}/cista.h
   DEPENDS ${cista-include-files}
 )
-
-file(GLOB_RECURSE cista-test-files test/*.cc)
-add_executable(cista-test-single-header EXCLUDE_FROM_ALL ${cista-test-files} ${CMAKE_CURRENT_BINARY_DIR}/cista.h)
-target_link_libraries(cista-test-single-header cista-doctest)
-target_include_directories(cista-test-single-header PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_options(cista-test-single-header PRIVATE ${cista-compile-flags})
-target_compile_definitions(cista-test-single-header PRIVATE SINGLE_HEADER)
-target_compile_features(cista-test-single-header PRIVATE cxx_std_17)
-if (CISTA_ZERO_OUT)
-  target_compile_definitions(cista-test-single-header PRIVATE CISTA_ZERO_OUT=1)
-endif()
-
-add_executable(cista-test EXCLUDE_FROM_ALL ${cista-test-files})
-target_compile_options(cista-test PRIVATE ${cista-compile-flags})
-target_link_libraries(cista-test cista-doctest cista)
-if(CISTA_COVERAGE)
-  target_compile_options(cista-test PRIVATE -fprofile-arcs -ftest-coverage)
-  set_target_properties(cista-test PROPERTIES LINK_FLAGS --coverage)
-endif()
-
-add_custom_target(cista-coverage
-  rm -rf *.info &&
-  find . -name "*.gcda" -delete &&
-  ./cista-test &&
-  lcov --directory . --capture --output-file cov.info &&
-  lcov -r cov.info "*usr/include/*" -o cov.info &&
-  lcov -r cov.info "*doctest*" -o cov.info &&
-  lcov -r cov.info "*test/*.cc" -o cov.info &&
-  lcov -r cov.info "*v1*" -o cov.info
-)
-add_dependencies(cista-coverage cista-test)
-
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" OR
-    "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
-  message(STATUS "Cista fuzzing enabled")
-  set(cista-fuzz-targets "")
-  file(GLOB_RECURSE fuzz-files fuzz/*.cc)
-  foreach(fuzz-file ${fuzz-files})
-    get_filename_component(test-name ${fuzz-file} NAME_WE)
-
-    add_executable(cista-fuzz-${test-name}-main EXCLUDE_FROM_ALL ${fuzz-file})
-    target_link_libraries(cista-fuzz-${test-name}-main cista -fsanitize=address,undefined)
-    target_compile_options(cista-fuzz-${test-name}-main PRIVATE -g -O0)
-    target_compile_definitions(cista-fuzz-${test-name}-main PRIVATE MAIN)
-
-    add_executable(cista-fuzz-${test-name} EXCLUDE_FROM_ALL ${fuzz-file})
-    target_link_libraries(cista-fuzz-${test-name} cista -fsanitize=address,undefined,fuzzer)
-    target_compile_options(cista-fuzz-${test-name} PRIVATE -g -O0 -fsanitize=address,fuzzer)
-
-    add_executable(cista-fuzz-${test-name}-seed EXCLUDE_FROM_ALL ${fuzz-file})
-    target_link_libraries(cista-fuzz-${test-name}-seed cista)
-    target_compile_definitions(cista-fuzz-${test-name}-seed PRIVATE GENERATE_SEED)
-
-    add_custom_target(cista-fuzz-${test-name}-run
-      DEPENDS
-        cista-fuzz-${test-name}
-        cista-fuzz-${test-name}-seed
-      COMMAND
-        mkdir -p fuzz-${test-name}-corpus &&
-        ./cista-fuzz-${test-name}-seed ./fuzz-${test-name}-corpus/seed.bin &&
-        ./cista-fuzz-${test-name} ./fuzz-${test-name}-corpus -max_total_time=120
-    )
-
-    list(APPEND cista-fuzz-targets cista-fuzz-${test-name}-run)
-  endforeach()
-
-  add_custom_target(cista-fuzz)
-  add_dependencies(cista-fuzz ${cista-fuzz-targets})
-endif()
 
 add_library(cista::cista ALIAS cista)
 

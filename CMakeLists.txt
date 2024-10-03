@@ -19,6 +19,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+include(CheckIPOSupported)
+check_ipo_supported(RESULT supported OUTPUT error)
+
+if( supported )
+  message(STATUS "IPO / LTO enabled")
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+  message(STATUS "IPO / LTO not supported: <${error}>")
+endif()
+
 # if no build mode is specified build in release mode
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "Release")
