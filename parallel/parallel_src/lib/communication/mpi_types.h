@@ -159,16 +159,22 @@ MPI_DATATYPE_TRAIT(std::complex<double>, MPI_CXX_DOUBLE_COMPLEX)
 
 // Concept to check if a type is a native MPI datatype
 template <typename DataType>
-concept mpi_native_datatype = (details::mpi_data_kind_trait<DataType>::kind == details::mpi_data_kinds::base);
+concept mpi_native_datatype = requires(DataType) {
+	requires details::mpi_data_kind_trait<DataType>::kind == details::mpi_data_kinds::base;
+};
 
 template <typename DataType>
-concept mpi_composite_datatype =
-		(details::mpi_data_kind_trait<DataType>::kind == details::mpi_data_kinds::composite);
+concept mpi_composite_datatype = requires(DataType) {
+	requires details::mpi_data_kind_trait<DataType>::kind == details::mpi_data_kinds::composite;
+};
+
 
 // mpi_datatype concept combines native and composite datatypes
 template <typename DataType>
-concept mpi_datatype =
-		mpi_native_datatype<DataType> || mpi_composite_datatype<DataType>;
+concept mpi_datatype = requires(DataType) {
+	requires mpi_native_datatype<DataType> || mpi_composite_datatype<DataType>;
+};
+
 
 template <typename DataType>
 auto get_mpi_datatype() -> MPI_Datatype {
