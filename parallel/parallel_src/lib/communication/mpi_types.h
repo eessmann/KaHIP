@@ -291,7 +291,7 @@ struct mpi::details::mpi_datatype_trait<DataType> {
 struct MyType {
 	int a{};
 	double b{};
-	std::complex<double> c;
+	double c{};
 
 	friend bool operator==(const MyType& lhs, const MyType& rhs) {
 		return std::tie(lhs.a, lhs.b, lhs.c) == std::tie(rhs.a, rhs.b, rhs.c);
