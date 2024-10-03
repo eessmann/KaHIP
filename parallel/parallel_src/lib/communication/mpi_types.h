@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include <vector>
+#include <mutex>
 
 #include <cista/reflection/arity.h>
 #include <cista/reflection/for_each_field.h>
