@@ -37,14 +37,14 @@ inline std::vector<MPI_Datatype>& get_custom_mpi_types() {
 }
 
 // Declare the keyval for the attribute
-inline int mpi_type_cleanup_keyval = MPI_KEYVAL_INVALID;
+inline constinit int mpi_type_cleanup_keyval = MPI_KEYVAL_INVALID;
 
 // Cleanup function called during MPI_Finalize
 inline int mpi_type_cleanup(MPI_Comm comm,
 							int keyval,
 							void* attribute_val,
 							void* extra_state) {
-	std::lock_guard<std::mutex> lock(mpi_type_mutex);
+	std::scoped_lock lock{mpi_type_mutex};
 
 	auto& custom_types = get_custom_mpi_types();
 	for (MPI_Datatype& datatype : custom_types) {
@@ -157,13 +157,11 @@ MPI_DATATYPE_TRAIT(std::complex<double>, MPI_CXX_DOUBLE_COMPLEX)
 
 // Concept to check if a type is a native MPI datatype
 template <typename DataType>
-concept mpi_native_datatype = (details::mpi_data_kind_trait<DataType>::kind ==
-															 details::mpi_data_kinds::base);
+concept mpi_native_datatype = (details::mpi_data_kind_trait<DataType>::kind == details::mpi_data_kinds::base);
 
 template <typename DataType>
 concept mpi_composite_datatype =
-		(details::mpi_data_kind_trait<DataType>::kind ==
-		 details::mpi_data_kinds::composite);
+		(details::mpi_data_kind_trait<DataType>::kind == details::mpi_data_kinds::composite);
 
 // mpi_datatype concept combines native and composite datatypes
 template <typename DataType>
@@ -255,7 +253,7 @@ struct mpi::details::mpi_datatype_trait<DataType> {
 				types.push_back(mpi::get_mpi_datatype<field_type>());
 				auto offset = reinterpret_cast<std::ptrdiff_t>(&field) -
 											reinterpret_cast<std::ptrdiff_t>(&tmp);
-				offsets.push_back(static_cast<MPI_Aint>(offset));
+				offsets.push_back(offset);
 			});
 
 			// Create the MPI datatype
@@ -273,7 +271,7 @@ struct mpi::details::mpi_datatype_trait<DataType> {
 
 			// Register the datatype and initialize cleanup
 			{
-				std::lock_guard<std::mutex> lock(mpi::details::mpi_type_mutex);
+				std::scoped_lock lock{mpi::details::mpi_type_mutex};
 				mpi::details::get_custom_mpi_types().push_back(mpi_type);
 				mpi::details::initialize_mpi_type_cleanup();
 			}
