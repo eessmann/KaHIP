@@ -69,7 +69,7 @@ inline void initialize_mpi_type_cleanup() {
 	// Use a static function-local variable to ensure initialization occurs only
 	// once
 	static bool initialized = []() {
-		int mpi_error = MPI_Comm_create_keyval(MPI_NULL_COPY_FN, mpi_type_cleanup, &mpi_type_cleanup_keyval, nullptr);
+		int mpi_error = MPI_Comm_create_keyval(MPI_COMM_NULL_COPY_FN, mpi_type_cleanup, &mpi_type_cleanup_keyval, nullptr);
 		if (mpi_error != MPI_SUCCESS) {
 			throw std::runtime_error("MPI_Comm_create_keyval() failed");
 		}

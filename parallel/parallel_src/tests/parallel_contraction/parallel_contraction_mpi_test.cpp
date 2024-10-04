@@ -52,7 +52,7 @@ TEST_CASE("all to all vector of vectors", "[unit][mpi]") {
 				{}, {1}, {2, 2}, {3, 3, 3}, {4, 4, 4, 4}};
 		auto vec = mpi::all_to_all(v_empty, MPI_COMM_WORLD);
 		MPI_Barrier(MPI_COMM_WORLD);
-		fmt::println("rank: {} -> {}", rank, vec);
+		fmt::print("rank: {} -> {}\n", rank, vec);
 		REQUIRE(v_empty.size() == vec.size());
 	}
 
