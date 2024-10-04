@@ -31,8 +31,11 @@ target_link_libraries(parallel_contraction_mpi_test PRIVATE libmodified_kahip_in
 catch_discover_tests(
         parallel_contraction_mpi_test
         TEST_PREFIX "unit-"
-        PROPERTIES crosscompiling_emulator "mpirun -n 4"
+        PROPERTIES crosscompiling_emulator "mpirun -np 5"
         REPORTER xml
         OUTPUT_DIR .
         OUTPUT_PREFIX "unit-"
         OUTPUT_SUFFIX .xml)
+
+target_link_libraries(parallel_contraction_test PRIVATE kahip_options kahip_warnings)
+target_link_libraries(parallel_contraction_mpi_test PRIVATE kahip_options kahip_warnings)
