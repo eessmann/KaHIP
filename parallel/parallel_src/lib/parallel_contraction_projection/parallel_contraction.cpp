@@ -299,7 +299,7 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally(
 	for (PEID peID = 0; peID < size; peID++) {
 		if (!local_msg_byPE[peID].empty()) {
 			for (auto packed_edge : local_msg_byPE[peID]) {
-				hashed_edge he;
+				hashed_edge he{};
 				he.k = number_of_cnodes;
 				he.source = packed_edge.source;
 				he.target = packed_edge.target;
