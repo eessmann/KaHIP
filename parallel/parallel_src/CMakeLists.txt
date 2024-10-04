@@ -34,10 +34,11 @@ set(LIBPARALLEL_SOURCE_FILES
   lib/io/parallel_graph_io.cpp
   lib/io/parallel_vector_io.cpp
   lib/tools/random_functions.cpp
-  lib/tools/distributed_quality_metrics.cpp
-  extern/argtable3-3.2.2/argtable3.c)
+  lib/tools/distributed_quality_metrics.cpp)
 add_library(parallel ${LIBPARALLEL_SOURCE_FILES})
 target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
+target_link_libraries(parallel PUBLIC argtable3)
+target_link_libraries(parallel PUBLIC kahip_version)
 target_link_libraries(parallel PUBLIC MPI::MPI_CXX cista::cista)
 
 set(LIBGRAPH2BGF_SOURCE_FILES
@@ -55,10 +56,9 @@ set(LIBEDGELIST_SOURCE_FILES
   lib/io/parallel_graph_io.cpp
   lib/data_structure/balance_management.cpp
   lib/data_structure/balance_management_refinement.cpp
-  lib/data_structure/balance_management_coarsening.cpp
-  extern/argtable3-3.2.2/argtable3.c)
+  lib/data_structure/balance_management_coarsening.cpp)
 add_library(libedgelist STATIC ${LIBEDGELIST_SOURCE_FILES})
-target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX)
+target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3)
 
 
 set(LIBDSPAC_SOURCE_FILES
@@ -73,6 +73,7 @@ target_compile_definitions(parhip PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DIST
 target_link_libraries(parhip PRIVATE libmodified_kahip_interface)
 target_link_libraries(parhip PRIVATE parallel)
 target_link_libraries(parhip PRIVATE MPI::MPI_CXX)
+target_link_libraries(parhip PRIVATE argtable3)
 install(TARGETS parhip DESTINATION bin)
 
 add_executable(toolbox app/toolbox.cpp)
@@ -85,23 +86,27 @@ install(TARGETS toolbox DESTINATION bin)
 add_executable(graph2binary app/graph2binary.cpp)
 target_compile_definitions(graph2binary PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF")
 target_link_libraries(graph2binary PRIVATE libgraph2bgf)
+target_link_libraries(graph2binary PRIVATE kahip_version)
 target_link_libraries(graph2binary PRIVATE MPI::MPI_CXX)
 install(TARGETS graph2binary DESTINATION bin)
 
 add_executable(graph2binary_external app/graph2binary_external.cpp)
 target_compile_definitions(graph2binary_external PRIVATE "-DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF")
 target_link_libraries(graph2binary_external PRIVATE libgraph2bgf)
+target_link_libraries(graph2binary_external PRIVATE kahip_version)
 install(TARGETS graph2binary_external DESTINATION bin)
 
 add_executable(readbgf app/readbgf.cpp)
 target_compile_definitions(readbgf PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
 target_link_libraries(readbgf PRIVATE libgraph2bgf)
+target_link_libraries(readbgf PRIVATE kahip_version)
 install(TARGETS readbgf DESTINATION bin)
 
 add_executable(edge_list_to_metis_graph app/edge_list_to_metis_graph.cpp)
 target_compile_definitions(edge_list_to_metis_graph PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DKRONECKER_GENERATOR_PROGRAM")
 target_link_libraries(edge_list_to_metis_graph PRIVATE libmodified_kahip_interface)
 target_link_libraries(edge_list_to_metis_graph PRIVATE libedgelist)
+target_link_libraries(edge_list_to_metis_graph PRIVATE kahip_version)
 install(TARGETS edge_list_to_metis_graph DESTINATION bin)
 
 #add_executable(friendster_list_to_metis_graph app/friendster_list_to_metis_graph.cpp $<TARGET_OBJECTS:libedgelist>)
