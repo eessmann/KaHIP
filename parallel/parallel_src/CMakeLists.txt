@@ -36,6 +36,7 @@ set(LIBPARALLEL_SOURCE_FILES
   lib/tools/random_functions.cpp
   lib/tools/distributed_quality_metrics.cpp)
 add_library(parallel ${LIBPARALLEL_SOURCE_FILES})
+target_link_libraries(parallel PUBLIC kahip_options kahip_warnings)
 target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC argtable3)
 target_link_libraries(parallel PUBLIC kahip_version)
@@ -70,7 +71,7 @@ target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
 
 add_executable(parhip app/parhip.cpp)
 target_compile_definitions(parhip PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION")
-target_link_libraries(parhip PRIVATE libmodified_kahip_interface)
+target_link_libraries(parhip PRIVATE libmodified_kahip_interface kahip_options kahip_warnings)
 target_link_libraries(parhip PRIVATE parallel)
 target_link_libraries(parhip PRIVATE MPI::MPI_CXX)
 target_link_libraries(parhip PRIVATE argtable3)
