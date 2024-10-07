@@ -248,8 +248,8 @@ template <typename DataType>
 struct mpi::details::mpi_datatype_trait<DataType> {
   static MPI_Datatype get_mpi_type() {
     // Function-local static variable initialized via lambda
-    static MPI_Datatype mpi_type = []() -> MPI_Datatype {
-      MPI_Datatype mpi_type = MPI_DATATYPE_NULL;
+    static MPI_Datatype const mpi_type = []() -> MPI_Datatype {
+      MPI_Datatype mpi_type_val = MPI_DATATYPE_NULL;
 
       constexpr size_t num_fields = cista::arity<DataType>();
       std::vector<int> block_lengths(num_fields, 1);
@@ -269,12 +269,12 @@ struct mpi::details::mpi_datatype_trait<DataType> {
       // Create the MPI datatype
       int mpi_error = MPI_Type_create_struct(
           static_cast<int>(num_fields), block_lengths.data(), offsets.data(),
-          types.data(), &mpi_type);
+          types.data(), &mpi_type_val);
       if (mpi_error != MPI_SUCCESS) {
         throw std::runtime_error("MPI_Type_create_struct() failed");
       }
 
-      mpi_error = MPI_Type_commit(&mpi_type);
+      mpi_error = MPI_Type_commit(&mpi_type_val);
       if (mpi_error != MPI_SUCCESS) {
         throw std::runtime_error("MPI_Type_commit() failed");
       }
@@ -282,11 +282,11 @@ struct mpi::details::mpi_datatype_trait<DataType> {
       // Register the datatype and initialize cleanup
       {
         std::scoped_lock const lock{mpi::details::mpi_type_mutex};
-        mpi::details::get_custom_mpi_types().push_back(mpi_type);
+        mpi::details::get_custom_mpi_types().push_back(mpi_type_val);
         mpi::details::initialize_mpi_type_cleanup();
       }
 
-      return mpi_type;
+      return mpi_type_val;
     }();
 
     return mpi_type;

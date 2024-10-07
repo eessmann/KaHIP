@@ -7,7 +7,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/Utilities.cmake)
 
 kahip_supports_sanitizers()
 
-option(kahip_ENABLE_IPO "Enable IPO/LTO" OFF)
+option(kahip_ENABLE_IPO "Enable IPO/LTO" ON)
 option(kahip_WARNINGS_AS_ERRORS "Treat Warnings As Errors" OFF)
 option(kahip_ENABLE_SANITIZERS "Enable sanitizers" OFF)
 option(kahip_ENABLE_SANITIZER_ADDRESS "Enable address sanitizer" ${SUPPORTS_ASAN})
