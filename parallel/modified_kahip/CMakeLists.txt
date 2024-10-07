@@ -1,9 +1,9 @@
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib)
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools)
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition)
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/io)
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement)
-include_directories(${MPI_CXX_INCLUDE_PATH})
+add_library(modified_kahip_headers INTERFACE)
+target_include_directories(modified_kahip_headers BEFORE INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+target_include_directories(modified_kahip_headers BEFORE INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools)
+target_include_directories(modified_kahip_headers BEFORE INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition)
+target_include_directories(modified_kahip_headers BEFORE INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/io)
+target_include_directories(modified_kahip_headers BEFORE INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement)
 
 set(LIBMODIFIED_KAFFPA_SOURCE_FILES
   lib/data_structure/graph_hierarchy.cpp
@@ -66,18 +66,23 @@ set(LIBMODIFIED_KAFFPA_SOURCE_FILES
   lib/parallel_mh/galinier_combine/construct_partition.cpp
   lib/partition/uncoarsening/refinement/tabu_search/tabu_search.cpp)
 add_library(libmodified_kaffpa OBJECT ${LIBMODIFIED_KAFFPA_SOURCE_FILES})
-target_link_libraries(libmodified_kaffpa PUBLIC kahip_options kahip_warnings)
+target_link_libraries(libmodified_kaffpa PRIVATE kahip_options kahip_warnings)
+target_link_libraries(libmodified_kaffpa PRIVATE modified_kahip_headers)
+target_link_libraries(libmodified_kaffpa PRIVATE MPI::MPI_CXX)
 
 
 set(LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES
   lib/parallel_mh/parallel_mh_async.cpp
   lib/parallel_mh/population.cpp
   lib/parallel_mh/exchange/exchanger.cpp
-  lib/tools/graph_communication.cpp
-  lib/tools/mpi_tools.cpp)
+  lib/tools/graph_communication.cpp)
 add_library(libmodified_kaffpa_async OBJECT ${LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES})
+target_link_libraries(libmodified_kaffpa_async PRIVATE modified_kahip_headers)
+target_link_libraries(libmodified_kaffpa_async PRIVATE MPI::MPI_CXX)
 
 add_library(libmodified_kahip_interface STATIC interface/kaHIP_interface.cpp)
 target_link_libraries(libmodified_kahip_interface PRIVATE libmodified_kaffpa libmodified_kaffpa_async)
 target_link_libraries(libmodified_kahip_interface PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(libmodified_kahip_interface PRIVATE MPI::MPI_CXX)
+target_link_libraries(libmodified_kahip_interface PRIVATE modified_kahip_headers)
 target_include_directories(libmodified_kahip_interface PUBLIC interface)

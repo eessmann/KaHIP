@@ -131,8 +131,8 @@ class random_functions {
                         }
 
                 static bool nextBool() {
-                        std::uniform_int_distribution<short> A(0,1);
-                        return (bool) A(m_mt); 
+                        std::bernoulli_distribution bernoulli(0.5);
+                        return bernoulli(m_mt);
                 }
 
                 //including lb and rb
