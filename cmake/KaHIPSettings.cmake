@@ -9,6 +9,7 @@ kahip_supports_sanitizers()
 
 option(kahip_ENABLE_IPO "Enable IPO/LTO" OFF)
 option(kahip_WARNINGS_AS_ERRORS "Treat Warnings As Errors" OFF)
+option(kahip_ENABLE_SANITIZERS "Enable sanitizers" OFF)
 option(kahip_ENABLE_SANITIZER_ADDRESS "Enable address sanitizer" ${SUPPORTS_ASAN})
 option(kahip_ENABLE_SANITIZER_LEAK "Enable leak sanitizer" OFF)
 option(kahip_ENABLE_SANITIZER_UNDEFINED "Enable undefined sanitizer" ${SUPPORTS_UBSAN})
@@ -35,13 +36,15 @@ kahip_set_project_warnings(
         ""
         "")
 
-kahip_enable_sanitizers(
-        kahip_options
-        ${kahip_ENABLE_SANITIZER_ADDRESS}
-        ${kahip_ENABLE_SANITIZER_LEAK}
-        ${kahip_ENABLE_SANITIZER_UNDEFINED}
-        ${kahip_ENABLE_SANITIZER_THREAD}
-        ${kahip_ENABLE_SANITIZER_MEMORY})
+if (kahip_ENABLE_SANITIZERS)
+    kahip_enable_sanitizers(
+            kahip_options
+            ${kahip_ENABLE_SANITIZER_ADDRESS}
+            ${kahip_ENABLE_SANITIZER_LEAK}
+            ${kahip_ENABLE_SANITIZER_UNDEFINED}
+            ${kahip_ENABLE_SANITIZER_THREAD}
+            ${kahip_ENABLE_SANITIZER_MEMORY})
+endif ()
 
 if(kahip_ENABLE_CLANG_TIDY)
     kahip_enable_clang_tidy(kahip_options ${kahip_WARNINGS_AS_ERRORS})
