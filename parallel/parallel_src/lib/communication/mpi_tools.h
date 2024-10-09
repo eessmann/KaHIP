@@ -9,12 +9,12 @@
 #define MPI_TOOLS_HMESDXF2
 
 #include <algorithm>
-#include <format>
 #include <functional>
 #include <numeric>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <sstream>
 
 #include "data_structure/parallel_graph_access.h"
 #include "mpi_types.h"
@@ -182,8 +182,9 @@ auto all_to_all(Input const& sends, MPI_Comm communicator)
     MPI_Error_string(mpi_error, error_string.data(), &length_of_error_string);
     auto mpi_error_message =
         std::string_view(error_string.data(), length_of_error_string);
-    throw std::runtime_error(std::format(
-        "mpi::all_to_all() failed with error: {}", mpi_error_message));
+    std::stringstream errmeg{};
+    errmeg << "mpi::all_to_all() failed with error: " << mpi_error_message;
+    throw std::runtime_error(errmeg.str());
   }
 
   // Unpacking messages
