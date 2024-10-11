@@ -12,15 +12,15 @@
 #include "data_structure/hashed_graph.h"
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
-
+namespace parhip {
 class parallel_contraction {
- public:
+public:
   void contract_to_distributed_quotient(MPI_Comm communicator,
                                         PPartitionConfig& config,
                                         parallel_graph_access& G,
                                         parallel_graph_access& Q);
 
- private:
+private:
   // compute mapping of labels id into contiguous intervall [0,...,num_lables)
   void compute_label_mapping(MPI_Comm communicator,
                              parallel_graph_access& G,
@@ -65,4 +65,5 @@ struct bundled_node_weight {
   NodeWeight weight;
 };
 }  // namespace contraction
+}
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */

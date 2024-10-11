@@ -14,14 +14,8 @@
 #include "uncoarsening/uncoarsening.h"
 #include "uncoarsening/refinement/mixed_refinement.h"
 #include "w_cycles/wcycle_partitioner.h"
+
 namespace kahip::modified {
-graph_partitioner::graph_partitioner() {
-
-}
-
-graph_partitioner::~graph_partitioner() {
-
-}
 
 void graph_partitioner::perform_recursive_partitioning(PartitionConfig & config, graph_access & G) {
   m_global_k = config.k;

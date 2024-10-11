@@ -19,9 +19,9 @@
 #include "data_structure/parallel_graph_access.h"
 #include "mpi_types.h"
 #include "partition_config.h"
-
+namespace parhip {
 class mpi_tools {
- public:
+public:
   void collect_and_write_labels(MPI_Comm communicator,
                                 PPartitionConfig& config,
                                 parallel_graph_access& G);
@@ -152,7 +152,7 @@ auto all_to_all(Input const& sends, MPI_Comm communicator)
     throw std::runtime_error("mpi::pack_messages(): send_offsets.size() (" +
                              std::to_string(send_offsets.size()) +
                              ") != mpi size (" + std::to_string(size) + ")");
-  }
+             }
 
   // Exchanging message sizes
   auto const recv_lengths = exchange_num_messages(send_lengths, communicator);
@@ -192,5 +192,5 @@ auto all_to_all(Input const& sends, MPI_Comm communicator)
       {recv_packed_messages, recv_offsets, recv_lengths});
 }
 }  // namespace mpi
-
+}
 #endif /* end of include guard: MPI_TOOLS_HMESDXF2 */

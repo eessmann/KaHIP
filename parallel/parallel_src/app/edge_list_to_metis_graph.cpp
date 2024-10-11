@@ -22,7 +22,7 @@ using namespace std;
 
 int main(int argn, char **argv)
 {
-       
+        using namespace parhip;
         MPI_Init(&argn, &argv);
 
         PPartitionConfig partition_config;

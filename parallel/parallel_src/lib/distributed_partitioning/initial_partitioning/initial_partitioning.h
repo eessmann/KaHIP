@@ -10,14 +10,14 @@
 
 #include "partition_config.h"
 #include "data_structure/parallel_graph_access.h"
-
+namespace parhip {
 class initial_partitioning_algorithm {
 public:
-        initial_partitioning_algorithm();
-        virtual ~initial_partitioning_algorithm();
+  initial_partitioning_algorithm();
+  virtual ~initial_partitioning_algorithm();
 
-        void perform_partitioning( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G);
+  void perform_partitioning( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G);
 };
-
+}
 
 #endif /* end of include guard: INITIAL_PARTITIONING_SFMCJN2U */

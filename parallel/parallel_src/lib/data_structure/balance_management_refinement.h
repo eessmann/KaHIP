@@ -9,7 +9,7 @@
 #define BALANCE_MANAGEMENT_REFINEMENT_ZHYKQBYB
 
 #include "balance_management.h"
-
+namespace parhip {
 class parallel_graph_access;
 
 class balance_management_refinement : public balance_management {
@@ -41,5 +41,5 @@ inline
 NodeWeight balance_management_refinement::getBlockSize( PartitionID block ) {
         return m_total_block_weights[block];
 }
-
+}
 #endif /* end of include guard: BALANCE_MANAGEMENT_REFINEMENT_ZHYKQBYB */

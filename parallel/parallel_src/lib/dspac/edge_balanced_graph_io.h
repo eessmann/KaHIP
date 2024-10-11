@@ -14,14 +14,14 @@
 #include "definitions.h"
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
-
+namespace parhip {
 class edge_balanced_graph_io {
 public:
-    static void read_binary_graph_edge_balanced(parallel_graph_access &G, const std::string &filename,
-            const PPartitionConfig &config, std::vector<EdgeID> &permutation, int rank, int size);
+  static void read_binary_graph_edge_balanced(parallel_graph_access &G, const std::string &filename,
+          const PPartitionConfig &config, std::vector<EdgeID> &permutation, int rank, int size);
 
-    static void read_binary_graph_edge_balanced(parallel_graph_access &G, const std::string &filename,
-            const PPartitionConfig &config, std::vector<EdgeID> &permutation);
+  static void read_binary_graph_edge_balanced(parallel_graph_access &G, const std::string &filename,
+          const PPartitionConfig &config, std::vector<EdgeID> &permutation);
 };
-
+}
 #endif // KAHIP_EDGEBALANCED_GRAPH_IO_H

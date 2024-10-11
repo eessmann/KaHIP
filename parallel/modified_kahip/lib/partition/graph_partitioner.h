@@ -16,8 +16,8 @@
 namespace kahip::modified {
 class graph_partitioner {
 public:
-  graph_partitioner();
-  virtual ~graph_partitioner();
+  graph_partitioner() = default;
+  virtual ~graph_partitioner() = default;
 
   void perform_partitioning(PartitionConfig & graph_partitioner_config, graph_access & G);
   void perform_recursive_partitioning(PartitionConfig & graph_partitioner_config, graph_access & G);

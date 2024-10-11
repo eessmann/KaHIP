@@ -99,7 +99,7 @@ void internal_kaffpa_call(PartitionConfig & partition_config,
   cout.rdbuf(backup);
 }
 
-
+}
 
 void kaffpa(int* n,
                    int* vwgt,
@@ -113,6 +113,7 @@ void kaffpa(int* n,
                    int mode,
                    int* edgecut,
                    int* part) {
+  using namespace kahip::modified;
   configuration cfg;
   PartitionConfig partition_config;
   partition_config.k = *nparts;
@@ -146,7 +147,7 @@ void kaffpa(int* n,
   internal_kaffpa_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, edgecut, part);
 }
 
-
+namespace kahip::modified {
 void internal_nodeseparator_call(PartitionConfig & partition_config,
                           bool suppress_output,
                           int* n,
@@ -193,7 +194,7 @@ void internal_nodeseparator_call(PartitionConfig & partition_config,
   ofs.close();
   cout.rdbuf(backup);
 }
-
+}
 
 void node_separator(int* n,
                           int* vwgt,
@@ -207,6 +208,7 @@ void node_separator(int* n,
                           int mode,
                           int* num_separator_vertices,
                           int** separator) {
+  using namespace kahip::modified;
   configuration cfg;
   PartitionConfig partition_config;
   partition_config.k = *nparts;
@@ -256,7 +258,7 @@ void kaffpaE(int* n,
                    int* edgecut,
                    double* balance,
                    int* part) {
-
+  using namespace kahip::modified;
   configuration cfg;
   PartitionConfig partition_config;
   partition_config.k = *nparts;
@@ -324,5 +326,5 @@ void kaffpaE(int* n,
   //ofs.close();
   //cout.rdbuf(backup);
 }
-}
+
 

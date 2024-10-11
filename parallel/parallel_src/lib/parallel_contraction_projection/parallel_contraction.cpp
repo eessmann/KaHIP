@@ -8,41 +8,41 @@
 #include "parallel_contraction.h"
 #include "data_structure/hashed_graph.h"
 #include "tools/helpers.h"
-
-void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config, 
+namespace parhip {
+void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config,
                                                              parallel_graph_access & G, 
                                                              parallel_graph_access & Q) {
 
-        NodeID number_of_distinct_labels; // equals global number of coarse nodes
+  NodeID number_of_distinct_labels; // equals global number of coarse nodes
 
-        // maps old ids to new ids in interval [0, ...., num_of_distinct_labels
-        // and stores this information only for the local nodes 
-        std::unordered_map< NodeID, NodeID > label_mapping;
+  // maps old ids to new ids in interval [0, ...., num_of_distinct_labels
+  // and stores this information only for the local nodes
+  std::unordered_map< NodeID, NodeID > label_mapping;
 
-        compute_label_mapping( communicator, G, number_of_distinct_labels, label_mapping);
-        
-        // compute the projection table
-        G.allocate_node_to_cnode();
-        forall_local_nodes(G, node) {
-                G.setCNode( node, label_mapping[ G.getNodeLabel( node )]);
-        } endfor
+  compute_label_mapping( communicator, G, number_of_distinct_labels, label_mapping);
 
-        get_nodes_to_cnodes_ghost_nodes( communicator, G );   
+  // compute the projection table
+  G.allocate_node_to_cnode();
+  forall_local_nodes(G, node) {
+    G.setCNode( node, label_mapping[ G.getNodeLabel( node )]);
+  } endfor
 
-        //now we can really build the edges of the quotient graph
-        hashed_graph hG;
-        std::unordered_map< NodeID, NodeWeight > node_weights;
+  get_nodes_to_cnodes_ghost_nodes( communicator, G );
 
-        build_quotient_graph_locally( G, number_of_distinct_labels, hG, node_weights);
-        
-        MPI_Barrier(communicator);
+  //now we can really build the edges of the quotient graph
+  hashed_graph hG;
+  std::unordered_map< NodeID, NodeWeight > node_weights;
 
-        m_messages.clear();
-        m_out_messages.clear();
-        m_send_buffers.clear();
+  build_quotient_graph_locally( G, number_of_distinct_labels, hG, node_weights);
 
-        redistribute_hased_graph_and_build_graph_locally( communicator, hG, node_weights, number_of_distinct_labels, Q );
-        update_ghost_nodes_weights( communicator, Q );
+  MPI_Barrier(communicator);
+
+  m_messages.clear();
+  m_out_messages.clear();
+  m_send_buffers.clear();
+
+  redistribute_hased_graph_and_build_graph_locally( communicator, hG, node_weights, number_of_distinct_labels, Q );
+  update_ghost_nodes_weights( communicator, Q );
 }
 
 // MPI AlltoAll based implementation
@@ -71,11 +71,11 @@ void parallel_contraction::compute_label_mapping(
   endfor
 
       for (PEID peID = 0; peID < size; peID++) {
-    std::unordered_map<NodeID, bool>::iterator it;
-    for (it = filter.at(peID).begin(); it != filter.at(peID).end(); ++it) {
-      m_messages.at(peID).push_back(it->first);
-    }
-  }
+        std::unordered_map<NodeID, bool>::iterator it;
+        for (it = filter.at(peID).begin(); it != filter.at(peID).end(); ++it) {
+          m_messages.at(peID).push_back(it->first);
+        }
+      }
 
   auto const local_labels_byPE = mpi::all_to_all(m_messages, communicator);
 
@@ -162,107 +162,107 @@ void parallel_contraction::compute_label_mapping(
 }
 
 void parallel_contraction::get_nodes_to_cnodes_ghost_nodes( MPI_Comm communicator, parallel_graph_access & G ) {
-        PEID rank, size;
-        MPI_Comm_rank( communicator, &rank);
-        MPI_Comm_size( communicator, &size);
-        
-        std::vector< bool > PE_packed( size, false );
-				m_send_buffers.clear();
-        m_send_buffers.resize( size );
+  PEID rank, size;
+  MPI_Comm_rank( communicator, &rank);
+  MPI_Comm_size( communicator, &size);
 
-        forall_local_nodes(G, node) {
-                if(G.is_interface_node(node)) {
-                        forall_out_edges(G, e, node) {
-                                NodeID target = G.getEdgeTarget(e);
-                                if( !G.is_local_node(target)  ) {
-                                        PEID peID = G.getTargetPE(target);
-                                        if( !PE_packed[peID] ) { // make sure a node is sent at most once
-                                                m_send_buffers[peID].push_back(G.getGlobalID(node));
-                                                m_send_buffers[peID].push_back(G.getCNode(node));
-                                                PE_packed[peID] = true;
-                                        }
-                                }
-                        } endfor
-                        forall_out_edges(G, e, node) {
-                                NodeID target = G.getEdgeTarget(e);
-                                if( !G.is_local_node(target)  ) {
-                                        PE_packed[G.getTargetPE(target)] = false;
-                                }
-                        } endfor
-                }
-        } endfor
+  std::vector< bool > PE_packed( size, false );
+  m_send_buffers.clear();
+  m_send_buffers.resize( size );
 
-        //send all neighbors their packages using Isends
-        //a neighbor that does not receive something gets a specific token
-        for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
-                if( G.is_adjacent_PE(peID) ) {
-                        //now we have to send a message
-                        if( m_send_buffers[peID].size() == 0 ){
-                                // length 1 encode no message
-                                m_send_buffers[peID].push_back(0);
-                        }
-
-                        MPI_Request rq;
-                        MPI_Isend( &m_send_buffers[peID][0], 
-                                    m_send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+6*size, communicator, &rq);
-                }
+  forall_local_nodes(G, node) {
+    if(G.is_interface_node(node)) {
+      forall_out_edges(G, e, node) {
+        NodeID target = G.getEdgeTarget(e);
+        if( !G.is_local_node(target)  ) {
+          PEID peID = G.getTargetPE(target);
+          if( !PE_packed[peID] ) { // make sure a node is sent at most once
+            m_send_buffers[peID].push_back(G.getGlobalID(node));
+            m_send_buffers[peID].push_back(G.getCNode(node));
+            PE_packed[peID] = true;
+          }
         }
-
-        ////receive incomming
-        PEID num_adjacent = G.getNumberOfAdjacentPEs();
-        PEID counter = 0;
-        while( counter < num_adjacent ) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st;
-                MPI_Probe(MPI_ANY_SOURCE, rank+6*size, communicator, &st);
-                
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> message; message.resize(message_length);
-
-                MPI_Status rst;
-                MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+6*size, communicator, &rst); 
-                counter++;
-
-                // now integrate the changes
-                if(message_length == 1) continue; // nothing to do
-
-                for( int i = 0; i < message_length-1; i+=2) {
-                        NodeID global_id = message[i];
-                        NodeID cnode     = message[i+1];
-
-                        G.setCNode( G.getLocalID(global_id), cnode);
-                }
+      } endfor
+      forall_out_edges(G, e, node) {
+        NodeID target = G.getEdgeTarget(e);
+        if( !G.is_local_node(target)  ) {
+          PE_packed[G.getTargetPE(target)] = false;
         }
+      } endfor
+}
+  } endfor
+
+  //send all neighbors their packages using Isends
+  //a neighbor that does not receive something gets a specific token
+  for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
+    if( G.is_adjacent_PE(peID) ) {
+      //now we have to send a message
+      if( m_send_buffers[peID].size() == 0 ){
+        // length 1 encode no message
+        m_send_buffers[peID].push_back(0);
+      }
+
+      MPI_Request rq;
+      MPI_Isend( &m_send_buffers[peID][0],
+                  m_send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+6*size, communicator, &rq);
+    }
+  }
+
+  ////receive incomming
+  PEID num_adjacent = G.getNumberOfAdjacentPEs();
+  PEID counter = 0;
+  while( counter < num_adjacent ) {
+    // wait for incomming message of an adjacent processor
+    MPI_Status st;
+    MPI_Probe(MPI_ANY_SOURCE, rank+6*size, communicator, &st);
+
+    int message_length;
+    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
+    std::vector<NodeID> message; message.resize(message_length);
+
+    MPI_Status rst;
+    MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+6*size, communicator, &rst);
+    counter++;
+
+    // now integrate the changes
+    if(message_length == 1) continue; // nothing to do
+
+    for( int i = 0; i < message_length-1; i+=2) {
+      NodeID global_id = message[i];
+      NodeID cnode     = message[i+1];
+
+      G.setCNode( G.getLocalID(global_id), cnode);
+    }
+  }
 }
 
 
-void parallel_contraction::build_quotient_graph_locally( parallel_graph_access & G, 
-                                                         NodeID number_of_distinct_labels, 
-                                                         hashed_graph & hG, 
+void parallel_contraction::build_quotient_graph_locally( parallel_graph_access & G,
+                                                         NodeID number_of_distinct_labels,
+                                                         hashed_graph & hG,
                                                          std::unordered_map< NodeID, NodeWeight > & node_weights) {
-        forall_local_nodes(G, node) {
-                NodeID cur_cnode = G.getCNode( node );
-                if( node_weights.find(cur_cnode) == node_weights.end()) {
-                        node_weights[cur_cnode] = 0;
-                }
+  forall_local_nodes(G, node) {
+    NodeID cur_cnode = G.getCNode( node );
+    if( node_weights.find(cur_cnode) == node_weights.end()) {
+      node_weights[cur_cnode] = 0;
+    }
 
-                node_weights[cur_cnode] += G.getNodeWeight( node );
+    node_weights[cur_cnode] += G.getNodeWeight( node );
 
-                forall_out_edges(G, e, node) {
-                        NodeID target       = G.getEdgeTarget(e);
-                        NodeID target_cnode = G.getCNode(target);
-                        if( cur_cnode != target_cnode ) {
-                                // update the edge
-                                hashed_edge he;
-                                he.k            = number_of_distinct_labels;
-                                he.source       = cur_cnode;
-                                he.target       = target_cnode;
+    forall_out_edges(G, e, node) {
+      NodeID target       = G.getEdgeTarget(e);
+      NodeID target_cnode = G.getCNode(target);
+      if( cur_cnode != target_cnode ) {
+        // update the edge
+        hashed_edge he;
+        he.k            = number_of_distinct_labels;
+        he.source       = cur_cnode;
+        he.target       = target_cnode;
 
-                                hG[he].weight  += G.getEdgeWeight(e);
-                        }
-                } endfor
-        } endfor
+        hG[he].weight  += G.getEdgeWeight(e);
+      }
+    } endfor
+} endfor
 }
 
 void parallel_contraction::redistribute_hased_graph_and_build_graph_locally(
@@ -409,73 +409,74 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally(
 
 
 void parallel_contraction::update_ghost_nodes_weights( MPI_Comm communicator, parallel_graph_access & G ) {
-        PEID rank, size;
-        MPI_Comm_rank( communicator, &rank);
-        MPI_Comm_size( communicator, &size);
-        
-               //std::vector< std::vector< NodeID > > send_buffers; // buffers to send messages
-        m_send_buffers.resize(size);
-        std::vector< bool > PE_packed(size, false);
-        forall_local_nodes(G, node) {
-                forall_out_edges(G, e, node) {
-                        NodeID target = G.getEdgeTarget(e);
-                        if( !G.is_local_node(target)  ) {
-                                PEID peID = G.getTargetPE(target);
-                                if( !PE_packed[peID] ) { // make sure a node is sent at most once
-                                        m_send_buffers[peID].push_back(G.getGlobalID(node));
-                                        m_send_buffers[peID].push_back(G.getNodeWeight(node));
-                                        PE_packed[peID] = true;
-                                }
-                        }
-                } endfor
-                forall_out_edges(G, e, node) {
-                        NodeID target = G.getEdgeTarget(e);
-                        if( !G.is_local_node(target)  ) {
-                                PE_packed[G.getTargetPE(target)] = false;
-                        }
-                } endfor
-        } endfor
+  PEID rank, size;
+  MPI_Comm_rank( communicator, &rank);
+  MPI_Comm_size( communicator, &size);
 
-        //send all neighbors their packages using Isends
-        //a neighbor that does not receive something gets a specific token
-        for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
-                if( G.is_adjacent_PE(peID) ) {
-                        //now we have to send a message
-                        if( m_send_buffers[peID].size() == 0 ){
-                                // length 1 encode no message
-                                m_send_buffers[peID].push_back(0);
-                        }
-
-                        MPI_Request rq; 
-                        MPI_Isend( &m_send_buffers[peID][0], 
-                                    m_send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+9*size, communicator, &rq);
-                }
+  //std::vector< std::vector< NodeID > > send_buffers; // buffers to send messages
+  m_send_buffers.resize(size);
+  std::vector< bool > PE_packed(size, false);
+  forall_local_nodes(G, node) {
+    forall_out_edges(G, e, node) {
+      NodeID target = G.getEdgeTarget(e);
+      if( !G.is_local_node(target)  ) {
+        PEID peID = G.getTargetPE(target);
+        if( !PE_packed[peID] ) { // make sure a node is sent at most once
+          m_send_buffers[peID].push_back(G.getGlobalID(node));
+          m_send_buffers[peID].push_back(G.getNodeWeight(node));
+          PE_packed[peID] = true;
         }
+      }
+    } endfor
+    forall_out_edges(G, e, node) {
+      NodeID target = G.getEdgeTarget(e);
+      if( !G.is_local_node(target)  ) {
+        PE_packed[G.getTargetPE(target)] = false;
+      }
+    } endfor
+} endfor
 
-        //receive incomming
-        PEID counter = 0;
-        while( counter < G.getNumberOfAdjacentPEs()) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st;
-                MPI_Probe(MPI_ANY_SOURCE, rank+9*size, communicator, &st);
-                
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> message; message.resize(message_length);
+//send all neighbors their packages using Isends
+//a neighbor that does not receive something gets a specific token
+for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
+  if( G.is_adjacent_PE(peID) ) {
+    //now we have to send a message
+    if( m_send_buffers[peID].size() == 0 ){
+      // length 1 encode no message
+      m_send_buffers[peID].push_back(0);
+    }
 
-                MPI_Status rst;
-                MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+9*size, communicator, &rst); 
-                counter++;
+    MPI_Request rq;
+    MPI_Isend( &m_send_buffers[peID][0],
+                m_send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+9*size, communicator, &rq);
+  }
+}
 
-                // now integrate the changes
-                if(message_length == 1) continue; // nothing to do
+  //receive incomming
+  PEID counter = 0;
+  while( counter < G.getNumberOfAdjacentPEs()) {
+    // wait for incomming message of an adjacent processor
+    MPI_Status st;
+    MPI_Probe(MPI_ANY_SOURCE, rank+9*size, communicator, &st);
 
-                for( int i = 0; i < message_length-1; i+=2) {
-                        NodeID global_id   = message[i];
-                        NodeWeight  weight = message[i+1];
+    int message_length;
+    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
+    std::vector<NodeID> message; message.resize(message_length);
 
-                        G.setNodeWeight( G.getLocalID(global_id), weight);
-                }
-        }
+    MPI_Status rst;
+    MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+9*size, communicator, &rst);
+    counter++;
 
+    // now integrate the changes
+    if(message_length == 1) continue; // nothing to do
+
+    for( int i = 0; i < message_length-1; i+=2) {
+      NodeID global_id   = message[i];
+      NodeWeight  weight = message[i+1];
+
+      G.setNodeWeight( G.getLocalID(global_id), weight);
+    }
+  }
+
+}
 }

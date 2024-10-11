@@ -17,7 +17,7 @@
 #include <cista/reflection/arity.h>
 #include <cista/reflection/for_each_field.h>
 #include <cista/serialization.h>
-
+namespace parhip {
 namespace mpi {
 namespace details {
 // Define an enum to represent the kind of MPI data
@@ -97,10 +97,10 @@ struct mpi_data_kind_trait<T> {
 
 // Macro to specialize mpi_data_kind_trait for unique base types
 #define MPI_BASE_TYPE_KIND(type)                                 \
-  template <>                                                    \
-  struct mpi_data_kind_trait<type> {                             \
-    static constexpr mpi_data_kinds kind = mpi_data_kinds::base; \
-  };
+template <>                                                    \
+struct mpi_data_kind_trait<type> {                             \
+static constexpr mpi_data_kinds kind = mpi_data_kinds::base; \
+};
 
 // Specializations for unique base types
 MPI_BASE_TYPE_KIND(char)
@@ -129,12 +129,12 @@ struct mpi_datatype_trait;
 
 // Macro to specialize mpi_datatype_trait for unique base types
 #define MPI_DATATYPE_TRAIT(type, mpi_type_const) \
-  template <>                                    \
-  struct mpi_datatype_trait<type> {              \
-    static MPI_Datatype get_mpi_type() {         \
-      return mpi_type_const;                     \
-    }                                            \
-  };
+template <>                                    \
+struct mpi_datatype_trait<type> {              \
+static MPI_Datatype get_mpi_type() {         \
+return mpi_type_const;                     \
+}                                            \
+};
 
 // Map unique base types to MPI_Datatypes
 MPI_DATATYPE_TRAIT(char, MPI_CHAR)
@@ -238,7 +238,7 @@ auto get_mpi_datatype() -> MPI_Datatype {
     static_assert(sizeof(DataType) == 0,
                   "Unsupported data type for MPI communication");
     return MPI_DATATYPE_NULL;  // This line will never be reached due to
-                               // static_assert
+    // static_assert
   }
 }
 
@@ -308,3 +308,4 @@ struct MyType {
     return !(lhs == rhs);
   }
 };
+}

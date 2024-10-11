@@ -10,13 +10,13 @@
 
 #include "partition_config.h"
 #include "data_structure/parallel_graph_access.h"
-
+namespace parhip {
 class distributed_evolutionary_partitioning {
 public:
-        distributed_evolutionary_partitioning();
-        virtual ~distributed_evolutionary_partitioning();
+  distributed_evolutionary_partitioning();
+  virtual ~distributed_evolutionary_partitioning();
 
-        void perform_partitioning( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G);
+  void perform_partitioning( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G);
 };
-
+}
 #endif /* end of include guard: DISTRIBUTED_EVOLUTIONARY_PARTITIONING_OJ2RIKR7 */
