@@ -9,7 +9,7 @@
 #define PARALLEL_PROJECTION_HBRCPQ0P
 
 #include "data_structure/parallel_graph_access.h"
-
+namespace parhip {
 class parallel_projection {
 public:
         parallel_projection();
@@ -22,7 +22,7 @@ public:
 private:
         std::vector< std::vector< NodeID > > m_messages;
 };
-
+}
 
 
 

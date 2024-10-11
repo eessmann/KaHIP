@@ -10,7 +10,7 @@
 
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
-
+namespace parhip {
 class stop_rule {
 public:
         stop_rule() {} ;
@@ -22,6 +22,5 @@ public:
                 return false;       
         }
 };
-
-
+}
 #endif /* end of include guard: STOP_RULE_23YOZ7GX */

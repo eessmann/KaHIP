@@ -8,7 +8,7 @@
 #include "parallel_projection.h"
 
 #include "communication/mpi_tools.h"
-
+namespace parhip {
 parallel_projection::parallel_projection() {
                 
 }
@@ -19,140 +19,141 @@ parallel_projection::~parallel_projection() {
 
 //issue recv before send
 void parallel_projection::parallel_project( MPI_Comm communicator, parallel_graph_access & finer, parallel_graph_access & coarser ) {
-        PEID rank, size;
-        MPI_Comm_rank( communicator, &rank);
-        MPI_Comm_size( communicator, &size);
-        
-        NodeID divisor = ceil(coarser.number_of_global_nodes() / (double)size);
+  PEID rank, size;
+  MPI_Comm_rank( communicator, &rank);
+  MPI_Comm_size( communicator, &size);
 
-        m_messages.resize(size);
+  NodeID divisor = ceil(coarser.number_of_global_nodes() / (double)size);
 
-        std::unordered_map< NodeID, std::vector< NodeID > > cnode_to_nodes;
-        forall_local_nodes(finer, node) {
-                NodeID cnode = finer.getCNode(node);
-                //std::cout <<  "cnode " <<  cnode  << std::endl;
-                if( coarser.is_local_node_from_global_id(cnode) ) {
-                        NodeID new_label = coarser.getNodeLabel(coarser.getLocalID(cnode));
-                        finer.setNodeLabel(node, new_label);
-                } else {
-                        //we have to request it from another PE
-                        PEID peID = cnode / divisor; // cnode is 
+  m_messages.resize(size);
 
-                        if( cnode_to_nodes.find( cnode ) == cnode_to_nodes.end()) {
-                                m_messages[peID].push_back(cnode); // we are requesting the label of this node 
-                        }
+  std::unordered_map< NodeID, std::vector< NodeID > > cnode_to_nodes;
+  forall_local_nodes(finer, node) {
+    NodeID cnode = finer.getCNode(node);
+    //std::cout <<  "cnode " <<  cnode  << std::endl;
+    if( coarser.is_local_node_from_global_id(cnode) ) {
+      NodeID new_label = coarser.getNodeLabel(coarser.getLocalID(cnode));
+      finer.setNodeLabel(node, new_label);
+    } else {
+      //we have to request it from another PE
+      PEID peID = cnode / divisor; // cnode is
 
-                        cnode_to_nodes[cnode].push_back(node);
-                }
-        } endfor
+      if( cnode_to_nodes.find( cnode ) == cnode_to_nodes.end()) {
+        m_messages[peID].push_back(cnode); // we are requesting the label of this node
+      }
 
-        for( PEID peID = 0; peID < size; peID++) {
-                if( peID != rank ) {
-                        if( m_messages[peID].size() == 0 ){
-                                m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
-                        }
+      cnode_to_nodes[cnode].push_back(node);
+    }
+  } endfor
 
-                        MPI_Request rq;
-                        MPI_Isend( &m_messages[peID][0], 
-                                                m_messages[peID].size(), 
-                                                MPI_UNSIGNED_LONG_LONG, 
-                                                peID, peID+size, communicator, &rq);
-                }
-        }
+  for( PEID peID = 0; peID < size; peID++) {
+    if( peID != rank ) {
+      if( m_messages[peID].size() == 0 ){
+        m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
+      }
 
-        std::vector< std::vector< NodeID > > out_messages(size);
-	      auto const inc_mess_byPE = mpi::all_to_all( m_messages, communicator);
+      MPI_Request rq;
+      MPI_Isend( &m_messages[peID][0],
+                              m_messages[peID].size(),
+                              MPI_UNSIGNED_LONG_LONG,
+                              peID, peID+size, communicator, &rq);
+    }
+  }
 
-	      for(auto const& incmessage : inc_mess_byPE) {
+  std::vector< std::vector< NodeID > > out_messages(size);
+  auto const inc_mess_byPE = mpi::all_to_all( m_messages, communicator);
 
-	      }
+  for(auto const& incmessage : inc_mess_byPE) {
 
-        PEID counter = 0;
-        while( counter < size - 1) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st;
-                MPI_Probe(MPI_ANY_SOURCE, rank+size, communicator, &st);
+  }
 
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> incmessage; incmessage.resize(message_length);
+  PEID counter = 0;
+  while( counter < size - 1) {
+    // wait for incomming message of an adjacent processor
+    MPI_Status st;
+    MPI_Probe(MPI_ANY_SOURCE, rank+size, communicator, &st);
 
-                MPI_Status rst;
-                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+size, communicator, &rst);
-                counter++;
-								//----- size of messeges
-                PEID peID = st.MPI_SOURCE;
-                // now integrate the changes
-                if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
-                        out_messages[peID].push_back(std::numeric_limits< NodeID >::max());
-                        MPI_Request rq; 
-                        MPI_Isend( &out_messages[peID][0], 
-                                        out_messages[peID].size(), 
-                                        MPI_UNSIGNED_LONG_LONG, 
-                                        peID, peID+2*size, communicator, &rq);
+    int message_length;
+    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
+    std::vector<NodeID> incmessage; incmessage.resize(message_length);
 
-                        continue; // nothing to do
-                }
+    MPI_Status rst;
+    MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+size, communicator, &rst);
+    counter++;
+    //----- size of messeges
+    PEID peID = st.MPI_SOURCE;
+    // now integrate the changes
+    if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
+      out_messages[peID].push_back(std::numeric_limits< NodeID >::max());
+      MPI_Request rq;
+      MPI_Isend( &out_messages[peID][0],
+                      out_messages[peID].size(),
+                      MPI_UNSIGNED_LONG_LONG,
+                      peID, peID+2*size, communicator, &rq);
+
+      continue; // nothing to do
+    }
 
 
 
-                for( int i = 0; i < message_length; i++) {
-                        NodeID cnode = coarser.getLocalID(incmessage[i]);
-                        out_messages[peID].push_back(coarser.getNodeLabel(cnode));
-                }
-								// -- Handling messages and building response
-                MPI_Request rq;
-                MPI_Isend( &out_messages[peID][0], 
-                                out_messages[peID].size(), 
-                                MPI_UNSIGNED_LONG_LONG, 
-                                peID, peID+2*size, communicator, &rq);
-								// -- Sending responses
-        }
+    for( int i = 0; i < message_length; i++) {
+      NodeID cnode = coarser.getLocalID(incmessage[i]);
+      out_messages[peID].push_back(coarser.getNodeLabel(cnode));
+    }
+    // -- Handling messages and building response
+    MPI_Request rq;
+    MPI_Isend( &out_messages[peID][0],
+                    out_messages[peID].size(),
+                    MPI_UNSIGNED_LONG_LONG,
+                    peID, peID+2*size, communicator, &rq);
+    // -- Sending responses
+  }
 
-        counter = 0;
-        while( counter < size - 1) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st; ULONG tag = rank+2*size;
-                MPI_Probe(MPI_ANY_SOURCE, tag, communicator, &st);
+  counter = 0;
+  while( counter < size - 1) {
+    // wait for incomming message of an adjacent processor
+    MPI_Status st; ULONG tag = rank+2*size;
+    MPI_Probe(MPI_ANY_SOURCE, tag, communicator, &st);
 
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> incmessage; incmessage.resize(message_length);
+    int message_length;
+    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
+    std::vector<NodeID> incmessage; incmessage.resize(message_length);
 
-                MPI_Status rst;
-                MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, communicator, &rst); 
-                counter++;
-								// -- get sizes and revcs
-                // now integrate the changes
-                if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
-                        continue; // nothing to do
-                }
+    MPI_Status rst;
+    MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, communicator, &rst);
+    counter++;
+    // -- get sizes and revcs
+    // now integrate the changes
+    if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
+      continue; // nothing to do
+    }
 
-                PEID peID = st.MPI_SOURCE;
-                for( ULONG i = 0; i < (ULONG)incmessage.size(); i++) {
-                        std::vector< NodeID > & proj = cnode_to_nodes[m_messages[peID][i]];
-                        NodeID label = incmessage[i];
+    PEID peID = st.MPI_SOURCE;
+    for( ULONG i = 0; i < (ULONG)incmessage.size(); i++) {
+      std::vector< NodeID > & proj = cnode_to_nodes[m_messages[peID][i]];
+      NodeID label = incmessage[i];
 
-                        for( ULONG j = 0; j < proj.size(); j++) {
-                                finer.setNodeLabel(proj[j], label);
-                        }
-                }
-        }
+      for( ULONG j = 0; j < proj.size(); j++) {
+        finer.setNodeLabel(proj[j], label);
+      }
+    }
+  }
 
-        finer.update_ghost_node_data_global(); // blocking
+  finer.update_ghost_node_data_global(); // blocking
 }
 
 //initial assignment after initial partitioning
 void parallel_projection::initial_assignment( parallel_graph_access & G, complete_graph_access & Q) {
-        forall_local_nodes(G, node) {
-                G.setNodeLabel(node, Q.getNodeLabel(G.getGlobalID(node)));
-                if( G.is_interface_node(node) ) {
-                        forall_out_edges(G, e, node) {
-                                NodeID target = G.getEdgeTarget(e);
-                                if( !G.is_local_node( target ) ) {
-                                        G.setNodeLabel(target, Q.getNodeLabel(G.getGlobalID(target)));
-                                }
-                        } endfor
-                }
-        } endfor
+  forall_local_nodes(G, node) {
+    G.setNodeLabel(node, Q.getNodeLabel(G.getGlobalID(node)));
+    if( G.is_interface_node(node) ) {
+      forall_out_edges(G, e, node) {
+        NodeID target = G.getEdgeTarget(e);
+        if( !G.is_local_node( target ) ) {
+          G.setNodeLabel(target, Q.getNodeLabel(G.getGlobalID(target)));
+        }
+      } endfor
+}
+  } endfor
+}
 }

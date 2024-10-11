@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <string>
 #include <fstream>
-
+namespace parhip {
 class helpers {
 public:
         helpers() {};
@@ -55,5 +55,5 @@ inline bool file_exists(const std::string& name) {
                 return false;
         }   
 }
-
+}
 #endif /* end of include guard: HELPERS_ZUTE7MAJ */

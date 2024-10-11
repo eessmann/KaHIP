@@ -23,6 +23,7 @@
         #define PRINT(x) do {} while (false);
 #endif
 
+namespace parhip {
 /**********************************************
  * Constants
  * ********************************************/
@@ -41,8 +42,8 @@ constexpr PEID ROOT = 0;
 
 typedef enum {
         PERMUTATION_QUALITY_NONE, 
-	PERMUTATION_QUALITY_FAST,  
-	PERMUTATION_QUALITY_GOOD
+        PERMUTATION_QUALITY_FAST,
+        PERMUTATION_QUALITY_GOOD
 } PermutationQuality;
 
 typedef enum {
@@ -62,13 +63,12 @@ struct source_target_pair {
 };
 
 typedef enum {
-        RANDOM_NODEORDERING, 
+        RANDOM_NODEORDERING,
         DEGREE_NODEORDERING,
-	LEASTGHOSTNODESFIRST_DEGREE_NODEODERING,
-	DEGREE_LEASTGHOSTNODESFIRST_NODEODERING
+        LEASTGHOSTNODESFIRST_DEGREE_NODEODERING,
+        DEGREE_LEASTGHOSTNODESFIRST_NODEODERING
 } NodeOrderingType;
-
-
+}
 #endif
 
   //Tag Listing of Isend Operations(they should be unique per level) 

@@ -8,14 +8,14 @@
 
 #ifndef DUMMY_OPERATIONS_UVZ6V6T7
 #define DUMMY_OPERATIONS_UVZ6V6T7
-
+namespace parhip {
 class dummy_operations {
 public:
-        dummy_operations();
-        virtual ~dummy_operations();
+  dummy_operations();
+  virtual ~dummy_operations();
 
-        void run_collective_dummy_operations();
+  void run_collective_dummy_operations();
 };
-
+}
 
 #endif /* end of include guard: DUMMY_OPERATIONS_UVZ6V6T7 */

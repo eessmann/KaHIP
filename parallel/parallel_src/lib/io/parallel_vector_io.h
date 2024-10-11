@@ -18,7 +18,7 @@
 
 #include "parallel_graph_io.h"
 #include "partition_config.h"
-
+namespace parhip {
 const ULONG fileTypeVersionNumberPartition = 1;
 const ULONG header_count_partition         = 2;
 
@@ -81,5 +81,5 @@ void parallel_vector_io::readVectorSequentially(std::vector<vectortype> & vec, s
 
         in.close();
 }
-
+}
 #endif /* end of include guard: PARALLEL_VECTOR_IO_BZVNZ570 */

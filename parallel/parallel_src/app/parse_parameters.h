@@ -13,8 +13,8 @@
 #include <string.h>
 #include "configuration.h"
 #include "version.h"
-
-int parse_parameters(int argn, char **argv, 
+namespace parhip {
+int parse_parameters(int argn, char **argv,
                      PPartitionConfig & partition_config, 
                      std::string & graph_filename) {
 
@@ -56,10 +56,10 @@ int parse_parameters(int argn, char **argv,
         void* argtable[] = {
 #ifdef PARALLEL_LABEL_COMPRESSION
                 help, filename, user_seed, version, k, inbalance, preconfiguration, vertex_degree_weights,
-		save_partition, save_partition_binary,
-#elif defined TOOLBOX 
+                save_partition, save_partition_binary,
+#elif defined TOOLBOX
                 help, filename, k_opt, input_partition_filename, save_partition, save_partition_binary, converter_evaluate,
-#endif 
+#endif
                  end
         };
 
@@ -100,7 +100,7 @@ int parse_parameters(int argn, char **argv,
                         printf("Try '%s --help' for more information.\n",progname);
                         arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
                 }
-                return 1; 
+                return 1;
         }
 
         configuration cfg;
@@ -125,7 +125,7 @@ int parse_parameters(int argn, char **argv,
                 }
         }
 
-#else 
+#else
         if(filename->count > 0) {
                 graph_filename = filename->sval[0];
         }
@@ -160,17 +160,17 @@ int parse_parameters(int argn, char **argv,
                 partition_config.vertex_degree_weights = true;
         }
 
-	if(converter_evaluate->count > 0) {
-		partition_config.converter_evaluate = true;
-	}
+        if(converter_evaluate->count > 0) {
+                partition_config.converter_evaluate = true;
+        }
 
-	if(save_partition->count > 0) {
-		partition_config.save_partition = true;
-	}
+        if(save_partition->count > 0) {
+                partition_config.save_partition = true;
+        }
 
-	if(save_partition_binary->count > 0) {
-		partition_config.save_partition_binary = true;
-	}
+        if(save_partition_binary->count > 0) {
+                partition_config.save_partition_binary = true;
+        }
 
         if(n->count > 0) {
                 partition_config.n = pow(10,n->ival[0]);
@@ -275,5 +275,5 @@ int parse_parameters(int argn, char **argv,
 
         return 0;
 }
-
+}
 #endif /* end of include guard: PARSE_PARAMETERS_GPJMGSM8 */

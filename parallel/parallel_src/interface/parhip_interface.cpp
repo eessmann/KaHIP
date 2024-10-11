@@ -12,7 +12,7 @@
 void ParHIPPartitionKWay(idxtype *vtxdist, idxtype *xadj, idxtype *adjncy, idxtype *vwgt, idxtype *adjwgt,
                          int *nparts, double* imbalance, bool suppress_output, int seed, int mode, int *edgecut, idxtype *part, 
                          MPI_Comm *comm) {
-
+        using namespace parhip;
 
 
         std::streambuf* backup = std::cout.rdbuf();

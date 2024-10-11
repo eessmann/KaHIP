@@ -7,7 +7,7 @@
 
 #include "balance_management.h"
 #include "data_structure/parallel_graph_access.h"
-
+namespace parhip {
 balance_management::balance_management( parallel_graph_access * G, NodeID total_num_labels ) : m_G ( G ), m_total_num_labels ( total_num_labels ) {
                 
  
@@ -16,5 +16,5 @@ balance_management::balance_management( parallel_graph_access * G, NodeID total_
 balance_management::~balance_management() {
                 
 }
-
+}
 
