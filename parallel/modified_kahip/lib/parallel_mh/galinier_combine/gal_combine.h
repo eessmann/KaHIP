@@ -10,14 +10,14 @@
 
 #include "partition_config.h"
 #include "data_structure/graph_access.h"
-
+namespace kahip::modified {
 class gal_combine {
 public:
-        gal_combine();
-        virtual ~gal_combine();
+  gal_combine();
+  virtual ~gal_combine();
 
-        void perform_gal_combine( PartitionConfig & config, graph_access & G);
+  void perform_gal_combine( PartitionConfig & config, graph_access & G);
 };
-
+}
 
 #endif /* end of include guard: GAL_COMBINE_XDMU5YB7 */

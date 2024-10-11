@@ -10,16 +10,16 @@
 
 #include "definitions.h"
 #include "refinement.h"
-
+namespace kahip::modified {
 class mixed_refinement : public refinement {
 public:
-        mixed_refinement( );
-        virtual ~mixed_refinement();
+  mixed_refinement( );
+  virtual ~mixed_refinement();
 
-        virtual EdgeWeight perform_refinement(PartitionConfig & config, 
-                                              graph_access & G, 
-                                              complete_boundary & boundary); 
+  virtual EdgeWeight perform_refinement(PartitionConfig & config,
+                                        graph_access & G,
+                                        complete_boundary & boundary);
 };
-
+}
 
 #endif /* end of include guard: MIXED_REFINEMENT_XJC6COP3 */

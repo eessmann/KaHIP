@@ -9,45 +9,45 @@
 #define PATH_X5LQS3DT
 
 #include "definitions.h"
-
+namespace kahip::modified {
 class path {
-        public:
-                path( );
-                path( const NodeID & v );
-                virtual ~path();
+public:
+        path( );
+        path( const NodeID & v );
+        virtual ~path();
 
-                void init(const NodeID & v);
+        void init(const NodeID & v);
 
-                NodeID get_tail() const;
-                void set_tail(const NodeID & id);
+        NodeID get_tail() const;
+        void set_tail(const NodeID & id);
 
-                NodeID get_head() const;
-                void set_head(const NodeID & id);
+        NodeID get_head() const;
+        void set_head(const NodeID & id);
 
-                void set_length(const EdgeID & length);
-                EdgeID get_length() const;
+        void set_length(const EdgeID & length);
+        EdgeID get_length() const;
 
-                //returns wether the given node is an endpoint of the path
-                bool is_endpoint(const NodeID & id) const;
-                
-                //returns wether the path is a cycle or not.  
-                bool is_cycle() const;
+        //returns wether the given node is an endpoint of the path
+        bool is_endpoint(const NodeID & id) const;
 
-                bool is_active() const;
-                void set_active(const bool active);
+        //returns wether the path is a cycle or not.
+        bool is_cycle() const;
 
-        private:
-                //Last vertex of the path. Cycles have head == tail
-                NodeID head;
+        bool is_active() const;
+        void set_active(const bool active);
 
-                //First vertex of the path. Cycles have head == tail
-                NodeID tail;
+private:
+        //Last vertex of the path. Cycles have head == tail
+        NodeID head;
 
-                //Number of edges in the graph
-                EdgeID length; 
-               
-                // True iff the parth is still in use. False iff it has been removed.  
-                bool active;
+        //First vertex of the path. Cycles have head == tail
+        NodeID tail;
+
+        //Number of edges in the graph
+        EdgeID length;
+
+        // True iff the parth is still in use. False iff it has been removed.
+        bool active;
 
 };
 
@@ -97,6 +97,6 @@ inline bool path::is_active() const {
 inline void path::set_active(const bool act) {
         active = act;        
 }
-
+}
 
 #endif /* end of include guard: PATH_X5LQS3DT */

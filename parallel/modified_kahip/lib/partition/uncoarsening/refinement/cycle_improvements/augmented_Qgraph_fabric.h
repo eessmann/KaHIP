@@ -16,107 +16,107 @@
 #include "uncoarsening/refinement/kway_graph_refinement/kway_graph_refinement_commons.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/2way_fm_refinement/two_way_fm.h"
 #include "uncoarsening/refinement/refinement.h"
-
+namespace kahip::modified {
 class augmented_Qgraph_fabric {
-        public:
-                augmented_Qgraph_fabric( );
-                virtual ~augmented_Qgraph_fabric();
+public:
+        augmented_Qgraph_fabric( );
+        virtual ~augmented_Qgraph_fabric();
 
-                //return false if the network will be feasable for the desired model
-                //returns true iff rebalance = true and the fall back solution has been applied
-                bool build_augmented_quotient_graph( PartitionConfig & config, 
-                                                     graph_access & G, 
-                                                     complete_boundary & boundary, 
-                                                     augmented_Qgraph & aqg,
-                                                     unsigned & s, bool rebalance, bool plus = false);
+        //return false if the network will be feasable for the desired model
+        //returns true iff rebalance = true and the fall back solution has been applied
+        bool build_augmented_quotient_graph( PartitionConfig & config,
+                                             graph_access & G,
+                                             complete_boundary & boundary,
+                                             augmented_Qgraph & aqg,
+                                             unsigned & s, bool rebalance, bool plus = false);
 
-                void cleanup_eligible();
+        void cleanup_eligible();
 
-        private:
-                bool construct_local_searches_on_qgraph_edge( PartitionConfig & config, 
-                                                              graph_access & G, 
-                                                              complete_boundary & boundary,
-                                                              augmented_Qgraph & aqg,
-                                                              boundary_pair & pair,
-                                                              unsigned s,
-                                                              bool plus);
+private:
+        bool construct_local_searches_on_qgraph_edge( PartitionConfig & config,
+                                                      graph_access & G,
+                                                      complete_boundary & boundary,
+                                                      augmented_Qgraph & aqg,
+                                                      boundary_pair & pair,
+                                                      unsigned s,
+                                                      bool plus);
 
-                bool local_search(PartitionConfig & config, 
-                                  bool  plus,
-                                  graph_access & G, 
+        bool local_search(PartitionConfig & config,
+                          bool  plus,
+                          graph_access & G,
+                          complete_boundary & boundary,
+                          augmented_Qgraph & aqg,
+                          boundary_pair & bp,
+                          unsigned s);
+
+
+        void directed_more_locallized_search(PartitionConfig & config, graph_access & G,
+                        complete_boundary & boundary,
+                        PartitionID & lhs, PartitionID & rhs,
+                        NodeID start_node, unsigned & number_of_swaps, pairwise_local_search & pls);
+
+public:
+        void more_locallized_search(PartitionConfig & config, graph_access & G,
+                        complete_boundary & boundary,
+                        PartitionID & lhs, PartitionID & rhs,
+                        NodeID start_node, unsigned & number_of_swaps, pairwise_local_search & pls);
+private:
+        void directed_more_locallized_search_all_bnd(PartitionConfig & config, graph_access & G,
+                        complete_boundary & boundary,
+                        PartitionID & lhs, PartitionID & rhs,
+                        unsigned & number_of_swaps, pairwise_local_search & pls);
+
+        void move_node(PartitionConfig & config,
+                       graph_access & G,
+                       NodeID & node,
+                       refinement_pq * queue,
+                       complete_boundary & boundary,
+                       PartitionID & from,
+                       PartitionID & to);
+
+        void move_node(PartitionConfig & config,
+                       graph_access & G,
+                       NodeID & node,
+                       refinement_pq * queue,
+                       refinement_pq * to_queue,
+                       complete_boundary & boundary,
+                       PartitionID & from,
+                       PartitionID & to);
+
+        Gain find_eligible_start_node( graph_access  & G,
+                                       PartitionID & lhs,
+                                       PartitionID & rhs,
+                                       std::vector<NodeID> & lhs_boundary,
+                                       std::vector<bool> & eligible,
+                                       NodeID & start_node, bool rebalance = false);
+
+        void rebalance_fall_back(PartitionConfig & config,
+                                 graph_access & G,
+                                 graph_access & G_bar,
+                                 complete_boundary & boundary,
+                                 std::vector< NodeID > & candidates,
+                                 std::vector< int > & parent,
+                                 augmented_Qgraph & aqg);
+
+        void perform_simple_move( PartitionConfig & config,
+                                  graph_access & G,
                                   complete_boundary & boundary,
-                                  augmented_Qgraph & aqg,
-                                  boundary_pair & bp,
-                                  unsigned s);
+                                  NodeID & node,
+                                  PartitionID & from,
+                                  PartitionID & to);
 
-
-                void directed_more_locallized_search(PartitionConfig & config, graph_access & G, 
-                                complete_boundary & boundary, 
-                                PartitionID & lhs, PartitionID & rhs,
-                                NodeID start_node, unsigned & number_of_swaps, pairwise_local_search & pls);
-
-        public:
-                void more_locallized_search(PartitionConfig & config, graph_access & G, 
-                                complete_boundary & boundary, 
-                                PartitionID & lhs, PartitionID & rhs,
-                                NodeID start_node, unsigned & number_of_swaps, pairwise_local_search & pls);
-        private:
-                void directed_more_locallized_search_all_bnd(PartitionConfig & config, graph_access & G, 
-                                complete_boundary & boundary,  
-                                PartitionID & lhs, PartitionID & rhs,
-                                unsigned & number_of_swaps, pairwise_local_search & pls);
-
-                void move_node(PartitionConfig & config, 
-                               graph_access & G, 
-                               NodeID & node, 
-                               refinement_pq * queue, 
-                               complete_boundary & boundary, 
-                               PartitionID & from, 
-                               PartitionID & to);
-
-                void move_node(PartitionConfig & config, 
-                               graph_access & G, 
-                               NodeID & node, 
-                               refinement_pq * queue, 
-                               refinement_pq * to_queue, 
-                               complete_boundary & boundary, 
-                               PartitionID & from, 
-                               PartitionID & to);
-
-                Gain find_eligible_start_node( graph_access  & G, 
-                                               PartitionID & lhs, 
-                                               PartitionID & rhs, 
-                                               std::vector<NodeID> & lhs_boundary, 
-                                               std::vector<bool> & eligible,
-                                               NodeID & start_node, bool rebalance = false); 
-
-                void rebalance_fall_back(PartitionConfig & config, 
-                                         graph_access & G,     
-                                         graph_access & G_bar, 
-                                         complete_boundary & boundary, 
-                                         std::vector< NodeID > & candidates, 
-                                         std::vector< int > & parent,
-                                         augmented_Qgraph & aqg); 
-
-                void perform_simple_move( PartitionConfig & config, 
-                                          graph_access & G, 
-                                          complete_boundary & boundary, 
-                                          NodeID & node,
-                                          PartitionID & from, 
-                                          PartitionID & to);
-
-                kway_graph_refinement_commons* commons;
-                two_way_fm          m_twfm;
-                std::vector<bool>   m_eligible;
-                std::vector<NodeID> m_tomake_eligible;
+        kway_graph_refinement_commons* commons;
+        two_way_fm          m_twfm;
+        std::vector<bool>   m_eligible;
+        std::vector<NodeID> m_tomake_eligible;
 };
 
 
-inline 
-Gain augmented_Qgraph_fabric::find_eligible_start_node( graph_access  & G, 
-                                                         PartitionID & lhs, 
-                                                         PartitionID & rhs, 
-                                                         std::vector<NodeID> & lhs_boundary,  
+inline
+Gain augmented_Qgraph_fabric::find_eligible_start_node( graph_access  & G,
+                                                         PartitionID & lhs,
+                                                         PartitionID & rhs,
+                                                         std::vector<NodeID> & lhs_boundary,
                                                          std::vector<bool> & eligible_,
                                                          NodeID & start_node, bool rebalance) {
         //select start node
@@ -136,8 +136,8 @@ Gain augmented_Qgraph_fabric::find_eligible_start_node( graph_access  & G,
                                 m_twfm.int_ext_degree(G, node, lhs, rhs, int_degree, ext_degree);
                                 if( ext_degree - int_degree > max_gain) { //todo tiebreaking
                                         max_gain = ext_degree - int_degree;
-                                } 
-                        } 
+                                }
+                        }
                 }
 
                 if(  max_gain == std::numeric_limits<Gain>::min() ) {
@@ -152,14 +152,14 @@ Gain augmented_Qgraph_fabric::find_eligible_start_node( graph_access  & G,
                                 EdgeWeight int_degree = 0;
                                 EdgeWeight ext_degree = 0;
                                 m_twfm.int_ext_degree(G, node, lhs, rhs, int_degree, ext_degree);
-                                if( ext_degree - int_degree == max_gain) { 
-                                        eligibles.push_back(node); 
-                                } 
-                        } 
+                                if( ext_degree - int_degree == max_gain) {
+                                        eligibles.push_back(node);
+                                }
+                        }
                 }
 
                 random_idx = random_functions::nextInt(0, eligibles.size()-1);
-                start_node = eligibles[random_idx]; 
+                start_node = eligibles[random_idx];
 
                 for( unsigned i = 0; i < lhs_boundary.size(); i++) {
                         NodeID node = lhs_boundary[i];
@@ -175,15 +175,15 @@ Gain augmented_Qgraph_fabric::find_eligible_start_node( graph_access  & G,
 }
 
 inline
-void augmented_Qgraph_fabric::rebalance_fall_back(PartitionConfig & config, 
-                                                  graph_access  & G, 
-                                                  graph_access & G_bar, 
-                                                  complete_boundary & boundary, 
-                                                  std::vector< NodeID > & candidates, 
+void augmented_Qgraph_fabric::rebalance_fall_back(PartitionConfig & config,
+                                                  graph_access  & G,
+                                                  graph_access & G_bar,
+                                                  complete_boundary & boundary,
+                                                  std::vector< NodeID > & candidates,
                                                   std::vector< int > & parent,
                                                   augmented_Qgraph & aqg) {
 
-        std::vector<bool> eligible_(G.number_of_nodes(), true); 
+        std::vector<bool> eligible_(G.number_of_nodes(), true);
         random_functions::permutate_vector_good_small(candidates);
 
         std::vector<simple_move> best_path;
@@ -228,17 +228,17 @@ void augmented_Qgraph_fabric::rebalance_fall_back(PartitionConfig & config,
                                 perform_simple_move(config, G, boundary, node, lhs, rhs);
                         }
 
-               }
+                }
 
-               //undo these changes
-               for( unsigned i = 0; i < cur_path.size(); i++) {
-                       perform_simple_move(config, G, boundary, cur_path[i].node, cur_path[i].to, cur_path[i].from);
-               }
+                //undo these changes
+                for( unsigned i = 0; i < cur_path.size(); i++) {
+                        perform_simple_move(config, G, boundary, cur_path[i].node, cur_path[i].to, cur_path[i].from);
+                }
 
-               if(cur_path_gain > best_path_gain) {
-                       best_path = cur_path;
-                       best_path_gain = cur_path_gain;
-               }
+                if(cur_path_gain > best_path_gain) {
+                        best_path = cur_path;
+                        best_path_gain = cur_path_gain;
+                }
  
 
         }
@@ -407,7 +407,7 @@ bool augmented_Qgraph_fabric::local_search(PartitionConfig & config,
                                         unsigned s ) {
         return construct_local_searches_on_qgraph_edge( config, G, boundary, aqg, pair, s, plus);
 }
-
+}
 #endif /* end of include guard: AUGMENTED_QGRAPH_FABRIC_MULTITRY_FM_PVGY97EW*/
 
 

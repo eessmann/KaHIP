@@ -9,7 +9,7 @@
 #define DIVERSIFYER_AZQIF42R
 
 #include "random_functions.h"
-
+namespace kahip::modified {
 class diversifyer {
 public:
         diversifyer() {} ;
@@ -29,6 +29,6 @@ public:
                 config.kaba_unsucc_iterations         = random_functions::nextInt(1, 10);
         }
 };
-
+}
 
 #endif /* end of include guard: DIVERSIFYER_AZQIF42R */

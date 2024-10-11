@@ -10,14 +10,15 @@
 
 #include "data_structure/graph_access.h"
 
+namespace kahip::modified {
 class graph_communication {
 public:
-        graph_communication();
-        virtual ~graph_communication();
+  graph_communication();
+  virtual ~graph_communication();
 
-        void broadcast_graph( graph_access & G, unsigned root);
+  void broadcast_graph( graph_access & G, unsigned root);
 
 };
-
+}
 
 #endif /* end of include guard: GRAPH_COMMUNICATION_J5Q2P80G */

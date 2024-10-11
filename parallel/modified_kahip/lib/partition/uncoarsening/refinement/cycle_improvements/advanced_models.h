@@ -16,76 +16,76 @@
 #include "uncoarsening/refinement/kway_graph_refinement/kway_graph_refinement_commons.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/2way_fm_refinement/two_way_fm.h"
 #include "uncoarsening/refinement/refinement.h"
-
+namespace kahip::modified {
 class advanced_models {
-        public:
-                advanced_models();
-                virtual ~advanced_models();
+public:
+        advanced_models();
+        virtual ~advanced_models();
 
-                bool compute_vertex_movements_rebalance( PartitionConfig & config, 
-                                graph_access & G, 
-                                complete_boundary & boundary, 
-                                augmented_Qgraph & aqg, 
-                                unsigned & s);
+        bool compute_vertex_movements_rebalance( PartitionConfig & config,
+                        graph_access & G,
+                        complete_boundary & boundary,
+                        augmented_Qgraph & aqg,
+                        unsigned & s);
 
-                bool compute_vertex_movements_rebalance_ultra( PartitionConfig & config, 
-                                graph_access & G, 
-                                complete_boundary & boundary, 
-                                augmented_Qgraph & aqg, 
-                                unsigned & s);
+        bool compute_vertex_movements_rebalance_ultra( PartitionConfig & config,
+                        graph_access & G,
+                        complete_boundary & boundary,
+                        augmented_Qgraph & aqg,
+                        unsigned & s);
 
-                bool compute_vertex_movements_ultra_model( PartitionConfig & config, 
-                                graph_access & G, 
-                                complete_boundary & boundary, 
-                                augmented_Qgraph & aqg, 
-                                unsigned & s, bool zero_weight_cycle);
+        bool compute_vertex_movements_ultra_model( PartitionConfig & config,
+                        graph_access & G,
+                        complete_boundary & boundary,
+                        augmented_Qgraph & aqg,
+                        unsigned & s, bool zero_weight_cycle);
 
-                void perform_augmented_move( PartitionConfig & config, 
-                                graph_access & G, 
-                                complete_boundary & boundary, 
-                                std::vector<NodeID> & cycle, 
-                                NodeID & s, NodeID & t, 
-                                augmented_Qgraph & aqg);
+        void perform_augmented_move( PartitionConfig & config,
+                        graph_access & G,
+                        complete_boundary & boundary,
+                        std::vector<NodeID> & cycle,
+                        NodeID & s, NodeID & t,
+                        augmented_Qgraph & aqg);
 
-                static unsigned long conflicts;
-        private:
-                inline
-                        bool build_ultra_model( PartitionConfig & config, 
-                                        graph_access & G, 
-                                        graph_access & G_bar,
-                                        complete_boundary & boundary, 
-                                        augmented_Qgraph & aqg, 
-                                        std::vector<bool> & feasable_edge,
-                                        unsigned & steps,
-                                        graph_access & cycle_problem, NodeID & s,
-                                        std::vector<NodeID> & id_mapping);
+        static unsigned long conflicts;
+private:
+        inline
+                bool build_ultra_model( PartitionConfig & config,
+                                graph_access & G,
+                                graph_access & G_bar,
+                                complete_boundary & boundary,
+                                augmented_Qgraph & aqg,
+                                std::vector<bool> & feasable_edge,
+                                unsigned & steps,
+                                graph_access & cycle_problem, NodeID & s,
+                                std::vector<NodeID> & id_mapping);
 
-                inline
-                        bool build_rebalance_model( PartitionConfig & config, 
-                                        graph_access & G, 
-                                        graph_access & G_bar,
-                                        complete_boundary & boundary, 
-                                        augmented_Qgraph & aqg, 
-                                        std::vector<bool> & feasable_edge,
-                                        unsigned & steps,
-                                        graph_access & cycle_problem, NodeID & s, NodeID & t,
-                                        std::vector<NodeID> & id_mapping);
+        inline
+                bool build_rebalance_model( PartitionConfig & config,
+                                graph_access & G,
+                                graph_access & G_bar,
+                                complete_boundary & boundary,
+                                augmented_Qgraph & aqg,
+                                std::vector<bool> & feasable_edge,
+                                unsigned & steps,
+                                graph_access & cycle_problem, NodeID & s, NodeID & t,
+                                std::vector<NodeID> & id_mapping);
 
 
-                inline 
-                        bool handle_ultra_model_conflicts( PartitionConfig & config, 
-                                        graph_access & cycle_problem, 
-                                        complete_boundary & boundary,
-                                        std::vector<NodeID> & id_mapping, 
-                                        std::vector<bool> & feasable_edge, 
-                                        std::vector< NodeID > & cycle, 
-                                        NodeID & s, augmented_Qgraph & aqg, bool remove_only_between_layers = false);
+        inline
+                bool handle_ultra_model_conflicts( PartitionConfig & config,
+                                graph_access & cycle_problem,
+                                complete_boundary & boundary,
+                                std::vector<NodeID> & id_mapping,
+                                std::vector<bool> & feasable_edge,
+                                std::vector< NodeID > & cycle,
+                                NodeID & s, augmented_Qgraph & aqg, bool remove_only_between_layers = false);
 
-                inline 
-                        bool cycleorpath_has_conflicts( PartitionConfig & config, 
-                                        complete_boundary & boundary,
-                                        std::vector< NodeID > & cycleorpath, 
-                                        NodeID & s, augmented_Qgraph & aqg);
+        inline
+                bool cycleorpath_has_conflicts( PartitionConfig & config,
+                                complete_boundary & boundary,
+                                std::vector< NodeID > & cycleorpath,
+                                NodeID & s, augmented_Qgraph & aqg);
 
 
 
@@ -607,5 +607,5 @@ bool advanced_models::build_ultra_model( PartitionConfig & config,
 
         return false;
 }
-
+}
 #endif /* end of include guard: ADVANCED_MODELS_PR6SXN3G */

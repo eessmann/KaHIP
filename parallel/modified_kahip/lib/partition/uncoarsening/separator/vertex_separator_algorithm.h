@@ -13,30 +13,30 @@
 #include "data_structure/graph_access.h"
 #include "partition_config.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/complete_boundary.h"
-
+namespace kahip::modified {
 class vertex_separator_algorithm {
-        public:
-                vertex_separator_algorithm();
-                virtual ~vertex_separator_algorithm();
+public:
+  vertex_separator_algorithm();
+  virtual ~vertex_separator_algorithm();
 
-                void compute_vertex_separator(const PartitionConfig & config, 
-                                              graph_access & G, 
-                                              complete_boundary & boundary, 
-                                              std::vector<NodeID> & overall_separator);
+  void compute_vertex_separator(const PartitionConfig & config,
+                                graph_access & G,
+                                complete_boundary & boundary,
+                                std::vector<NodeID> & overall_separator);
 
-                void compute_vertex_separator_simple(const PartitionConfig & config, 
-                                                     graph_access & G, 
-                                                     complete_boundary & boundary, 
-                                                     std::vector<NodeID> & overall_separator);
+  void compute_vertex_separator_simple(const PartitionConfig & config,
+                                       graph_access & G,
+                                       complete_boundary & boundary,
+                                       std::vector<NodeID> & overall_separator);
 
-                void compute_vertex_separator(const PartitionConfig & config, 
-                                              graph_access & G, 
-                                              complete_boundary & boundary);
+  void compute_vertex_separator(const PartitionConfig & config,
+                                graph_access & G,
+                                complete_boundary & boundary);
 
-                //ASSERTIONS
-                bool is_vertex_separator(graph_access & G, std::unordered_map<NodeID, bool> & separator);
+  //ASSERTIONS
+  bool is_vertex_separator(graph_access & G, std::unordered_map<NodeID, bool> & separator);
 
 };
-
+}
 
 #endif /* end of include guard: VERTEX_SEPARTATOR_ALGORITHM_XUDNZZM8 */

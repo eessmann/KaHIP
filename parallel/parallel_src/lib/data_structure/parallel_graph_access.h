@@ -8,7 +8,7 @@
 #ifndef PARALLEL_GRAPH_ACCESS_X6O9MRS8
 #define PARALLEL_GRAPH_ACCESS_X6O9MRS8
 
-
+#include <algorithm>
 #include <mpi.h>
 #include <unordered_map>
 #include <iostream>
@@ -92,33 +92,26 @@ public:
 
         ~ghost_node_communication() = default;
 
-        inline 
+
         void setGraphReference( parallel_graph_access * G ) {
                 m_G = G;
         }; 
 
-        inline 
+
         void init( ) {
-                m_num_adjacent = 0;
-                for( PEID peID = 0; peID < (PEID)m_adjacent_processors.size(); peID++) {
-                        if( m_adjacent_processors[peID] ) {
-                                m_num_adjacent++;
-                        }
-                }
+                m_num_adjacent = getNumberOfAdjacentPEs();
         }; 
 
 
-        inline 
+
         void add_adjacent_processor( PEID peID) {
                 m_adjacent_processors[peID] = true;
-        }; 
+        };
 
-        inline 
         void set_skip_limit( ULONG skip_limit ) {
                 m_skip_limit = skip_limit;
         }
 
-        inline 
         void set_desired_rounds( ULONG desired_rounds) {
                 m_desired_rounds = desired_rounds;
         }
@@ -135,18 +128,12 @@ public:
         inline
         void addLabel(NodeID node, NodeID label);
 
-        inline
         bool is_adjacent_PE(PEID peID) {
                 return m_adjacent_processors[peID];
         }
 
-        inline
         PEID getNumberOfAdjacentPEs() {
-                PEID counter = 0;
-                for( PEID peID = 0; peID < (PEID)m_adjacent_processors.size(); peID++) {
-                        if( m_adjacent_processors[peID] ) counter++;
-                }
-                return counter;
+                return static_cast<PEID>(std::ranges::count( m_adjacent_processors, true));
         }
 
 private:

@@ -11,30 +11,30 @@
 #include "definitions.h"
 #include "partition_config.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/complete_boundary.h"
-
+namespace kahip::modified {
 class problem_factory {
-        public:
-                problem_factory();
-                virtual ~problem_factory();
+public:
+        problem_factory();
+        virtual ~problem_factory();
 
-                void build_cycle_problem( PartitionConfig & partition_config,
-                                          complete_boundary & boundary, 
-                                          graph_access & G_bar, 
-                                          graph_access & cycle_problem, 
-                                          NodeID & s); 
+        void build_cycle_problem( PartitionConfig & partition_config,
+                                  complete_boundary & boundary,
+                                  graph_access & G_bar,
+                                  graph_access & cycle_problem,
+                                  NodeID & s);
 
-                void build_cycle_problem_with_reverse( PartitionConfig & partition_config, 
-                                                       complete_boundary & boundary, 
-                                                       graph_access & G_bar, 
-                                                       graph_access & cycle_problem, 
-                                                       NodeID & s);
+        void build_cycle_problem_with_reverse( PartitionConfig & partition_config,
+                                               complete_boundary & boundary,
+                                               graph_access & G_bar,
+                                               graph_access & cycle_problem,
+                                               NodeID & s);
 
-                void build_shortest_path_problem( PartitionConfig & partition_config, 
-                                                  complete_boundary & boundary, 
-                                                  graph_access & G_bar, 
-                                                  graph_access & shortest_path_problem, 
-                                                  NodeID & s,
-                                                  NodeID & t); 
+        void build_shortest_path_problem( PartitionConfig & partition_config,
+                                          complete_boundary & boundary,
+                                          graph_access & G_bar,
+                                          graph_access & shortest_path_problem,
+                                          NodeID & s,
+                                          NodeID & t);
 
 
 };
@@ -139,5 +139,5 @@ void problem_factory::build_shortest_path_problem( PartitionConfig & partition_c
 
         shortest_path_problem.finish_construction();
 }
-
+}
 #endif /* end of include guard: PROBLEM_FACTORY_KHGQXT9H */

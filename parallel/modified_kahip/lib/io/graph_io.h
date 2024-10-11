@@ -18,32 +18,32 @@
 
 #include "definitions.h"
 #include "data_structure/graph_access.h"
-
+namespace kahip::modified {
 class graph_io {
-        public:
-                graph_io();
-                virtual ~graph_io () ;
+public:
+        graph_io();
+        virtual ~graph_io () ;
 
-                static 
-                int readGraphWeighted(graph_access & G, std::string filename);
+        static
+        int readGraphWeighted(graph_access & G, std::string filename);
 
-                static
-                int writeGraphWeighted(graph_access & G, std::string filename);
+        static
+        int writeGraphWeighted(graph_access & G, std::string filename);
 
-                static
-                int writeGraph(graph_access & G, std::string filename);
+        static
+        int writeGraph(graph_access & G, std::string filename);
 
-                static 
-                int readPartition(graph_access& G, std::string filename); 
+        static
+        int readPartition(graph_access& G, std::string filename);
 
-                static 
-                void writePartition(graph_access& G, std::string filename);
+        static
+        void writePartition(graph_access& G, std::string filename);
 
-                template<typename vectortype> 
-                static void writeVector(std::vector<vectortype> & vec, std::string filename);
+        template<typename vectortype>
+        static void writeVector(std::vector<vectortype> & vec, std::string filename);
 
-                template<typename vectortype> 
-                static void readVector(std::vector<vectortype> & vec, std::string filename);
+        template<typename vectortype>
+        static void readVector(std::vector<vectortype> & vec, std::string filename);
 
 
 };
@@ -84,5 +84,5 @@ void graph_io::readVector(std::vector<vectortype> & vec, std::string filename) {
 
         in.close();
 }
-
+}
 #endif /*GRAPHIO_H_*/

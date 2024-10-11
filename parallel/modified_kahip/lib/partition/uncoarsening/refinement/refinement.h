@@ -12,15 +12,16 @@
 #include "partition_config.h"
 #include "quotient_graph_refinement/complete_boundary.h"
 
+namespace kahip::modified {
 class refinement {
 public:
-        refinement( );
-        virtual ~refinement();
-        
-        virtual EdgeWeight perform_refinement(PartitionConfig & config, 
-                                              graph_access & G, 
-                                              complete_boundary & boundary) = 0;
-};
+  refinement( );
+  virtual ~refinement();
 
+  virtual EdgeWeight perform_refinement(PartitionConfig & config,
+                                        graph_access & G,
+                                        complete_boundary & boundary) = 0;
+};
+}
 
 #endif /* end of include guard: REFINEMENT_UJN9IBHM */

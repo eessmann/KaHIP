@@ -10,14 +10,14 @@
 
 #include "data_structure/graph_hierarchy.h"
 #include "partition_config.h"
-
+namespace kahip::modified {
 class uncoarsening {
 public:
-        uncoarsening( );
-        virtual ~uncoarsening();
-        
-        int perform_uncoarsening(const PartitionConfig & config, graph_hierarchy & hierarchy);
-};
+  uncoarsening( );
+  virtual ~uncoarsening();
 
+  int perform_uncoarsening(const PartitionConfig & config, graph_hierarchy & hierarchy);
+};
+}
 
 #endif /* end of include guard: UNCOARSENING_XSN847F2 */

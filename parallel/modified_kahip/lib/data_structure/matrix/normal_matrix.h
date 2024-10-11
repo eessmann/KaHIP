@@ -9,7 +9,7 @@
 #define NORMAL_MATRIX_DAUJ4JMM
 
 #include "matrix.h"
-
+namespace kahip::modified {
 class normal_matrix : public matrix {
 public:
         normal_matrix(unsigned int dim_x, unsigned int dim_y, int lazy_init_val = 0) : m_dim_x (dim_x), 
@@ -42,6 +42,6 @@ private:
         unsigned int m_dim_x, m_dim_y;
         int m_lazy_init_val;
 };
-
+}
 
 #endif /* end of include guard: NORMAL_MATRIX_DAUJ4JMM */
