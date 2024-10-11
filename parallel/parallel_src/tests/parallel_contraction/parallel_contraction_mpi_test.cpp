@@ -12,6 +12,7 @@
 #include "communication/mpi_tools.h"
 #include "parallel_contraction_projection/parallel_contraction.h"
 
+using namespace parhip;
 
 struct MyTestType{
 	int  a;

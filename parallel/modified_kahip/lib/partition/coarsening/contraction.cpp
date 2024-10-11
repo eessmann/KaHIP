@@ -8,14 +8,8 @@
 #include "contraction.h"
 #include "../uncoarsening/refinement/quotient_graph_refinement/complete_boundary.h"
 #include "macros_assertions.h"
+
 namespace kahip::modified {
-contraction::contraction() {
-
-}
-
-contraction::~contraction() {
-
-}
 
 // for documentation see technical reports of christian schulz  
 void contraction::contract(const PartitionConfig & partition_config, 

@@ -13,6 +13,7 @@
 #include "parallel_contraction_projection/parallel_contraction.h"
 
 #include "communication/mpi_tools.h"
+using namespace parhip;
 
 TEST_CASE("flattening vector of messages", "[unit][mpi]") {
 	SECTION("Empty Vector") {
