@@ -8,7 +8,7 @@
 
 #ifndef TYPES_FIK18Y5X
 #define TYPES_FIK18Y5X
-
+namespace kahip::modified {
 #ifdef EXCESS_TYPE_LONG
 typedef unsigned long excessType;
 #else
@@ -25,15 +25,15 @@ typedef  /* arc */
    struct nodeSt   *head;           /* arc head */
    struct arcSt    *rev;            /* reverse arc */
 }
-  arc;
+arc;
 
 typedef  /* node */
    struct nodeSt
 {
    arc             *first;           /* first outgoing arc */
    arc             *current;         /* current outgoing arc */
-   excessType      excess;           /* excess at the node 
-				        change to double if needed */
+   excessType      excess;           /* excess at the node
+                    change to double if needed */
    long            d;                /* distance label */
    struct nodeSt   *bNext;           /* next node in bucket */
    struct nodeSt   *bPrev;           /* previous node in bucket */
@@ -43,8 +43,8 @@ typedef  /* node */
 typedef /* bucket */
    struct bucketSt
 {
-  node             *firstActive;      /* first node with positive excess */
-  node             *firstInactive;    /* first node with zero excess */
+   node             *firstActive;      /* first node with positive excess */
+   node             *firstInactive;    /* first node with zero excess */
 } bucket;
-
+}
 #endif /* end of include guard: TYPES_FIK18Y5X */

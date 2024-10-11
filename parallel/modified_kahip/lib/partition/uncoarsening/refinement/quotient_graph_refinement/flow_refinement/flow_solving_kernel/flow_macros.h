@@ -34,8 +34,6 @@
 #define nNode( i ) ( (i) - nodes + nMin )
 #define nArc( a )  ( ( a == NULL )? -1 : (a) - arcs )
 
-#define min( a, b ) ( ( (a) < (b) ) ? a : b )
-
 #define createEdge()\
 {\
                 arc_first[tail + 1] ++; \

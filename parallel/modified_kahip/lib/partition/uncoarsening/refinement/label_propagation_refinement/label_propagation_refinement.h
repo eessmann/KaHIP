@@ -11,16 +11,16 @@
 
 #include "definitions.h"
 #include "../refinement.h"
-
+namespace kahip::modified {
 class label_propagation_refinement : public refinement {
 public:
-        label_propagation_refinement();
-        virtual ~label_propagation_refinement();
+  label_propagation_refinement();
+  virtual ~label_propagation_refinement();
 
-        virtual EdgeWeight perform_refinement(PartitionConfig & config, 
-                                              graph_access & G, 
-                                              complete_boundary & boundary); 
+  virtual EdgeWeight perform_refinement(PartitionConfig & config,
+                                        graph_access & G,
+                                        complete_boundary & boundary);
 };
-
+}
 
 #endif /* end of include guard: LABEL_PROPAGATION_REFINEMENT_R4XW141Y */

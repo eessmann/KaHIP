@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "problem_factory.h"
-
+namespace kahip::modified {
 problem_factory::problem_factory() {
                 
 }
@@ -14,4 +14,4 @@ problem_factory::problem_factory() {
 problem_factory::~problem_factory() {
                 
 }
-
+}

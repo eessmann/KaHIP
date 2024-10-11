@@ -12,36 +12,36 @@
 #include <unordered_map>
 
 #include "priority_queue_interface.h"
-
+namespace kahip::modified {
 class bucket_pq : public priority_queue_interface {
-        public:
-                bucket_pq( const EdgeWeight & gain_span ); 
+public:
+        bucket_pq( const EdgeWeight & gain_span );
 
-                virtual ~bucket_pq() {};
+        virtual ~bucket_pq() {};
 
-                NodeID size();  
-                void insert(NodeID id, Gain gain); 
-                bool empty();
+        NodeID size();
+        void insert(NodeID id, Gain gain);
+        bool empty();
 
-                Gain maxValue();
-                NodeID maxElement();
-                NodeID deleteMax();
+        Gain maxValue();
+        NodeID maxElement();
+        NodeID deleteMax();
 
-                void decreaseKey(NodeID node, Gain newGain);
-                void increaseKey(NodeID node, Gain newGain);
+        void decreaseKey(NodeID node, Gain newGain);
+        void increaseKey(NodeID node, Gain newGain);
 
-                void changeKey(NodeID element, Gain newKey);
-                Gain getKey(NodeID element);
-                void deleteNode(NodeID node);
+        void changeKey(NodeID element, Gain newKey);
+        Gain getKey(NodeID element);
+        void deleteNode(NodeID node);
 
-                bool contains(NodeID node);
-        private:
-                NodeID     m_elements;
-                EdgeWeight m_gain_span;
-                unsigned   m_max_idx; //points to the non-empty bucket with the largest gain
-                
-                std::unordered_map<NodeID, std::pair<Count, Gain> > m_queue_index;
-                std::vector< std::vector<NodeID> >             m_buckets;
+        bool contains(NodeID node);
+private:
+        NodeID     m_elements;
+        EdgeWeight m_gain_span;
+        unsigned   m_max_idx; //points to the non-empty bucket with the largest gain
+
+        std::unordered_map<NodeID, std::pair<Count, Gain> > m_queue_index;
+        std::vector< std::vector<NodeID> >             m_buckets;
 };
 
 inline bucket_pq::bucket_pq( const EdgeWeight & gain_span_input ) {
@@ -53,16 +53,16 @@ inline bucket_pq::bucket_pq( const EdgeWeight & gain_span_input ) {
 }
 
 inline NodeID bucket_pq::size() {
-        return m_elements;  
+        return m_elements;
 }
 
 inline void bucket_pq::insert(NodeID node, Gain gain) {
         unsigned address = gain + m_gain_span;
         if(address > m_max_idx) {
-                m_max_idx = address; 
+                m_max_idx = address;
         }
-       
-        m_buckets[address].push_back( node ); 
+
+        m_buckets[address].push_back( node );
         m_queue_index[node].first  = m_buckets[address].size() - 1; //store position
         m_queue_index[node].second = gain;
 
@@ -70,34 +70,34 @@ inline void bucket_pq::insert(NodeID node, Gain gain) {
 }
 
 inline bool bucket_pq::empty( ) {
-        return m_elements == 0;        
+        return m_elements == 0;
 }
 
 inline Gain bucket_pq::maxValue( ) {
-        return m_max_idx - m_gain_span;        
+        return m_max_idx - m_gain_span;
 }
 
 inline NodeID bucket_pq::maxElement( ) {
-        return m_buckets[m_max_idx].back();        
+        return m_buckets[m_max_idx].back();
 }
 
 inline NodeID bucket_pq::deleteMax() {
-       NodeID node = m_buckets[m_max_idx].back();
-       m_buckets[m_max_idx].pop_back();
-       m_queue_index.erase(node);
+        NodeID node = m_buckets[m_max_idx].back();
+        m_buckets[m_max_idx].pop_back();
+        m_queue_index.erase(node);
 
-       if( m_buckets[m_max_idx].size() == 0 ) {
-             //update max_idx
-             while( m_max_idx != 0 )  {
-                     m_max_idx--;
-                     if(m_buckets[m_max_idx].size() > 0) {
-                        break;
-                     }
-             }
-       }
+        if( m_buckets[m_max_idx].size() == 0 ) {
+                //update max_idx
+                while( m_max_idx != 0 )  {
+                        m_max_idx--;
+                        if(m_buckets[m_max_idx].size() > 0) {
+                                break;
+                        }
+                }
+        }
 
-       m_elements--;
-       return node;        
+        m_elements--;
+        return node;
 }
 
 inline void bucket_pq::decreaseKey(NodeID node, Gain new_gain) {
@@ -150,6 +150,6 @@ inline void bucket_pq::deleteNode(NodeID node) {
 inline bool bucket_pq::contains(NodeID node) {
         return m_queue_index.find(node) != m_queue_index.end(); 
 }
-
+}
 
 #endif /* end of include guard: BUCKET_PQ_EM8YJPA9 */

@@ -14,128 +14,128 @@
 #include <vector>
 
 #include "definitions.h"
-
+namespace kahip::modified {
 struct Node {
-    EdgeID firstEdge;
-    NodeWeight weight;
+        EdgeID firstEdge;
+        NodeWeight weight;
 };
 
 struct Edge {
-    NodeID target;
-    EdgeWeight weight;
+        NodeID target;
+        EdgeWeight weight;
 };
 
 struct refinementNode {
-    PartitionID partitionIndex; 
-    //Count queueIndex;
+        PartitionID partitionIndex;
+        //Count queueIndex;
 };
 
 struct coarseningEdge {
-    EdgeRatingType rating;
+        EdgeRatingType rating;
 };
 
 class graph_access;
 
 //construction etc. is encapsulated in basicGraph / access to properties etc. is encapsulated in graph_access
 class basicGraph {
-    friend class graph_access;
+        friend class graph_access;
 
 public:
-    basicGraph() : m_building_graph(false) {
-    }
+        basicGraph() : m_building_graph(false) {
+        }
 
 private:
-    //methods only to be used by friend class
-    EdgeID number_of_edges() {
-        return m_edges.size();
-    }
-
-    NodeID number_of_nodes() {
-        return m_nodes.size()-1;
-    }
-
-    inline EdgeID get_first_edge(const NodeID & node) {
-        return m_nodes[node].firstEdge;
-    }
-
-    inline EdgeID get_first_invalid_edge(const NodeID & node) {
-        return m_nodes[node+1].firstEdge;
-    }
-
-    // construction of the graph
-    void start_construction(NodeID n, EdgeID m) {
-        m_building_graph = true;
-        node             = 0;
-        e                = 0;
-        m_last_source    = -1;
-
-        //resizes property arrays
-        m_nodes.resize(n+1);
-        m_refinement_node_props.resize(n+1);
-        m_edges.resize(m);
-        m_coarsening_edge_props.resize(m);
-
-        m_nodes[node].firstEdge = e;
-    }
-
-    EdgeID new_edge(NodeID source, NodeID target) {
-        ASSERT_TRUE(m_building_graph);
-        ASSERT_TRUE(e < m_edges.size());
-       
-        m_edges[e].target = target;
-        EdgeID e_bar = e;
-        ++e;
-
-        ASSERT_TRUE(source+1 < m_nodes.size());
-        m_nodes[source+1].firstEdge = e;
-
-        //fill isolated sources at the end
-        if ((NodeID)(m_last_source+1) < source) {
-            for (NodeID i = source; i>(NodeID)(m_last_source+1); i--) {
-                m_nodes[i].firstEdge = m_nodes[m_last_source+1].firstEdge;
-            }
+        //methods only to be used by friend class
+        EdgeID number_of_edges() {
+                return m_edges.size();
         }
-        m_last_source = source;
-        return e_bar;
-    }
 
-    NodeID new_node() {
-        ASSERT_TRUE(m_building_graph);
-        return node++;
-    }
+        NodeID number_of_nodes() {
+                return m_nodes.size()-1;
+        }
 
-    void finish_construction() {
-        // inert dummy node
-        m_nodes.resize(node+1);
-        m_refinement_node_props.resize(node+1);
+        inline EdgeID get_first_edge(const NodeID & node) {
+                return m_nodes[node].firstEdge;
+        }
 
-        m_edges.resize(e);
-        m_coarsening_edge_props.resize(e);
+        inline EdgeID get_first_invalid_edge(const NodeID & node) {
+                return m_nodes[node+1].firstEdge;
+        }
 
-        m_building_graph = false;
+        // construction of the graph
+        void start_construction(NodeID n, EdgeID m) {
+                m_building_graph = true;
+                node             = 0;
+                e                = 0;
+                m_last_source    = -1;
 
-        //fill isolated sources at the end
-        if ((unsigned int)(m_last_source) != node-1) {
-                //in that case at least the last node was an isolated node
-                for (NodeID i = node; i>(unsigned int)(m_last_source+1); i--) {
-                        m_nodes[i].firstEdge = m_nodes[m_last_source+1].firstEdge;
+                //resizes property arrays
+                m_nodes.resize(n+1);
+                m_refinement_node_props.resize(n+1);
+                m_edges.resize(m);
+                m_coarsening_edge_props.resize(m);
+
+                m_nodes[node].firstEdge = e;
+        }
+
+        EdgeID new_edge(NodeID source, NodeID target) {
+                ASSERT_TRUE(m_building_graph);
+                ASSERT_TRUE(e < m_edges.size());
+
+                m_edges[e].target = target;
+                EdgeID e_bar = e;
+                ++e;
+
+                ASSERT_TRUE(source+1 < m_nodes.size());
+                m_nodes[source+1].firstEdge = e;
+
+                //fill isolated sources at the end
+                if ((NodeID)(m_last_source+1) < source) {
+                        for (NodeID i = source; i>(NodeID)(m_last_source+1); i--) {
+                                m_nodes[i].firstEdge = m_nodes[m_last_source+1].firstEdge;
+                        }
+                }
+                m_last_source = source;
+                return e_bar;
+        }
+
+        NodeID new_node() {
+                ASSERT_TRUE(m_building_graph);
+                return node++;
+        }
+
+        void finish_construction() {
+                // inert dummy node
+                m_nodes.resize(node+1);
+                m_refinement_node_props.resize(node+1);
+
+                m_edges.resize(e);
+                m_coarsening_edge_props.resize(e);
+
+                m_building_graph = false;
+
+                //fill isolated sources at the end
+                if ((unsigned int)(m_last_source) != node-1) {
+                        //in that case at least the last node was an isolated node
+                        for (NodeID i = node; i>(unsigned int)(m_last_source+1); i--) {
+                                m_nodes[i].firstEdge = m_nodes[m_last_source+1].firstEdge;
+                        }
                 }
         }
-    }
 
-    // %%%%%%%%%%%%%%%%%%% DATA %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    // split properties for coarsening and uncoarsening
-    std::vector<Node> m_nodes;
-    std::vector<Edge> m_edges;
-    
-    std::vector<refinementNode> m_refinement_node_props;
-    std::vector<coarseningEdge> m_coarsening_edge_props;
-        
-    // construction properties
-    bool m_building_graph;
-    int m_last_source;
-    NodeID node; //current node that is constructed
-    EdgeID e;    //current edge that is constructed
+        // %%%%%%%%%%%%%%%%%%% DATA %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        // split properties for coarsening and uncoarsening
+        std::vector<Node> m_nodes;
+        std::vector<Edge> m_edges;
+
+        std::vector<refinementNode> m_refinement_node_props;
+        std::vector<coarseningEdge> m_coarsening_edge_props;
+
+        // construction properties
+        bool m_building_graph;
+        int m_last_source;
+        NodeID node; //current node that is constructed
+        EdgeID e;    //current edge that is constructed
 };
 
 //makros - graph access
@@ -150,73 +150,73 @@ class complete_boundary;
 
 class graph_access {
         friend class complete_boundary;
-        public:
-                graph_access() { m_max_degree_computed = false; m_max_degree = 0; graphref = new basicGraph();}
-                virtual ~graph_access(){ delete graphref; };
+public:
+        graph_access() { m_max_degree_computed = false; m_max_degree = 0; graphref = new basicGraph();}
+        virtual ~graph_access(){ delete graphref; };
 
-                /* ============================================================= */
-                /* build methods */
-                /* ============================================================= */
-                void start_construction(NodeID nodes, EdgeID edges);
-                NodeID new_node();
-                EdgeID new_edge(NodeID source, NodeID target);
-                void finish_construction();
+        /* ============================================================= */
+        /* build methods */
+        /* ============================================================= */
+        void start_construction(NodeID nodes, EdgeID edges);
+        NodeID new_node();
+        EdgeID new_edge(NodeID source, NodeID target);
+        void finish_construction();
 
-                /* ============================================================= */
-                /* graph access methods */
-                /* ============================================================= */
-                NodeID number_of_nodes();
-                EdgeID number_of_edges();
+        /* ============================================================= */
+        /* graph access methods */
+        /* ============================================================= */
+        NodeID number_of_nodes();
+        EdgeID number_of_edges();
 
-                EdgeID get_first_edge(NodeID node);
-                EdgeID get_first_invalid_edge(NodeID node);
+        EdgeID get_first_edge(NodeID node);
+        EdgeID get_first_invalid_edge(NodeID node);
 
-                PartitionID get_partition_count(); 
-                void set_partition_count(PartitionID count); 
+        PartitionID get_partition_count();
+        void set_partition_count(PartitionID count);
 
-                PartitionID getPartitionIndex(NodeID node);
-                void setPartitionIndex(NodeID node, PartitionID id);
+        PartitionID getPartitionIndex(NodeID node);
+        void setPartitionIndex(NodeID node, PartitionID id);
 
-                PartitionID getSecondPartitionIndex(NodeID node);
-                void setSecondPartitionIndex(NodeID node, PartitionID id);
+        PartitionID getSecondPartitionIndex(NodeID node);
+        void setSecondPartitionIndex(NodeID node, PartitionID id);
 
-                //to be called if combine in meta heuristic is used
-                void resizeSecondPartitionIndex(unsigned no_nodes);
+        //to be called if combine in meta heuristic is used
+        void resizeSecondPartitionIndex(unsigned no_nodes);
 
-                NodeWeight getNodeWeight(NodeID node);
-                void setNodeWeight(NodeID node, NodeWeight weight);
+        NodeWeight getNodeWeight(NodeID node);
+        void setNodeWeight(NodeID node, NodeWeight weight);
 
-                EdgeWeight getNodeDegree(NodeID node);
-                EdgeWeight getWeightedNodeDegree(NodeID node);
-                EdgeWeight getMaxDegree();
+        EdgeWeight getNodeDegree(NodeID node);
+        EdgeWeight getWeightedNodeDegree(NodeID node);
+        EdgeWeight getMaxDegree();
 
-                EdgeWeight getEdgeWeight(EdgeID edge);
-                void setEdgeWeight(EdgeID edge, EdgeWeight weight);
+        EdgeWeight getEdgeWeight(EdgeID edge);
+        void setEdgeWeight(EdgeID edge, EdgeWeight weight);
 
-                NodeID getEdgeTarget(EdgeID edge);
+        NodeID getEdgeTarget(EdgeID edge);
 
-                EdgeRatingType getEdgeRating(EdgeID edge);
-                void setEdgeRating(EdgeID edge, EdgeRatingType rating);
+        EdgeRatingType getEdgeRating(EdgeID edge);
+        void setEdgeRating(EdgeID edge, EdgeRatingType rating);
 
-                int* UNSAFE_metis_style_xadj_array();
-                int* UNSAFE_metis_style_adjncy_array();
+        int* UNSAFE_metis_style_xadj_array();
+        int* UNSAFE_metis_style_adjncy_array();
 
-                int* UNSAFE_metis_style_vwgt_array();
-                int* UNSAFE_metis_style_adjwgt_array();
+        int* UNSAFE_metis_style_vwgt_array();
+        int* UNSAFE_metis_style_adjwgt_array();
 
-                int build_from_metis(int n, int* xadj, int* adjncy);
-                int build_from_metis_weighted(int n, int* xadj, int* adjncy, int * vwgt, int* adjwgt);
+        int build_from_metis(int n, int* xadj, int* adjncy);
+        int build_from_metis_weighted(int n, int* xadj, int* adjncy, int * vwgt, int* adjwgt);
 
-                //void set_node_queue_index(NodeID node, Count queue_index); 
-                //Count get_node_queue_index(NodeID node);
+        //void set_node_queue_index(NodeID node, Count queue_index);
+        //Count get_node_queue_index(NodeID node);
 
-                void copy(graph_access & Gcopy);
-        private:
-                basicGraph * graphref;     
-                bool         m_max_degree_computed;
-                unsigned int m_partition_count;
-                EdgeWeight   m_max_degree;
-                std::vector<PartitionID> m_second_partition_index;
+        void copy(graph_access & Gcopy);
+private:
+        basicGraph * graphref;
+        bool         m_max_degree_computed;
+        unsigned int m_partition_count;
+        EdgeWeight   m_max_degree;
+        std::vector<PartitionID> m_second_partition_index;
 };
 
 /* graph build methods */
@@ -300,49 +300,49 @@ inline void graph_access::setPartitionIndex(NodeID node, PartitionID id) {
 
 inline NodeWeight graph_access::getNodeWeight(NodeID node){
 #ifdef NDEBUG
-        return graphref->m_nodes[node].weight;        
+        return graphref->m_nodes[node].weight;
 #else
-        return graphref->m_nodes.at(node).weight;        
+        return graphref->m_nodes.at(node).weight;
 #endif
 }
 
 inline void graph_access::setNodeWeight(NodeID node, NodeWeight weight){
 #ifdef NDEBUG
-        graphref->m_nodes[node].weight = weight;        
+        graphref->m_nodes[node].weight = weight;
 #else
-        graphref->m_nodes.at(node).weight = weight;        
+        graphref->m_nodes.at(node).weight = weight;
 #endif
 }
 
 inline EdgeWeight graph_access::getEdgeWeight(EdgeID edge){
 #ifdef NDEBUG
-        return graphref->m_edges[edge].weight;        
+        return graphref->m_edges[edge].weight;
 #else
-        return graphref->m_edges.at(edge).weight;        
+        return graphref->m_edges.at(edge).weight;
 #endif
 }
 
 inline void graph_access::setEdgeWeight(EdgeID edge, EdgeWeight weight){
 #ifdef NDEBUG
-        graphref->m_edges[edge].weight = weight;        
+        graphref->m_edges[edge].weight = weight;
 #else
-        graphref->m_edges.at(edge).weight = weight;        
+        graphref->m_edges.at(edge).weight = weight;
 #endif
 }
 
 inline NodeID graph_access::getEdgeTarget(EdgeID edge){
 #ifdef NDEBUG
-        return graphref->m_edges[edge].target;        
+        return graphref->m_edges[edge].target;
 #else
-        return graphref->m_edges.at(edge).target;        
+        return graphref->m_edges.at(edge).target;
 #endif
 }
 
 inline EdgeRatingType graph_access::getEdgeRating(EdgeID edge) {
 #ifdef NDEBUG
-        return graphref->m_coarsening_edge_props[edge].rating;        
+        return graphref->m_coarsening_edge_props[edge].rating;
 #else
-        return graphref->m_coarsening_edge_props.at(edge).rating;        
+        return graphref->m_coarsening_edge_props.at(edge).rating;
 #endif
 }
 
@@ -359,10 +359,10 @@ inline EdgeWeight graph_access::getNodeDegree(NodeID node) {
 }
 
 inline EdgeWeight graph_access::getWeightedNodeDegree(NodeID node) {
-	EdgeWeight degree = 0;
-	for( unsigned e = graphref->m_nodes[node].firstEdge; e < graphref->m_nodes[node+1].firstEdge; ++e) {
-		degree += getEdgeWeight(e);
-	}
+        EdgeWeight degree = 0;
+        for( unsigned e = graphref->m_nodes[node].firstEdge; e < graphref->m_nodes[node+1].firstEdge; ++e) {
+                degree += getEdgeWeight(e);
+        }
         return degree;
 }
 
@@ -496,5 +496,5 @@ inline void graph_access::copy(graph_access & G_bar) {
 
         G_bar.finish_construction();
 }
-
+}
 #endif /* end of include guard: GRAPH_ACCESS_EFRXO4X2 */

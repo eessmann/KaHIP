@@ -15,7 +15,7 @@
 #include "definitions.h"
 #include "uncoarsening/refinement/kway_graph_refinement/kway_graph_refinement_commons.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/2way_fm_refinement/two_way_fm.h"
-
+namespace kahip::modified {
 struct pairwise_local_search { // a single two way local search
         std::vector<Gain>        gains;
         std::vector<NodeID>      vertex_movements;
@@ -116,11 +116,11 @@ inline
 bool augmented_Qgraph::exists_vmovements_of_diff( boundary_pair & bp, unsigned & diff) {
         unsigned internal_idx = diff - 1;
         if( m_aqg[bp].local_searches.size() > 0 ) {
-            if(m_aqg[bp].search_to_use.size() > internal_idx) {
-                    if(m_aqg[bp].search_to_use[internal_idx] != -1) {
-                            return true;
-                    }
-            }
+                if(m_aqg[bp].search_to_use.size() > internal_idx) {
+                        if(m_aqg[bp].search_to_use[internal_idx] != -1) {
+                                return true;
+                        }
+                }
         }
 
         return false;
@@ -234,5 +234,5 @@ bool augmented_Qgraph::check_conflict( const  PartitionConfig & config,
 
         return (node == m_aqg[bp].local_searches[local_searches_to_use].vertex_movements[0]);
 }
-
+}
 #endif /* end of include guard: AUGMENTED_QUOTIENT_GRAPH_E5ZEJUBV */

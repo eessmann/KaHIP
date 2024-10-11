@@ -13,19 +13,19 @@
 
 #include "data_structure/graph_access.h"
 #include "definitions.h"
-
+namespace kahip::modified {
 class topological_sort {
 public:
-        topological_sort();
-        virtual ~topological_sort();
+  topological_sort();
+  virtual ~topological_sort();
 
-        void sort( graph_access & SG, std::vector<NodeID> & sorted_sequence);
+  void sort( graph_access & SG, std::vector<NodeID> & sorted_sequence);
 
-        void sort_dfs(NodeID node, graph_access & G, 
-                      std::vector<int>    & dfsnum, 
-                      int                 & dfscount,
-                      std::vector<NodeID> & sorted_sequence);
+  void sort_dfs(NodeID node, graph_access & G,
+                std::vector<int>    & dfsnum,
+                int                 & dfscount,
+                std::vector<NodeID> & sorted_sequence);
 };
-
+}
 
 #endif /* end of include guard: TOPOLOGICAL_SORT_GB9FC2CZ */
