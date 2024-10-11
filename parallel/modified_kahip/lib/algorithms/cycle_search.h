@@ -12,9 +12,6 @@
 namespace kahip::modified {
 class cycle_search {
 public:
-  cycle_search();
-  virtual ~cycle_search();
-
   void find_random_cycle(graph_access & G, std::vector<NodeID> & cycle);
 
   //returns true if a negative cycle was found, else false

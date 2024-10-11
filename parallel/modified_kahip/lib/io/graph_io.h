@@ -21,8 +21,14 @@
 namespace kahip::modified {
 class graph_io {
 public:
-        graph_io();
-        virtual ~graph_io () ;
+        graph_io() = default;  // Default constructor
+        virtual ~graph_io() = default; // Default destructor
+
+        // Explicitly default the other special member functions
+        graph_io(const graph_io&) = default;            // Copy constructor
+        graph_io& operator=(const graph_io&) = default; // Copy assignment operator
+        graph_io(graph_io&&) = default;                 // Move constructor
+        graph_io& operator=(graph_io&&) = default;      // Move assignment operator
 
         static
         int readGraphWeighted(graph_access & G, std::string filename);

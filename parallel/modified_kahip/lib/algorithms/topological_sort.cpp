@@ -10,13 +10,6 @@
 #include "random_functions.h"
 #include "topological_sort.h"
 namespace kahip::modified {
-topological_sort::topological_sort() {
-                
-}
-
-topological_sort::~topological_sort() {
-                
-}
 
 void topological_sort::sort( graph_access & G, std::vector<NodeID> & sorted_sequence) {
   std::vector<int> dfsnum(G.number_of_nodes(), -1);

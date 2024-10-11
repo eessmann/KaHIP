@@ -16,9 +16,6 @@
 namespace kahip::modified {
 class topological_sort {
 public:
-  topological_sort();
-  virtual ~topological_sort();
-
   void sort( graph_access & SG, std::vector<NodeID> & sorted_sequence);
 
   void sort_dfs(NodeID node, graph_access & G,

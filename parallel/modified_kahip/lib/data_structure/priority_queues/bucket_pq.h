@@ -15,26 +15,25 @@
 namespace kahip::modified {
 class bucket_pq : public priority_queue_interface {
 public:
-        bucket_pq( const EdgeWeight & gain_span );
+        explicit bucket_pq( const EdgeWeight & gain_span );
 
-        virtual ~bucket_pq() {};
 
-        NodeID size();
-        void insert(NodeID id, Gain gain);
-        bool empty();
+        NodeID size() override;
+        void insert(NodeID node, Gain gain) override;
+        bool empty() override;
 
-        Gain maxValue();
-        NodeID maxElement();
-        NodeID deleteMax();
+        Gain maxValue() override;
+        NodeID maxElement() override;
+        NodeID deleteMax() override;
 
-        void decreaseKey(NodeID node, Gain newGain);
-        void increaseKey(NodeID node, Gain newGain);
+        void decreaseKey(NodeID node, Gain new_gain) override;
+        void increaseKey(NodeID node, Gain new_gain) override;
 
-        void changeKey(NodeID element, Gain newKey);
-        Gain getKey(NodeID element);
-        void deleteNode(NodeID node);
+        void changeKey(NodeID node, Gain new_gain) override;
+        Gain getKey(NodeID node) override;
+        void deleteNode(NodeID node) override;
 
-        bool contains(NodeID node);
+        bool contains(NodeID node) override;
 private:
         NodeID     m_elements;
         EdgeWeight m_gain_span;
@@ -57,7 +56,7 @@ inline NodeID bucket_pq::size() {
 }
 
 inline void bucket_pq::insert(NodeID node, Gain gain) {
-        unsigned address = gain + m_gain_span;
+        unsigned const address = gain + m_gain_span;
         if(address > m_max_idx) {
                 m_max_idx = address;
         }

@@ -16,13 +16,6 @@
 #include "uncoarsening/refinement/tabu_search/tabu_search.h"
 
 namespace kahip::modified {
-construct_partition::construct_partition() {
-                
-}
-
-construct_partition::~construct_partition() {
-                
-}
 
 void construct_partition::construct_starting_from_partition( PartitionConfig & config, graph_access & G) {
   std::vector< std::queue< NodeID > >     queues(config.k);
