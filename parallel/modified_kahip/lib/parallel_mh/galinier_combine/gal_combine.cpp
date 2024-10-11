@@ -18,14 +18,6 @@
 #include "uncoarsening/refinement/refinement.h"
 #include "uncoarsening/refinement/tabu_search/tabu_search.h"
 namespace kahip::modified {
-gal_combine::gal_combine() {
-                
-}
-
-gal_combine::~gal_combine() {
-                
-}
-
 
 // implements our version of gal combine
 // compute a matching between blocks (greedily) 

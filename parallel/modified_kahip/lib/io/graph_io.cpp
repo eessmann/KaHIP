@@ -8,13 +8,6 @@
 #include <sstream>
 #include "graph_io.h"
 namespace kahip::modified {
-graph_io::graph_io() {
-                
-}
-
-graph_io::~graph_io() {
-                
-}
 
 int graph_io::writeGraphWeighted(graph_access & G, std::string filename) {
   std::ofstream f(filename.c_str());

@@ -12,8 +12,13 @@
 namespace kahip::modified {
 class priority_queue_interface {
 public:
-  priority_queue_interface( ) {};
-  virtual ~priority_queue_interface() {};
+  priority_queue_interface( ) = default;
+  virtual ~priority_queue_interface() = default;
+  // Explicitly default the other special member functions
+  priority_queue_interface(const priority_queue_interface&) = default;            // Copy constructor
+  priority_queue_interface& operator=(const priority_queue_interface&) = default; // Copy assignment operator
+  priority_queue_interface(priority_queue_interface&&) = default;                 // Move constructor
+  priority_queue_interface& operator=(priority_queue_interface&&) = default;      // Move assignment operator
 
   /* returns the size of the priority queue */
   virtual NodeID size() = 0;

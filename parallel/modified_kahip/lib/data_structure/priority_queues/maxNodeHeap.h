@@ -15,13 +15,12 @@
 
 #include "data_structure/priority_queues/priority_queue_interface.h"
 namespace kahip::modified {
-typedef int Key;
+using Key = int;
 
 template < typename Data >
 class QElement {
 public:
         QElement( Data data, Key key, int index ) : m_data(data), m_key (key), m_index(index) {};
-        virtual ~QElement() {};
 
         Data & get_data() {
                 return m_data;
@@ -62,26 +61,24 @@ public:
                 Data( NodeID node ) : node(node) {};
         };
 
-        typedef QElement<Data> PQElement;
+        using PQElement = QElement<Data>;
 
-        maxNodeHeap() {};
-        virtual ~maxNodeHeap() {};
 
-        NodeID size();
-        bool empty();
+        NodeID size() override;
+        bool empty() override;
 
-        bool contains(NodeID node);
-        void insert(NodeID id, Gain gain);
+        bool contains(NodeID node) override;
+        void insert(NodeID node, Gain gain) override;
 
-        NodeID deleteMax();
-        void deleteNode(NodeID node);
-        NodeID maxElement();
-        Gain maxValue();
+        NodeID deleteMax() override;
+        void deleteNode(NodeID node) override;
+        NodeID maxElement() override;
+        Gain maxValue() override;
 
-        void decreaseKey(NodeID node, Gain gain);
-        void increaseKey(NodeID node, Gain gain);
-        void changeKey(NodeID node, Gain gain);
-        Gain getKey(NodeID node);
+        void decreaseKey(NodeID node, Gain gain) override;
+        void increaseKey(NodeID node, Gain gain) override;
+        void changeKey(NodeID node, Gain gain) override;
+        Gain getKey(NodeID node) override;
 
 private:
         std::vector< PQElement >               m_elements;      // elements that contain the data

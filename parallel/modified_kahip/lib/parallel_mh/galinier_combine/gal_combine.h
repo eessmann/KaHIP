@@ -13,8 +13,14 @@
 namespace kahip::modified {
 class gal_combine {
 public:
-  gal_combine();
-  virtual ~gal_combine();
+  gal_combine() = default;  // Default constructor
+  virtual ~gal_combine() = default; // Default destructor
+
+  // Explicitly default the other special member functions
+  gal_combine(const gal_combine&) = default;            // Copy constructor
+  gal_combine& operator=(const gal_combine&) = default; // Copy assignment operator
+  gal_combine(gal_combine&&) = default;                 // Move constructor
+  gal_combine& operator=(gal_combine&&) = default;      // Move assignment operator
 
   void perform_gal_combine( PartitionConfig & config, graph_access & G);
 };

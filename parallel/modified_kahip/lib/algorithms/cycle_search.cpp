@@ -14,14 +14,6 @@
 namespace kahip::modified {
 double cycle_search::total_time = 0;
 
-cycle_search::cycle_search() {
-
-}
-
-cycle_search::~cycle_search() {
-
-}
-
 void cycle_search::find_random_cycle(graph_access & G, std::vector<NodeID> & cycle) {
   //first perform a bfs starting from a random node and build the parent array
   std::deque<NodeID>* bfsqueue = new std::deque<NodeID>;

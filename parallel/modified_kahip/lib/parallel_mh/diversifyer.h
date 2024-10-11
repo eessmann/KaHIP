@@ -12,8 +12,14 @@
 namespace kahip::modified {
 class diversifyer {
 public:
-        diversifyer() {} ;
-        virtual ~diversifyer() {};
+        diversifyer() = default;  // Default constructor
+        virtual ~diversifyer() = default; // Default destructor
+
+        // Explicitly default the other special member functions
+        diversifyer(const diversifyer&) = default;            // Copy constructor
+        diversifyer& operator=(const diversifyer&) = default; // Copy assignment operator
+        diversifyer(diversifyer&&) = default;                 // Move constructor
+        diversifyer& operator=(diversifyer&&) = default;      // Move assignment operator
 
         void diversify(PartitionConfig & config) {
                 //diversify edge rating:

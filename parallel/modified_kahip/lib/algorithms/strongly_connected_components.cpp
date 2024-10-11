@@ -10,13 +10,6 @@
 
 #include "strongly_connected_components.h"
 namespace kahip::modified {
-strongly_connected_components::strongly_connected_components() {
-
-}
-
-strongly_connected_components::~strongly_connected_components() {
-
-}
 
 int strongly_connected_components::strong_components( graph_access & G, std::vector<int> & comp_num) {
 

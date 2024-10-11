@@ -16,8 +16,6 @@
 namespace kahip::modified {
 class strongly_connected_components {
 public:
-  strongly_connected_components();
-  virtual ~strongly_connected_components();
 
   int strong_components( graph_access & G, std::vector<int> & comp_num);
 
@@ -27,8 +25,8 @@ public:
                std::stack<NodeID> & unfinished,
                std::stack<NodeID> & roots);
 private:
-  int m_dfscount;
-  int m_comp_count;
+  int m_dfscount = 0;
+  int m_comp_count = 0;
 };
 }
 
