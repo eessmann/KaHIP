@@ -8,6 +8,8 @@ include(${CMAKE_SOURCE_DIR}/cmake/Utilities.cmake)
 kahip_supports_sanitizers()
 
 option(kahip_ENABLE_IPO "Enable IPO/LTO" ON)
+option(kahip_ENABLE_UNITY_BUILD "Enable Unity Build Mode" ON)
+option(kahip_ENABLE_USER_LINKER "Enable user-selected linker" OFF)
 option(kahip_WARNINGS_AS_ERRORS "Treat Warnings As Errors" OFF)
 option(kahip_ENABLE_SANITIZERS "Enable sanitizers" OFF)
 option(kahip_ENABLE_SANITIZER_ADDRESS "Enable address sanitizer" ${SUPPORTS_ASAN})
@@ -20,6 +22,10 @@ option(kahip_ENABLE_CPPCHECK "Enable cpp-check analysis" OFF)
 option(kahip_ENABLE_IWYU "Enable `include_what_you_use`" OFF)
 option(kahip_ENABLE_CACHE "Enable ccache" OFF)
 
+if (kahip_ENABLE_UNITY_BUILD)
+    set(CMAKE_UNITY_BUILD ON)
+endif ()
+
 
 if(kahip_ENABLE_IPO)
     kahip_enable_ipo()
@@ -27,6 +33,13 @@ endif()
 
 add_library(kahip_warnings INTERFACE)
 add_library(kahip_options INTERFACE)
+
+include(${CMAKE_SOURCE_DIR}/cmake/StandardProjectSettings.cmake)
+
+if(kahip_ENABLE_USER_LINKER)
+    include(${CMAKE_SOURCE_DIR}/cmake/Linker.cmake)
+    kahip_configure_linker(kahip_options)
+endif()
 
 kahip_set_project_warnings(
         kahip_warnings

@@ -594,7 +594,6 @@ inline bool complete_boundary::assert_boundaries_are_bnodes() {
         
         return true;
 }
-}
 #endif // #ifndef NDEBUG
-
+}
 #endif /* end of include guard: COMPLETE_BOUNDARY_URZZFDEI */

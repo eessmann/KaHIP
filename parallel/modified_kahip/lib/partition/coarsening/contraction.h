@@ -17,8 +17,8 @@ typedef NodeID Regions;
 
 class contraction {
 public:
-        contraction();
-        virtual ~contraction();
+        contraction() = default;
+        virtual ~contraction() = default;
 
         void contract(const PartitionConfig & partition_config,
                       graph_access & finer,

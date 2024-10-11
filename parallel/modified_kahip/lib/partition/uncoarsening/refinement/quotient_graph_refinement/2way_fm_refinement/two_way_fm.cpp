@@ -444,5 +444,5 @@ bool two_way_fm::assert_directed_boundary_condition(graph_access & G, complete_b
   ASSERT_TRUE(assert_every_boundary_nodes(G, boundary.getDirectedBoundary(rhs, lhs, rhs) , rhs, lhs));
   return true;
 }
-}
 #endif
+}
