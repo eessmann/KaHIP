@@ -78,6 +78,7 @@ set(LIBGRAPH2BGF_SOURCE_FILES
 add_library(libgraph2bgf OBJECT ${LIBGRAPH2BGF_SOURCE_FILES})
 target_link_libraries(libgraph2bgf PUBLIC MPI::MPI_CXX)
 target_link_libraries(libgraph2bgf PUBLIC parhip_headers)
+target_link_libraries(libgraph2bgf PRIVATE kahip_options kahip_warnings)
 
 set(LIBEDGELIST_SOURCE_FILES
     lib/data_structure/parallel_graph_access.cpp
@@ -89,6 +90,7 @@ set(LIBEDGELIST_SOURCE_FILES
 add_library(libedgelist STATIC ${LIBEDGELIST_SOURCE_FILES})
 target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3)
 target_link_libraries(libedgelist PUBLIC parhip_headers)
+target_link_libraries(libedgelist PRIVATE kahip_options kahip_warnings)
 
 set(LIBDSPAC_SOURCE_FILES
     lib/dspac/dspac.cpp
@@ -97,6 +99,7 @@ set(LIBDSPAC_SOURCE_FILES
 add_library(libdspac STATIC ${LIBDSPAC_SOURCE_FILES})
 target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
 target_link_libraries(libdspac PUBLIC parhip_headers)
+target_link_libraries(libdspac PRIVATE kahip_options kahip_warnings)
 
 add_executable(parhip app/parhip.cpp)
 target_compile_definitions(
@@ -117,6 +120,7 @@ target_compile_definitions(
 )
 target_link_libraries(toolbox PRIVATE parallel)
 target_link_libraries(toolbox PRIVATE MPI::MPI_CXX)
+target_link_libraries(toolbox PRIVATE kahip_options kahip_warnings)
 install(TARGETS toolbox DESTINATION bin)
 
 add_executable(graph2binary app/graph2binary.cpp)
@@ -128,6 +132,7 @@ target_compile_definitions(
 target_link_libraries(graph2binary PRIVATE libgraph2bgf)
 target_link_libraries(graph2binary PRIVATE kahip_version)
 target_link_libraries(graph2binary PRIVATE MPI::MPI_CXX)
+target_link_libraries(graph2binary PRIVATE kahip_options kahip_warnings)
 install(TARGETS graph2binary DESTINATION bin)
 
 add_executable(graph2binary_external app/graph2binary_external.cpp)
@@ -138,6 +143,7 @@ target_compile_definitions(
 )
 target_link_libraries(graph2binary_external PRIVATE libgraph2bgf)
 target_link_libraries(graph2binary_external PRIVATE kahip_version)
+target_link_libraries(graph2binary_external PRIVATE kahip_options kahip_warnings)
 install(TARGETS graph2binary_external DESTINATION bin)
 
 add_executable(readbgf app/readbgf.cpp)
@@ -148,6 +154,7 @@ target_compile_definitions(
 )
 target_link_libraries(readbgf PRIVATE libgraph2bgf)
 target_link_libraries(readbgf PRIVATE kahip_version)
+target_link_libraries(readbgf PRIVATE kahip_options kahip_warnings)
 install(TARGETS readbgf DESTINATION bin)
 
 add_executable(edge_list_to_metis_graph app/edge_list_to_metis_graph.cpp)
@@ -162,6 +169,7 @@ target_link_libraries(
 )
 target_link_libraries(edge_list_to_metis_graph PRIVATE libedgelist)
 target_link_libraries(edge_list_to_metis_graph PRIVATE kahip_version)
+target_link_libraries(edge_list_to_metis_graph PRIVATE kahip_options kahip_warnings)
 install(TARGETS edge_list_to_metis_graph DESTINATION bin)
 
 #add_executable(friendster_list_to_metis_graph app/friendster_list_to_metis_graph.cpp $<TARGET_OBJECTS:libedgelist>)
@@ -177,6 +185,7 @@ target_compile_definitions(
 )
 target_link_libraries(dspac PRIVATE parallel)
 target_link_libraries(dspac PRIVATE libdspac)
+target_link_libraries(dspac PRIVATE kahip_options kahip_warnings)
 install(TARGETS dspac DESTINATION bin)
 
 add_library(parhip_interface SHARED interface/parhip_interface.cpp)
@@ -190,6 +199,7 @@ target_include_directories(
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface
 )
 target_link_libraries(parhip_interface PRIVATE parallel)
+target_link_libraries(parhip_interface PRIVATE kahip_options kahip_warnings)
 set_target_properties(
     parhip_interface
     PROPERTIES PUBLIC_HEADER interface/parhip_interface.h
@@ -211,6 +221,7 @@ target_include_directories(
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface
 )
 target_link_libraries(parhip_interface_static PRIVATE parallel)
+target_link_libraries(parhip_interface_static PRIVATE kahip_options kahip_warnings)
 install(TARGETS parhip_interface_static DESTINATION lib)
 
 # Temporary Testing

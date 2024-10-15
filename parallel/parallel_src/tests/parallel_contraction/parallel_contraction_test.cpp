@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "parallel_contraction_projection/parallel_contraction.h"
+#include "tools/timer.h"
 
 #include "communication/mpi_tools.h"
 using namespace parhip;
