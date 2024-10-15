@@ -5,10 +5,7 @@ project(KaHIP
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(KaHIPSettings)
-
-# --march=nativeflag
-option(NONATIVEOPTIMIZATIONS "Disable --march=native optimizations" OFF)
-
+kahip_project_configure()
 
 # Check dependencies
 find_package(OpenMP)
