@@ -24,7 +24,8 @@ public:
 };
 
 inline void configuration::ultrafast( PPartitionConfig & partition_config ) {
-        partition_config.initial_partitioning_algorithm  = KAFFPAEULTRAFASTSNW;
+        partition_config.initial_partitioning_algorithm  =
+      InitialPartitioningAlgorithm::KAFFPAEULTRAFASTSNW;
         partition_config.no_refinement_in_last_iteration = true;
         partition_config.stop_factor                     = 18000;
         partition_config.num_vcycles                     = 1;
@@ -32,13 +33,15 @@ inline void configuration::ultrafast( PPartitionConfig & partition_config ) {
 
 
 inline void configuration::fast( PPartitionConfig & partition_config ) {
-        partition_config.initial_partitioning_algorithm  = KAFFPAEULTRAFASTSNW;
+        partition_config.initial_partitioning_algorithm  =
+      InitialPartitioningAlgorithm::KAFFPAEULTRAFASTSNW;
         partition_config.no_refinement_in_last_iteration = true;
         partition_config.stop_factor                     = 18000;
 }
 
 inline void configuration::eco( PPartitionConfig & partition_config ) {
-        partition_config.initial_partitioning_algorithm  = KAFFPAEFASTSNW;
+        partition_config.initial_partitioning_algorithm  =
+      InitialPartitioningAlgorithm::KAFFPAEFASTSNW;
         partition_config.no_refinement_in_last_iteration = true;
         partition_config.stop_factor                     = 18000;
         int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -48,7 +51,8 @@ inline void configuration::eco( PPartitionConfig & partition_config ) {
 }
 
 inline void configuration::strong( PPartitionConfig & partition_config ) {
-        partition_config.initial_partitioning_algorithm = KAFFPAESTRONGSNW;
+        partition_config.initial_partitioning_algorithm =
+      InitialPartitioningAlgorithm::KAFFPAESTRONGSNW;
 
 }
 inline void configuration::standard( PPartitionConfig & partition_config ) {
@@ -67,12 +71,13 @@ inline void configuration::standard( PPartitionConfig & partition_config ) {
         partition_config.label_iterations_coarsening            = 3;
         partition_config.label_iterations_refinement            = 6;
         partition_config.cluster_coarsening_factor              = 14;
-        partition_config.initial_partitioning_algorithm         = KAFFPAEFASTSNW;
+        partition_config.initial_partitioning_algorithm         =
+            InitialPartitioningAlgorithm::KAFFPAEFASTSNW;
         partition_config.stop_factor                            = 14000;
         partition_config.vcycle                                 = false;
         partition_config.num_vcycles                            = 2;
         partition_config.num_tries                              = 10;
-        partition_config.node_ordering                          = DEGREE_NODEORDERING;
+        partition_config.node_ordering                          = NodeOrderingType::DEGREE_NODEORDERING;
         partition_config.no_refinement_in_last_iteration        = false;
         partition_config.ht_fill_factor                         = 1.6;
         partition_config.eco                                    = false;

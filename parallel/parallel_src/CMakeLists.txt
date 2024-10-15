@@ -34,8 +34,7 @@ set(LIBPARALLEL_SOURCE_FILES
   lib/communication/dummy_operations.cpp
   lib/io/parallel_graph_io.cpp
   lib/io/parallel_vector_io.cpp
-  lib/tools/random_functions.cpp
-  lib/tools/distributed_quality_metrics.cpp)
+        lib/tools/distributed_quality_metrics.cpp)
 add_library(parallel ${LIBPARALLEL_SOURCE_FILES})
 target_link_libraries(parallel PRIVATE kahip_options kahip_warnings)
 target_link_libraries(parallel PUBLIC parhip_headers)

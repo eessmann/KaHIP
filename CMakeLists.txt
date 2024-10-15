@@ -1,57 +1,13 @@
-cmake_minimum_required(VERSION 3.25..28)
+cmake_minimum_required(VERSION 3.26..28)
 include(CheckCXXCompilerFlag)
-
 project(KaHIP
         LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(KaHIPSettings)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-# if no build mode is specified build in release mode
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE "Release")
-endif()
-
 # --march=nativeflag
 option(NONATIVEOPTIMIZATIONS "Disable --march=native optimizations" OFF)
-
-# tweak compiler flags
-#CHECK_CXX_COMPILER_FLAG(-funroll-loops COMPILER_SUPPORTS_FUNROLL_LOOPS)
-#if(COMPILER_SUPPORTS_FUNROLL_LOOPS)
-#  add_definitions(-funroll-loops)
-#endif()
-#CHECK_CXX_COMPILER_FLAG(-fno-stack-limit COMPILER_SUPPORTS_FNOSTACKLIMITS)
-#if(COMPILER_SUPPORTS_FNOSTACKLIMITS)
-#  add_definitions(-fno-stack-limit)
-#endif()
-#CHECK_CXX_COMPILER_FLAG(-Wall COMPILER_SUPPORTS_WALL)
-#if(COMPILER_SUPPORTS_WALL)
-#  add_definitions(-Wall)
-#endif()
-#CHECK_CXX_COMPILER_FLAG(-march=native COMPILER_SUPPORTS_MARCH_NATIVE)
-#if(COMPILER_SUPPORTS_MARCH_NATIVE)
-#  if( NOT NONATIVEOPTIMIZATIONS )
-#          add_definitions(-march=native)
-#  endif()
-#endif()
-#CHECK_CXX_COMPILER_FLAG(-fpermissive COMPILER_SUPPORTS_FPERMISSIVE)
-#if(COMPILER_SUPPORTS_FPERMISSIVE)
-#    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpermissive")
-#endif()
-#CHECK_CXX_COMPILER_FLAG(-Wno-unused-result COMPILER_SUPPORTS_UNUSED)
-#if(COMPILER_SUPPORTS_UNUSED)
-#  add_definitions(-Wno-unused-result)
-#endif()
-#CHECK_CXX_COMPILER_FLAG(-Wno-sign-compare COMPILER_SUPPORTS_NOSIGNCOMP)
-#if(COMPILER_SUPPORTS_NOSIGNCOMP)
-#  add_definitions(-Wno-sign-compare)
-#endif()
 
 
 # Check dependencies

@@ -8,20 +8,17 @@
 #ifndef RANDOM_FUNCTIONS_RMEPKWYT
 #define RANDOM_FUNCTIONS_RMEPKWYT
 
-#include <iostream>
 #include <random>
 #include <vector>
 
 #include "definitions.h"
 #include "partition_config.h"
 namespace parhip {
-typedef std::mt19937 MersenneTwister;
+
+using MersenneTwister = std::mt19937;
 
 class random_functions {
 public:
-        random_functions();
-        virtual ~random_functions();
-
         template<typename sometype>
                 static void circular_permutation(std::vector<sometype> & vec) {
                 if(vec.size() < 2) return;
@@ -123,9 +120,9 @@ public:
                 }
 
                 switch(partition_config.permutation_quality) {
-                        case PERMUTATION_QUALITY_NONE: break;
-                        case PERMUTATION_QUALITY_FAST: permutate_vector_fast(vec, false); break;
-                        case PERMUTATION_QUALITY_GOOD: permutate_vector_good(vec, false); break;
+                        case PermutationQuality::PERMUTATION_QUALITY_NONE: break;
+                        case PermutationQuality::PERMUTATION_QUALITY_FAST: permutate_vector_fast(vec, false); break;
+                        case PermutationQuality::PERMUTATION_QUALITY_GOOD: permutate_vector_good(vec, false); break;
                 }
 
         }
@@ -144,23 +141,20 @@ public:
 
 
         static double nextDouble(double lb, double rb) {
-                double rnbr   = (double) rand() / (double) RAND_MAX; // rnd in 0,1
-                double length = rb - lb;
-                rnbr         *= length;
-                rnbr         += lb;
-
-                return rnbr;
+                std::uniform_real_distribution<double> A(lb,rb);
+                return A(m_mt);
         }
 
         static void setSeed(int seed) {
                 m_seed = seed;
                 srand(seed);
-                m_mt.seed(m_seed);
+                std::seed_seq mt_seed{seed};
+                m_mt.seed(mt_seed);
         }
 
 private:
-        static int m_seed;
-        static MersenneTwister m_mt;
+        inline static int m_seed = 0;
+        inline static MersenneTwister m_mt;
 };
 }
 #endif /* end of include guard: RANDOM_FUNCTIONS_RMEPKWYT */

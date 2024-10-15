@@ -49,7 +49,7 @@ inline int mpi_type_cleanup(MPI_Comm  /*comm*/,
   std::scoped_lock const lock{mpi_type_mutex};
 
   auto& custom_types = get_custom_mpi_types();
-  for (MPI_Datatype& datatype : custom_types) {
+  for (auto&& datatype : custom_types) {
     if (datatype != MPI_DATATYPE_NULL) {
       MPI_Type_free(&datatype);
       datatype = MPI_DATATYPE_NULL;
@@ -251,7 +251,7 @@ struct mpi::details::mpi_datatype_trait<DataType> {
     static MPI_Datatype const mpi_type = []() -> MPI_Datatype {
       MPI_Datatype mpi_type_val = MPI_DATATYPE_NULL;
 
-      constexpr size_t num_fields = cista::arity<DataType>();
+      constexpr std::size_t num_fields = cista::arity<DataType>();
       std::vector<int> block_lengths(num_fields, 1);
       std::vector<MPI_Datatype> types;
       std::vector<MPI_Aint> offsets;

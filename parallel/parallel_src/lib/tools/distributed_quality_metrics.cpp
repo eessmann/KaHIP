@@ -6,15 +6,9 @@
  *****************************************************************************/
 
 #include <algorithm>
+#include "definitions.h"
 #include "distributed_quality_metrics.h"
 namespace parhip {
-distributed_quality_metrics::distributed_quality_metrics() {
-                
-}
-
-distributed_quality_metrics::~distributed_quality_metrics() {
-                        
-}
 
 EdgeWeight distributed_quality_metrics::edge_cut_second( parallel_graph_access & G, MPI_Comm communicator ) {
   EdgeWeight local_cut = 0;

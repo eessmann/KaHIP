@@ -20,8 +20,6 @@ using MersenneTwister = std::mt19937;
 
 class random_functions {
 public:
-        random_functions();
-        virtual ~random_functions();
 
         template<typename sometype>
                 static void circular_permutation(std::vector<sometype> & vec) {
@@ -144,23 +142,20 @@ public:
         }
 
         static double nextDouble(double lb, double rb) {
-                double rnbr   = (double) rand() / (double) RAND_MAX; // rnd in 0,1
-                double length = rb - lb;
-                rnbr         *= length;
-                rnbr         += lb;
-
-                return rnbr;
+                std::uniform_real_distribution<double> A(lb,rb);
+                return A(m_mt);
         }
 
         static void setSeed(int seed) {
                 m_seed = seed;
                 srand(seed);
-                m_mt.seed(m_seed);
+                std::seed_seq mt_seed{seed};
+                m_mt.seed(mt_seed);
         }
 
 private:
-        static int m_seed;
-        static MersenneTwister m_mt;
+        inline static int m_seed = 0;
+        inline static MersenneTwister m_mt;
 };
 }
 #endif /* end of include guard: RANDOM_FUNCTIONS_RMEPKWYT */
