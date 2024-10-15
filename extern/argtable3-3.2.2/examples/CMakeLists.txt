@@ -29,26 +29,29 @@
 ################################################################################
 
 if(ARGTABLE3_ENABLE_ARG_REX_DEBUG)
-  add_definitions(-DARG_REX_DEBUG)
+    add_definitions(-DARG_REX_DEBUG)
 endif()
 
 if(NOT ARGTABLE3_REPLACE_GETOPT)
-  add_definitions(-DARG_REPLACE_GETOPT=0)
+    add_definitions(-DARG_REPLACE_GETOPT=0)
 endif()
 
 if(ARGTABLE3_LONG_ONLY)
-  add_definitions(-DARG_LONG_ONLY)
+    add_definitions(-DARG_LONG_ONLY)
 endif()
 
 file(GLOB EXAMPLES_SOURCES RELATIVE ${PROJECT_SOURCE_DIR}/examples *.c)
 
 if(UNIX)
-  set(ARGTABLE3_EXTRA_LIBS m)
+    set(ARGTABLE3_EXTRA_LIBS m)
 endif()
 
 foreach(examples_src ${EXAMPLES_SOURCES})
-  string(REPLACE ".c" "" examplename ${examples_src})
-  add_executable(${examplename} ${PROJECT_SOURCE_DIR}/examples/${examples_src})
-  target_include_directories(${examplename} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-  target_link_libraries(${examplename} argtable3 ${ARGTABLE3_EXTRA_LIBS})
+    string(REPLACE ".c" "" examplename ${examples_src})
+    add_executable(
+        ${examplename}
+        ${PROJECT_SOURCE_DIR}/examples/${examples_src}
+    )
+    target_include_directories(${examplename} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(${examplename} argtable3 ${ARGTABLE3_EXTRA_LIBS})
 endforeach()
