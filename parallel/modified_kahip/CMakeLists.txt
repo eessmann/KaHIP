@@ -104,6 +104,7 @@ add_library(
 )
 target_link_libraries(libmodified_kaffpa_async PRIVATE modified_kahip_headers)
 target_link_libraries(libmodified_kaffpa_async PRIVATE MPI::MPI_CXX)
+target_link_libraries(libmodified_kaffpa_async PRIVATE kahip_options kahip_warnings)
 
 add_library(libmodified_kahip_interface STATIC interface/kaHIP_interface.cpp)
 target_link_libraries(
@@ -116,4 +117,5 @@ target_link_libraries(
     libmodified_kahip_interface
     PRIVATE modified_kahip_headers
 )
+target_link_libraries(libmodified_kahip_interface PRIVATE kahip_options kahip_warnings)
 target_include_directories(libmodified_kahip_interface PUBLIC interface)
