@@ -76,7 +76,7 @@ TEST_CASE("flattening vector of messages", "[unit][mpi]") {
 
 TEST_CASE("Packing and Unpacking for messages", "[unit][mpi]") {
 	SECTION("Empty Vector") {
-		constexpr std::vector<std::vector<NodeID> > m_empty{};
+		const std::vector<std::vector<NodeID> > m_empty{};
 		auto const packed = mpi::pack_messages(m_empty);
 		auto const unpacked = mpi::unpack_messages(packed);
 
