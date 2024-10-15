@@ -1,7 +1,7 @@
 # Automatically enable catch2 to generate ctest targets
 find_package(fmt REQUIRED CONFIG)
 include(ProcessorCount)
-ProcessorCount(N)
+processorcount(N)
 
 set(mpi_runner $<IF:$<EQUAL:${N},0>,"","mpirun;-np;${N}">)
 
@@ -15,22 +15,37 @@ target_link_libraries(catch_mpi_runner PUBLIC MPI::MPI_CXX)
 target_link_libraries(catch_mpi_runner PUBLIC Catch2::Catch2)
 
 # Parallel contraction
-add_executable(parallel_contraction_test parallel_contraction/parallel_contraction_test.cpp)
-target_link_libraries(parallel_contraction_test PRIVATE Catch2::Catch2WithMain parallel)
-target_link_libraries(parallel_contraction_test PRIVATE libmodified_kahip_interface fmt::fmt)
+add_executable(
+    parallel_contraction_test
+    parallel_contraction/parallel_contraction_test.cpp
+)
+target_link_libraries(
+    parallel_contraction_test
+    PRIVATE Catch2::Catch2WithMain parallel
+)
+target_link_libraries(
+    parallel_contraction_test
+    PRIVATE libmodified_kahip_interface fmt::fmt
+)
 
 catch_discover_tests(
         parallel_contraction_test
         TEST_PREFIX "unit-"
         OUTPUT_DIR .
-        OUTPUT_PREFIX "unit-")
-
+        OUTPUT_PREFIX "unit-"
+)
 
 # Parallel contraction
-add_executable(parallel_contraction_mpi_test parallel_contraction/parallel_contraction_mpi_test.cpp)
+add_executable(
+    parallel_contraction_mpi_test
+    parallel_contraction/parallel_contraction_mpi_test.cpp
+)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE catch_mpi_runner)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE parallel)
-target_link_libraries(parallel_contraction_mpi_test PRIVATE libmodified_kahip_interface fmt::fmt)
+target_link_libraries(
+    parallel_contraction_mpi_test
+    PRIVATE libmodified_kahip_interface fmt::fmt
+)
 
 catch_discover_tests(
         parallel_contraction_mpi_test
@@ -39,7 +54,14 @@ catch_discover_tests(
         REPORTER xml
         OUTPUT_DIR .
         OUTPUT_PREFIX "unit-"
-        OUTPUT_SUFFIX .xml)
+        OUTPUT_SUFFIX .xml
+)
 
-target_link_libraries(parallel_contraction_test PRIVATE kahip_options kahip_warnings)
-target_link_libraries(parallel_contraction_mpi_test PRIVATE kahip_options kahip_warnings)
+target_link_libraries(
+    parallel_contraction_test
+    PRIVATE kahip_options kahip_warnings
+)
+target_link_libraries(
+    parallel_contraction_mpi_test
+    PRIVATE kahip_options kahip_warnings
+)
