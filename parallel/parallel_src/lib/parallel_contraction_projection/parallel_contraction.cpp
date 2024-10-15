@@ -281,10 +281,10 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         m_messages.resize(size);
 
         //build messages
-        hashed_graph::iterator it;
-        for( it = hG.begin(); it != hG.end(); it++) {
-                data_hashed_edge & e = it->second;
-                hashed_edge he       = it->first;
+        //hashed_graph::iterator it;
+        for(auto & it : hG) {
+                data_hashed_edge & e = it.second;
+                hashed_edge he       = it.first;
 
                 PEID peID = he.source / divisor;
                 m_messages[ peID ].push_back( he.source );
@@ -369,9 +369,9 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         sorted_graph.resize( local_num_cnodes );
 
         EdgeID edge_counter = 0;
-        for( it = local_graph.begin(); it != local_graph.end(); it++) {
-                data_hashed_edge & e = it->second;
-                hashed_edge he       = it->first;
+        for(auto & it : local_graph) {
+                data_hashed_edge & e = it.second;
+                hashed_edge he       = it.first;
 
                 if( from <= he.target && he.target <= to) {
                         std::pair< NodeID, NodeWeight > edge;
