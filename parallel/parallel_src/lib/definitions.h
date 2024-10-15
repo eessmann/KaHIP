@@ -7,14 +7,12 @@
 
 #ifndef DEFINITIONS_H_CHRA
 #define DEFINITIONS_H_CHRA
+#include <cstdint>
 
-#include <limits>
-#include <queue>
-#include <vector>
+#include <climits>
+#include "macros_assertions.h" 
+#include <cstdio>
 
-#include "limits.h"
-#include "macros_assertions.h"
-#include "stdio.h"
 
 // allows us to disable most of the output during partitioning
 #ifndef NOOUTPUT 
@@ -29,24 +27,24 @@ namespace parhip {
  * ********************************************/
 //Types needed for the parallel graph ds
 //we use long since we want to partition huge graphs
-typedef unsigned long long ULONG;
-typedef unsigned int UINT;
-typedef unsigned long long NodeID;
-typedef unsigned long long EdgeID;
-typedef unsigned long long PartitionID;
-typedef unsigned long long NodeWeight;
-typedef unsigned long long EdgeWeight;
-typedef int PEID; 
+using ULONG = unsigned long long;
+using UINT = unsigned int;
+using NodeID = unsigned long long;
+using EdgeID = unsigned long long;
+using PartitionID = unsigned long long;
+using NodeWeight = unsigned long long;
+using EdgeWeight = unsigned long long;
+using PEID = int;
 
 constexpr PEID ROOT = 0;
 
-typedef enum {
+enum class PermutationQuality : std::uint8_t {
         PERMUTATION_QUALITY_NONE, 
         PERMUTATION_QUALITY_FAST,
         PERMUTATION_QUALITY_GOOD
-} PermutationQuality;
+};
 
-typedef enum {
+enum class InitialPartitioningAlgorithm : std::uint8_t {
         KAFFPAESTRONG,
         KAFFPAEECO,
         KAFFPAEFAST,
@@ -55,19 +53,19 @@ typedef enum {
         KAFFPAEECOSNW,
         KAFFPAESTRONGSNW,
         RANDOMIP
-} InitialPartitioningAlgorithm;
+};
 
 struct source_target_pair {
         NodeID source;
         NodeID target;
 };
 
-typedef enum {
+enum class NodeOrderingType : std::uint8_t {
         RANDOM_NODEORDERING,
         DEGREE_NODEORDERING,
         LEASTGHOSTNODESFIRST_DEGREE_NODEODERING,
         DEGREE_LEASTGHOSTNODESFIRST_NODEODERING
-} NodeOrderingType;
+};
 }
 #endif
 

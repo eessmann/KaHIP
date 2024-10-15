@@ -14,9 +14,6 @@
 namespace parhip {
 class distributed_quality_metrics {
 public:
-	distributed_quality_metrics();
-	virtual ~distributed_quality_metrics();
-
 	EdgeWeight local_edge_cut( parallel_graph_access & G, int * partition_map, MPI_Comm communicator );
 	EdgeWeight edge_cut( parallel_graph_access & G, MPI_Comm communicator );
 	EdgeWeight edge_cut_second( parallel_graph_access & G, MPI_Comm communicator  );

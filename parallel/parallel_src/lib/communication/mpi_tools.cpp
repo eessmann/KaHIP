@@ -4,13 +4,12 @@
  * Source of KaHIP -- Karlsruhe High Quality Partitioning.
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
-
 #include <mpi.h>
-#include <unistd.h>
 
 #include "io/parallel_vector_io.h"
 #include "io/parallel_graph_io.h"
 #include "mpi_tools.h"
+
 namespace parhip {
 // currently this method is for debugging purposses only
 // later on this may be a parallel io routine

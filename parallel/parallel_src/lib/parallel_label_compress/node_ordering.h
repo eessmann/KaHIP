@@ -26,16 +26,18 @@ public:
                 } endfor
 
                 switch( config.node_ordering ) {
-                        case RANDOM_NODEORDERING:
+                        case NodeOrderingType::RANDOM_NODEORDERING:
                                 order_nodes_random(config, G, ordered_nodes);
                         break;
-                        case DEGREE_NODEORDERING:
+                        case NodeOrderingType::DEGREE_NODEORDERING:
                                 order_nodes_degree(config, G, ordered_nodes);
                         break;
-                        case LEASTGHOSTNODESFIRST_DEGREE_NODEODERING:
+                        case NodeOrderingType::
+                            LEASTGHOSTNODESFIRST_DEGREE_NODEODERING:
                                 order_leastghostnodes_nodes_degree(config, G, ordered_nodes);
                         break;
-                        case DEGREE_LEASTGHOSTNODESFIRST_NODEODERING:
+                        case NodeOrderingType::
+                            DEGREE_LEASTGHOSTNODESFIRST_NODEODERING:
                                 order_nodes_degree_leastghostnodes(config, G, ordered_nodes);
                         break;
                 }

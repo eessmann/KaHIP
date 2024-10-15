@@ -11,8 +11,7 @@ set(LIBMODIFIED_KAFFPA_SOURCE_FILES
   lib/algorithms/topological_sort.cpp
   lib/io/graph_io.cpp
   lib/tools/quality_metrics.cpp
-  lib/tools/random_functions.cpp
-  lib/tools/graph_extractor.cpp
+        lib/tools/graph_extractor.cpp
   lib/tools/misc.cpp
   lib/tools/partition_snapshooter.cpp
   lib/partition/graph_partitioner.cpp

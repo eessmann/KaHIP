@@ -12,12 +12,11 @@
 #include <algorithm>
 #include <string>
 #include <fstream>
+#include <vector>
+
 namespace parhip {
 class helpers {
 public:
-        helpers() {};
-        virtual ~helpers() {};
-
         template<typename vectortype, class Compare, class Equal> 
         void filter_duplicates( std::vector< vectortype > & input, Compare comparator_function, Equal equal_function);
 };

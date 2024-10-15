@@ -72,25 +72,25 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
   int mode = 0;
 
   switch( config.initial_partitioning_algorithm ) {
-    case KAFFPAESTRONG:
+    case InitialPartitioningAlgorithm::KAFFPAESTRONG:
       mode = STRONG;
     break;
-    case KAFFPAEECO:
+    case InitialPartitioningAlgorithm::KAFFPAEECO:
       mode = ECO;
     break;
-    case KAFFPAEFAST:
+    case InitialPartitioningAlgorithm::KAFFPAEFAST:
       mode = FAST;
     break;
-    case KAFFPAEULTRAFASTSNW:
+    case InitialPartitioningAlgorithm::KAFFPAEULTRAFASTSNW:
       mode = ULTRAFASTSOCIAL;
     break;
-    case KAFFPAEFASTSNW:
+    case InitialPartitioningAlgorithm::KAFFPAEFASTSNW:
       mode = FASTSOCIAL;
     break;
-    case KAFFPAEECOSNW:
+    case InitialPartitioningAlgorithm::KAFFPAEECOSNW:
       mode = ECOSOCIAL;
     break;
-    case KAFFPAESTRONGSNW:
+    case InitialPartitioningAlgorithm::KAFFPAESTRONGSNW:
       mode = STRONGSOCIAL;
     break;
     default:

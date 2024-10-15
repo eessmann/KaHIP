@@ -19,7 +19,8 @@ initial_partitioning_algorithm::~initial_partitioning_algorithm() {
 
 
 void initial_partitioning_algorithm::perform_partitioning( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & Q) {
-  if( config.initial_partitioning_algorithm == RANDOMIP) {
+  if( config.initial_partitioning_algorithm ==
+      InitialPartitioningAlgorithm::RANDOMIP) {
     random_initial_partitioning dist_rpart;
     dist_rpart.perform_partitioning( communicator, config, Q );
   } else {
