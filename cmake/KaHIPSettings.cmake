@@ -37,12 +37,17 @@ if(kahip_ENABLE_UNITY_BUILD)
     set(CMAKE_UNITY_BUILD ON)
 endif()
 
-if(kahip_ENABLE_IPO)
-    kahip_enable_ipo()
-endif()
-
 add_library(kahip_warnings INTERFACE)
 add_library(kahip_options INTERFACE)
+
+if(kahip_ENABLE_IPO)
+    if ($CMAKE_CXX_COMPILER_ID MATCHES "CrayClang")
+        target_compile_options(kahip_options INTERFACE -flto)
+        target_link_options(kahip_options INTERFACE -flto)
+    else ()
+        kahip_enable_ipo()
+    endif ()
+endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/StandardProjectSettings.cmake)
 
