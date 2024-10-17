@@ -113,10 +113,10 @@ function(
     target_compile_options(
         ${project_name}
         INTERFACE # C++ warnings
-            $<$<COMPILE_LANGUAGE:CXX>:${PROJECT_WARNINGS_CXX}>
+            $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:$<$<COMPILE_LANGUAGE:CXX>:${PROJECT_WARNINGS_CXX}>>
             # C warnings
-            $<$<COMPILE_LANGUAGE:C>:${PROJECT_WARNINGS_C}>
+            $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:$<$<COMPILE_LANGUAGE:C>:${PROJECT_WARNINGS_C}>>
             # Cuda warnings
-            $<$<COMPILE_LANGUAGE:CUDA>:${PROJECT_WARNINGS_CUDA}>
+            $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:$<$<COMPILE_LANGUAGE:CUDA>:${PROJECT_WARNINGS_CUDA}>>
     )
 endfunction()
