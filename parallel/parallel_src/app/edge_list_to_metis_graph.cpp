@@ -4,120 +4,186 @@
  * Source of KaHIP -- Karlsruhe High Quality Partitioning.
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
-
-#include <stdio.h>
-#include <iostream>
-#include <sstream>
-#include <fstream>
-#include <vector>
-#include <mpi.h>
 #include <argtable3.h>
-#include "partition_config.h"
-#include "parse_parameters.h"
+#include <mpi.h>
+#include <charconv>
+#include <filesystem>
+#include <format>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
 #include "data_structure/hashed_graph.h"
 #include "data_structure/parallel_graph_access.h"
 #include "io/parallel_graph_io.h"
+#include "parse_parameters.h"
+#include "partition_config.h"
 
-using namespace std;
+namespace fs = std::filesystem;
 
-int main(int argn, char **argv)
-{
-        using namespace parhip;
-        MPI_Init(&argn, &argv);
+int main(int argc, char** argv) {
+  using namespace parhip;
+  MPI_Init(&argc, &argv);
 
-        PPartitionConfig partition_config;
-        std::string graph_filename;
+  int rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-        int ret_code = parse_parameters(argn, argv, 
-                                        partition_config, 
-                                        graph_filename); 
+  PPartitionConfig partition_config{};
+  std::string graph_filename;
 
-        if(ret_code) {
-                MPI_Finalize();
-                return 0;
-        }
+  if (argc != 2) {
+    if (rank == ROOT) {
+      std::cout << "usage: ";
+      std::cout << "edge_list_to_metis inputfilename" << std::endl;
+    }
+    MPI_Finalize();
+    return EXIT_FAILURE;
+  }
+  graph_filename = argv[1];
 
- 
-        std::ifstream in(graph_filename.c_str());
-        if (!in) {
-                std::cerr << "Error opening " << graph_filename << std::endl;
-                return 1;
-        }
+  if (!fs::exists(graph_filename)) {
+    if (rank == 0) {
+      for (int i = 0; i < argc; ++i) {
+        std::cout << argv[i] << std::endl;
+      }
+      std::cerr << std::format("Error: File '{}' does not exist.\n",
+                               graph_filename);
+    }
+    MPI_Finalize();
+    return EXIT_FAILURE;
+  }
 
-        std::string line;
-        std::getline(in, line); // skip first line
-        std::cout <<  line  << std::endl;
+  std::ifstream in_file(graph_filename);
+  if (!in_file.is_open()) {
+    if (rank == 0) {
+      std::cerr << std::format("Error: Could not open file '{}'.\n",
+                               graph_filename);
+    }
+    MPI_Finalize();
+    return EXIT_FAILURE;
+  }
 
-        std::unordered_map< NodeID, std::unordered_map< NodeID, int> > source_targets;
-                        
-        std::cout <<  "starting io"  << std::endl;
-        EdgeID edge_counter = 0;
-        EdgeID selfloops = 0;
+  if (rank == 0) {
+    std::cout << "Starting IO...\n";
+  }
 
-        NodeID source;
-        NodeID target;
-        while( !in.eof() ) {
-                std::getline(in, line);
-                std::stringstream ss(line);
+  std::unordered_map<NodeID, std::unordered_map<NodeID, int>> source_targets;
+  EdgeID selfloops = 0;
 
-                ss >> source;
-                ss >> target;
+  std::string line;
+  while (std::getline(in_file, line)) {
+    if (line.empty()) {
+      continue;
+    }
 
-                if( source == target ) {
-                        std::getline(in, line);
-                        selfloops++;
-                        continue;
-                }
+    std::string_view const line_view(line);
+    auto comma_pos = line_view.find(',');
 
-                if( source_targets[source].find(target) == source_targets[source].end() ) {
-                        source_targets[source][target] = 0;
-                }
-                if( source_targets[target].find(source) == source_targets[target].end() ) {
-                        source_targets[target][source] = 0;
-                }
+    if (comma_pos == std::string_view::npos) {
+      if (rank == 0) {
+        std::cerr << std::format("Malformed line (missing comma): '{}'\n",
+                                 line);
+      }
+      continue;
+    }
 
-                source_targets[source][target] += 1;
-                source_targets[target][source] += 1;
-        }
+    std::string_view const source_str = line_view.substr(0, comma_pos);
+    std::string_view const target_str = line_view.substr(comma_pos + 1);
 
-        std::cout <<  "selfloops " <<  selfloops  << std::endl;
-        std::cout <<  "io done"  << std::endl;
+    NodeID source = 0;
+    NodeID target = 0;
 
-        NodeID distinct_nodes = source_targets.size();
-        std::unordered_map< NodeID, NodeID > map_orignal_id_to_consequtive;
-        //std::unordered_map< NodeID, std::unordered_map< NodeID, bool > >::iterator it;
-        NodeID counter = 0;
-        for( auto it = source_targets.begin(); it != source_targets.end(); it++) {
-                if( map_orignal_id_to_consequtive.find(it->first) ==  map_orignal_id_to_consequtive.end()) {
-                        map_orignal_id_to_consequtive[it->first] = counter++;
-                } 
-                edge_counter += it->second.size();
+    auto source_result = std::from_chars(
+        source_str.data(), source_str.data() + source_str.size(), source);
+    auto target_result = std::from_chars(
+        target_str.data(), target_str.data() + target_str.size(), target);
 
-        }
-        std::cout <<  "starting construction"  << std::endl;
+    if (source_result.ec != std::errc{} || target_result.ec != std::errc{}) {
+      if (rank == 0) {
+        std::cerr << std::format(
+            "Error parsing line '{}': invalid number format.\n", line);
+      }
+      continue;
+    }
 
-        complete_graph_access G;
-        G.start_construction( distinct_nodes, edge_counter, distinct_nodes, edge_counter);
-        G.set_range(0, distinct_nodes);
+    if (source == target) {
+      ++selfloops;
+      continue;
+    }
 
-        EdgeID my_count = 0;
-        for( auto it = source_targets.begin(); it != source_targets.end(); it++) {
-                NodeID node = G.new_node();
+    ++source_targets[source][target];
+    ++source_targets[target][source];
+  }
 
-                for( auto edge_it = source_targets[it->first].begin(); 
-                     source_targets[it->first].end() != edge_it; 
-                     edge_it++) {
-                        G.new_edge(node, map_orignal_id_to_consequtive[edge_it->first]);
-                        my_count += edge_it->second;
-                }
-        }
-        G.finish_construction();
-        std::cout <<  "my_count " <<  my_count << std::endl;
-        std::cout <<  "my_count/2+selfloops " <<  (my_count/2+selfloops) << std::endl;
+  if (rank == 0) {
+    std::cout << std::format("Self-loops detected: {}\n", selfloops);
+    std::cout << "IO completed.\n";
+  }
 
-        std::string outputfilename("converted.graph");
-        parallel_graph_io::writeGraphSequentially(G, outputfilename);
+  // Map original node IDs to consecutive IDs
+  std::unordered_map<NodeID, NodeID> node_id_mapping;
+  NodeID consecutive_id = 0;
 
+  for (auto const& [node_id, _] : source_targets) {
+    node_id_mapping[node_id] = consecutive_id++;
+  }
 
-        return 0;
+  EdgeID edge_counter = 0;
+  for (auto const& [_, targets] : source_targets) {
+    edge_counter += targets.size();
+  }
+
+  if (rank == 0) {
+    std::cout << "Starting graph construction...\n";
+  }
+
+  complete_graph_access G;
+  G.start_construction(consecutive_id, edge_counter, consecutive_id,
+                       edge_counter);
+  G.set_range(0, consecutive_id);
+
+  EdgeID total_edge_weight = 0;
+
+  for (auto const& [node_id, targets] : source_targets) {
+    NodeID const new_node = G.new_node();
+
+    for (auto const& [target_id, weight] : targets) {
+      G.new_edge(new_node, node_id_mapping[target_id]);
+      total_edge_weight += weight;
+    }
+  }
+
+  G.finish_construction();
+
+  if (rank == 0) {
+    std::cout << std::format("Total edge weight: {}\n", total_edge_weight);
+    std::cout << std::format(
+        "Adjusted edge count (accounting for self-loops): {}\n",
+        ((total_edge_weight / 2) + selfloops));
+  }
+
+  // Generate output filename by replacing the input file's extension with
+  // ".graph"
+  fs::path input_path(graph_filename);
+  input_path.replace_extension(".graph");
+  std::string output_filename = input_path.string();
+
+  if (rank == 0) {
+    int const write_status = parallel_graph_io::writeGraphSequentially(G, output_filename);
+    if (write_status != 0) {
+      std::cerr << std::format("Error writing graph to '{}'.\n",
+                               output_filename);
+      MPI_Finalize();
+      return EXIT_FAILURE;
+    } else {
+      std::cout << std::format("Graph successfully written to '{}'.\n",
+                               output_filename);
+    }
+  }
+
+  MPI_Finalize();
+  return EXIT_SUCCESS;
 }

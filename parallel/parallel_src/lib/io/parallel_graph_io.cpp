@@ -640,12 +640,12 @@ int parallel_graph_io::writeGraphParallelSimple(parallel_graph_access & G,
     std::ofstream f(filename.c_str());
     f << G.number_of_global_nodes() <<  " " <<  G.number_of_global_edges()/2 <<   std::endl;
 
-    forall_local_nodes(G, node) {
-      forall_out_edges(G, e, node) {
-        f << (G.getGlobalID(G.getEdgeTarget(e))+1) << " " ;
-      } endfor
+    for_all_local_nodes(G, [&](PEID node) {
+      for_all_out_edges(G, node, [&](EdgeID e) {
+        f <<  (G.getGlobalID(G.getEdgeTarget(e))+1) << " " ;
+      });
       f <<  "\n";
-    } endfor
+    });
 
     f.close();
   }
@@ -735,7 +735,7 @@ int parallel_graph_io::writeGraphSequentially(complete_graph_access & G, std::of
 
   forall_local_nodes(G, node) {
     forall_out_edges(G, e, node) {
-      f << " " <<   (G.getEdgeTarget(e)+1)  ;
+      f << " " << (G.getEdgeTarget(e)+1)  ;
     } endfor
     f <<  "\n";
   } endfor
@@ -743,7 +743,7 @@ int parallel_graph_io::writeGraphSequentially(complete_graph_access & G, std::of
 }
 
 int parallel_graph_io::writeGraphSequentially(complete_graph_access & G, std::string filename) {
-  std::ofstream f(filename.c_str());
+  std::ofstream f(filename);
   writeGraphSequentially(G, f);
   f.close();
   return 0;
