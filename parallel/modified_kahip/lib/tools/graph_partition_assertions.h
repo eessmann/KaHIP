@@ -10,31 +10,31 @@
 
 #include "data_structure/graph_access.h"
 #include "partition_config.h"
-
+namespace kahip::modified {
 class graph_partition_assertions {
-        public:
-                graph_partition_assertions( ) {};
-                virtual ~graph_partition_assertions() {};
+public:
+        graph_partition_assertions( ) {};
+        virtual ~graph_partition_assertions() {};
 
-                static bool assert_graph_has_kway_partition(const PartitionConfig & config, graph_access & G) {
-                        bool* allpartsthere = new bool[config.k];
-                        for(unsigned int i = 0; i < config.k; i++) {
-                                allpartsthere[i] = false;
-                        }
+        static bool assert_graph_has_kway_partition(const PartitionConfig & config, graph_access & G) {
+                bool* allpartsthere = new bool[config.k];
+                for(unsigned int i = 0; i < config.k; i++) {
+                        allpartsthere[i] = false;
+                }
 
-                        forall_nodes(G, n) {
-                                allpartsthere[G.getPartitionIndex(n)] = true; 
-                        } endfor
+                forall_nodes(G, n) {
+                        allpartsthere[G.getPartitionIndex(n)] = true;
+                } endfor
 
-                        for(unsigned int i = 0; i < config.k; i++) {
-                                ASSERT_TRUE(allpartsthere[i]);
-                        }
+                for(unsigned int i = 0; i < config.k; i++) {
+                        ASSERT_TRUE(allpartsthere[i]);
+                }
 
-                        delete[] allpartsthere;
-                        return true;
-                };
+                delete[] allpartsthere;
+                return true;
+        };
 
 };
-
+}
 
 #endif /* end of include guard: GRAPH_PARTITION_ASSERTIONS_609QZZDM */

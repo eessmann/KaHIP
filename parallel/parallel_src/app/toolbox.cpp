@@ -29,7 +29,7 @@
 #include "tools/distributed_quality_metrics.h"
 
 int main(int argn, char **argv) {
-
+        using namespace parhip;
         MPI_Init(&argn, &argv);    /* starts MPI */
 
         PPartitionConfig partition_config;

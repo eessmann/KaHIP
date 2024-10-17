@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "greedy_neg_cycle.h"
-
+namespace kahip::modified {
 greedy_neg_cycle::greedy_neg_cycle() {
                 
 }
@@ -14,4 +14,4 @@ greedy_neg_cycle::greedy_neg_cycle() {
 greedy_neg_cycle::~greedy_neg_cycle() {
                 
 }
-
+}

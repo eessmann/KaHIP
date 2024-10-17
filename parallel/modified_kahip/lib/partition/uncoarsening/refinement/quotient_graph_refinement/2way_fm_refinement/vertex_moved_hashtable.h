@@ -12,11 +12,11 @@
 
 #include "definitions.h"
 #include "limits.h"
-
+namespace kahip::modified {
 struct compare_nodes {
-        bool operator()(const NodeID lhs, const NodeID rhs) const {
-                return (lhs == rhs);
-        }
+  bool operator()(const NodeID lhs, const NodeID rhs) const {
+    return (lhs == rhs);
+  }
 };
 
 
@@ -24,18 +24,18 @@ const NodeID NOT_MOVED = std::numeric_limits<NodeID>::max();
 const NodeID MOVED = 0;
 
 struct moved_index {
-       NodeID index;
-       moved_index() {
-                index = NOT_MOVED;
-       }
+  NodeID index;
+  moved_index() {
+    index = NOT_MOVED;
+  }
 };
 
 struct hash_nodes {
-       size_t operator()(const NodeID idx) const {
-                return idx;
-       }
+  size_t operator()(const NodeID idx) const {
+    return idx;
+  }
 };
 
 typedef std::unordered_map<const NodeID, moved_index, hash_nodes, compare_nodes> vertex_moved_hashtable;
-
+}
 #endif

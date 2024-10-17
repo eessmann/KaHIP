@@ -10,14 +10,14 @@
 
 #include "data_structure/graph_access.h"
 #include "partition_config.h"
-
+namespace kahip::modified {
 class misc {
 public:
-        misc();
-        virtual ~misc();
+  misc();
+  virtual ~misc();
 
-        void balance_singletons(const PartitionConfig & config, graph_access & G);
+  void balance_singletons(const PartitionConfig & config, graph_access & G);
 };
-
+}
 
 #endif /* end of include guard: MISC_C6QUUWLI */

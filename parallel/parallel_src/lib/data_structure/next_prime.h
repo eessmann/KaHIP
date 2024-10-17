@@ -7,6 +7,7 @@
 
 #ifndef NEXT_PRIME
 #define NEXT_PRIME
+namespace parhip {
 
 static const std::size_t small_primes[] =
 {
@@ -135,6 +136,6 @@ next_prime(std::size_t n)
     }
     return n;
 }
-
+}
 
 #endif /* end of include guard: */

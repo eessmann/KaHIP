@@ -17,6 +17,7 @@ const long header_count    = 3;
 
 int main(int argn, char **argv)
 {
+        using namespace parhip;
         std::cout <<  "program converts a METIS graph file into a binary (distributed graph format) file. "  << std::endl;
 
         MPI_Init(&argn, &argv);    /* starts MPI */

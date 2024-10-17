@@ -13,24 +13,24 @@
 #include "data_structure/graph_access.h"
 #include "partition_config.h"
 #include "uncoarsening/refinement/refinement.h"
-
+namespace kahip::modified {
 class wcycle_partitioner {
-        public:
-                wcycle_partitioner( ) : m_level(0) {};
-                virtual ~wcycle_partitioner() {};
-                int perform_partitioning( const PartitionConfig & config, 
-                                          graph_access & G); 
+public:
+  wcycle_partitioner( ) : m_level(0) {};
+  virtual ~wcycle_partitioner() {};
+  int perform_partitioning( const PartitionConfig & config,
+                            graph_access & G);
 
-        private:
-                int perform_partitioning_recursive( PartitionConfig & partition_config, 
-                                                    graph_access & G, 
-                                                    complete_boundary ** c_boundary); 
+private:
+  int perform_partitioning_recursive( PartitionConfig & partition_config,
+                                      graph_access & G,
+                                      complete_boundary ** c_boundary);
 
-                unsigned   m_level;
-                unsigned   m_deepest_level;
-                stop_rule* m_coarsening_stop_rule;
+  unsigned   m_level;
+  unsigned   m_deepest_level;
+  stop_rule* m_coarsening_stop_rule;
 
-                std::unordered_map<unsigned, bool> m_have_been_level_down;
+  std::unordered_map<unsigned, bool> m_have_been_level_down;
 };
-
+}
 #endif /* end of include guard: WCYCLE_PARTITIONER_EPNDQMK */

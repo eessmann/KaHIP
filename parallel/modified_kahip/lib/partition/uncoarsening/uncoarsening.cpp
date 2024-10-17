@@ -13,8 +13,7 @@
 #include "refinement/refinement.h"
 #include "separator/vertex_separator_algorithm.h"
 #include "uncoarsening.h"
-
-
+namespace kahip::modified {
 uncoarsening::uncoarsening() {
 
 }
@@ -24,83 +23,83 @@ uncoarsening::~uncoarsening() {
 }
 
 int uncoarsening::perform_uncoarsening(const PartitionConfig & config, graph_hierarchy & hierarchy) {
-        int improvement = 0;
+  int improvement = 0;
 
-        PartitionConfig cfg     = config;
-        refinement* refine      = NULL;
+  PartitionConfig cfg     = config;
+  refinement* refine      = NULL;
 
-        if(config.label_propagation_refinement) {
-                refine      = new label_propagation_refinement();
-        } else {
-                refine      = new mixed_refinement();
-        }
+  if(config.label_propagation_refinement) {
+    refine      = new label_propagation_refinement();
+  } else {
+    refine      = new mixed_refinement();
+  }
 
-        graph_access * coarsest = hierarchy.get_coarsest();
-        PRINT(std::cout << "log>" << "unrolling graph with " << coarsest->number_of_nodes() << std::endl;)
+  graph_access * coarsest = hierarchy.get_coarsest();
+  PRINT(std::cout << "log>" << "unrolling graph with " << coarsest->number_of_nodes() << std::endl;)
 
-        complete_boundary* finer_boundary   = NULL;
-        complete_boundary* coarser_boundary = NULL;
-        if(!config.label_propagation_refinement) {
-                coarser_boundary = new complete_boundary(coarsest);
-                coarser_boundary->build();
-        }
-        double factor = config.balance_factor;
-        cfg.upper_bound_partition = ((!hierarchy.isEmpty()) * factor +1.0)*config.upper_bound_partition;
-        improvement += (int)refine->perform_refinement(cfg, *coarsest, *coarser_boundary);
+  complete_boundary* finer_boundary   = NULL;
+  complete_boundary* coarser_boundary = NULL;
+  if(!config.label_propagation_refinement) {
+    coarser_boundary = new complete_boundary(coarsest);
+    coarser_boundary->build();
+  }
+  double factor = config.balance_factor;
+  cfg.upper_bound_partition = ((!hierarchy.isEmpty()) * factor +1.0)*config.upper_bound_partition;
+  improvement += (int)refine->perform_refinement(cfg, *coarsest, *coarser_boundary);
 
-        NodeID coarser_no_nodes = coarsest->number_of_nodes();
-        graph_access* finest    = NULL;
-        graph_access* to_delete = NULL;
-        unsigned int hierarchy_deepth = hierarchy.size();
+  NodeID coarser_no_nodes = coarsest->number_of_nodes();
+  graph_access* finest    = NULL;
+  graph_access* to_delete = NULL;
+  unsigned int hierarchy_deepth = hierarchy.size();
 
-        while(!hierarchy.isEmpty()) {
-                graph_access* G = hierarchy.pop_finer_and_project();
+  while(!hierarchy.isEmpty()) {
+    graph_access* G = hierarchy.pop_finer_and_project();
 
-                PRINT(std::cout << "log>" << "unrolling graph with " << G->number_of_nodes()<<  std::endl;)
-                
-                if(!config.label_propagation_refinement) {
-                        finer_boundary = new complete_boundary(G); 
-                        finer_boundary->build_from_coarser(coarser_boundary, coarser_no_nodes, hierarchy.get_mapping_of_current_finer());
-                }
+    PRINT(std::cout << "log>" << "unrolling graph with " << G->number_of_nodes()<<  std::endl;)
 
-                //call refinement
-                double cur_factor = factor/(hierarchy_deepth-hierarchy.size());
-                cfg.upper_bound_partition = ((!hierarchy.isEmpty()) * cur_factor+1.0)*config.upper_bound_partition;
-                PRINT(std::cout <<  "cfg upperbound " <<  cfg.upper_bound_partition  << std::endl;)
-                improvement += (int)refine->perform_refinement(cfg, *G, *finer_boundary);
-                ASSERT_TRUE(graph_partition_assertions::assert_graph_has_kway_partition(config, *G));
+    if(!config.label_propagation_refinement) {
+      finer_boundary = new complete_boundary(G);
+      finer_boundary->build_from_coarser(coarser_boundary, coarser_no_nodes, hierarchy.get_mapping_of_current_finer());
+    }
 
-                if(config.use_balance_singletons && !config.label_propagation_refinement) {
-                        finer_boundary->balance_singletons( config, *G );
-                }
+    //call refinement
+    double cur_factor = factor/(hierarchy_deepth-hierarchy.size());
+    cfg.upper_bound_partition = ((!hierarchy.isEmpty()) * cur_factor+1.0)*config.upper_bound_partition;
+    PRINT(std::cout <<  "cfg upperbound " <<  cfg.upper_bound_partition  << std::endl;)
+    improvement += (int)refine->perform_refinement(cfg, *G, *finer_boundary);
+    ASSERT_TRUE(graph_partition_assertions::assert_graph_has_kway_partition(config, *G));
 
-                // update boundary pointers
-                if(!config.label_propagation_refinement) delete coarser_boundary;
-                coarser_boundary = finer_boundary;
-                coarser_no_nodes = G->number_of_nodes();
+    if(config.use_balance_singletons && !config.label_propagation_refinement) {
+      finer_boundary->balance_singletons( config, *G );
+    }
 
-		//clean up 
-		if(to_delete != NULL) {
-			delete to_delete;
-		}
-		if(!hierarchy.isEmpty()) {
-			to_delete = G;
-		}
+    // update boundary pointers
+    if(!config.label_propagation_refinement) delete coarser_boundary;
+    coarser_boundary = finer_boundary;
+    coarser_no_nodes = G->number_of_nodes();
 
-                finest = G;
-        }
+    //clean up
+    if(to_delete != NULL) {
+      delete to_delete;
+    }
+    if(!hierarchy.isEmpty()) {
+      to_delete = G;
+    }
 
-        if(config.compute_vertex_separator) {
-               PRINT(std::cout <<  "now computing a vertex separator from the given edge separator"  << std::endl;)
-               vertex_separator_algorithm vsa;
-               vsa.compute_vertex_separator(config, *finest, *finer_boundary); 
-        }
+    finest = G;
+  }
 
-        delete refine;
-        if(finer_boundary != NULL) delete finer_boundary;
-	delete coarsest;
+  if(config.compute_vertex_separator) {
+    PRINT(std::cout <<  "now computing a vertex separator from the given edge separator"  << std::endl;)
+    vertex_separator_algorithm vsa;
+    vsa.compute_vertex_separator(config, *finest, *finer_boundary);
+  }
 
-        return improvement;
+  delete refine;
+  if(finer_boundary != NULL) delete finer_boundary;
+  delete coarsest;
+
+  return improvement;
 }
-
+}
 

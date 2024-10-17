@@ -12,75 +12,75 @@
 #include "macros_assertions.h"
 #include "partition_config.h"
 #include "path.h"
-
+namespace kahip::modified {
 class path_set {
-        public:
+public:
 
-                path_set( graph_access * G, const PartitionConfig * config );
-                virtual ~path_set();
+        path_set( graph_access * G, const PartitionConfig * config );
+        virtual ~path_set();
 
-                //returns the path that v lies on iff v is an endpoint
-                const path& get_path(const NodeID & v) const;
+        //returns the path that v lies on iff v is an endpoint
+        const path& get_path(const NodeID & v) const;
 
-                //returns the number of paths in the set
-                PathID path_count() const;
+        //returns the number of paths in the set
+        PathID path_count() const;
 
-                // add the edge with given id to the path set if it is applicable
-                // returns true iff the edge was applicable
-                bool add_if_applicable(const NodeID & source, const EdgeID & e); 
+        // add the edge with given id to the path set if it is applicable
+        // returns true iff the edge was applicable
+        bool add_if_applicable(const NodeID & source, const EdgeID & e);
 
-                //**********
-                //Navigation
-                //**********
+        //**********
+        //Navigation
+        //**********
 
-                //returns the if of vertex next to v on the path
-                NodeID next_vertex( const NodeID & v ) const;       
+        //returns the if of vertex next to v on the path
+        NodeID next_vertex( const NodeID & v ) const;
 
-                //returns the if of vertex previous to v on the path
-                NodeID prev_vertex( const NodeID & v ) const;      
+        //returns the if of vertex previous to v on the path
+        NodeID prev_vertex( const NodeID & v ) const;
 
-                //returns the id of the edge to the next vertex on the path
-                EdgeID edge_to_next(const NodeID & v) const;
+        //returns the id of the edge to the next vertex on the path
+        EdgeID edge_to_next(const NodeID & v) const;
 
-                //returns the id of the edge to the previous vertex on the path
-                EdgeID edge_to_prev(const NodeID & v) const;
-        private:
-                graph_access * pG;
+        //returns the id of the edge to the previous vertex on the path
+        EdgeID edge_to_prev(const NodeID & v) const;
+private:
+        graph_access * pG;
 
-                const PartitionConfig * config;
-
-
-                // Number of Paths
-                PathID m_no_of_paths;
-
-                // for every vertex v, vertex_to_path[v] is the id of the path
-                std::vector<PathID> m_vertex_to_path;
-
-                // for every path id p, paths[p] is the path for this id
-                std::vector<path> m_paths;
-
-                // for every vertex v, next[v] is the id of the vertex that is next on its path.
-                // for the head v of a path, next[v] == v
-                std::vector<NodeID> m_next;
+        const PartitionConfig * config;
 
 
-                // for every vertex v, prev[v] is the id of the vertex that is previouson its path.
-                // for the tail v of a path, prev[v] == v
-                std::vector<NodeID> m_prev;
+        // Number of Paths
+        PathID m_no_of_paths;
 
-                // for every vertex v, next_edge[v] is the id of the vertex that is used to
-                // connect the vertex v to the next vertex in the path.
-                // if next[v] == v the next_edge[v] = UNDEFINED_EDGE
-                std::vector<EdgeID> m_next_edge;
+        // for every vertex v, vertex_to_path[v] is the id of the path
+        std::vector<PathID> m_vertex_to_path;
 
-                // for every vertex v, prev_edge[v] is the id of the vertex that is used to
-                // connect the vertex v to the previous vertex in the path.
-                // if prev[v] == v the prev_edge[v] = UNDEFINED_EDGE
-                std::vector<EdgeID> m_prev_edge;
+        // for every path id p, paths[p] is the path for this id
+        std::vector<path> m_paths;
 
-                inline bool is_endpoint(const NodeID & v) const {
-                        return (m_next[v] == v or m_prev[v] == v);
-                } 
+        // for every vertex v, next[v] is the id of the vertex that is next on its path.
+        // for the head v of a path, next[v] == v
+        std::vector<NodeID> m_next;
+
+
+        // for every vertex v, prev[v] is the id of the vertex that is previouson its path.
+        // for the tail v of a path, prev[v] == v
+        std::vector<NodeID> m_prev;
+
+        // for every vertex v, next_edge[v] is the id of the vertex that is used to
+        // connect the vertex v to the next vertex in the path.
+        // if next[v] == v the next_edge[v] = UNDEFINED_EDGE
+        std::vector<EdgeID> m_next_edge;
+
+        // for every vertex v, prev_edge[v] is the id of the vertex that is used to
+        // connect the vertex v to the previous vertex in the path.
+        // if prev[v] == v the prev_edge[v] = UNDEFINED_EDGE
+        std::vector<EdgeID> m_prev_edge;
+
+        inline bool is_endpoint(const NodeID & v) const {
+                return (m_next[v] == v or m_prev[v] == v);
+        }
 };
 
 
@@ -96,11 +96,11 @@ inline PathID path_set::path_count() const {
 
 inline NodeID path_set::next_vertex( const NodeID & v ) const {
         return m_next[v];
-}       
+}
 
 inline NodeID path_set::prev_vertex( const NodeID & v ) const {
         return m_prev[v];
-}      
+}
 
 inline EdgeID path_set::edge_to_next(const NodeID & v) const {
         return m_next_edge[v];
@@ -119,17 +119,17 @@ inline bool path_set::add_if_applicable(const NodeID & source, const EdgeID & e)
                 // in this case we only grow paths inside blocks
                 if(G.getPartitionIndex(source) != G.getPartitionIndex(target))
                         return false;
-        
+
                 if(config->combine) {
                         if(G.getSecondPartitionIndex(source) != G.getSecondPartitionIndex(target)) {
                                 return false;
                         }
                 }
-                         
+
         }
 
-        PathID sourcePathID = m_vertex_to_path[source]; 
-        PathID targetPathID = m_vertex_to_path[target]; 
+        PathID sourcePathID = m_vertex_to_path[source];
+        PathID targetPathID = m_vertex_to_path[target];
 
         ASSERT_NEQ(source, target);
 
@@ -143,8 +143,8 @@ inline bool path_set::add_if_applicable(const NodeID & source, const EdgeID & e)
 
         ASSERT_TRUE(source_path.is_active());
         ASSERT_TRUE(target_path.is_active());
-        
-         if(source_path.is_cycle() or target_path.is_cycle()) {
+
+        if(source_path.is_cycle() or target_path.is_cycle()) {
                 // if one of the paths is a cycle then it is not applicable 
                 return false;
         }
@@ -223,7 +223,7 @@ inline bool path_set::add_if_applicable(const NodeID & source, const EdgeID & e)
                 return true;
         }       
         return false;
-} 
-
+}
+}
 
 #endif /* end of include guard: PATH_SET_80E9CQT1 */

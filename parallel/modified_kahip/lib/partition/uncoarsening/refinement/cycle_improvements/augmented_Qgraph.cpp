@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "augmented_Qgraph.h"
-
+namespace kahip::modified {
 augmented_Qgraph::augmented_Qgraph() : m_max_vertex_weight_difference(0) {
                 
 }
@@ -14,4 +14,4 @@ augmented_Qgraph::augmented_Qgraph() : m_max_vertex_weight_difference(0) {
 augmented_Qgraph::~augmented_Qgraph() {
                 
 }
-
+}

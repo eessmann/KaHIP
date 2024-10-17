@@ -12,7 +12,7 @@
 #include "partition_config.h"
 #include "data_structure/parallel_graph_access.h"
 #include "stop_rule.h"
-
+namespace parhip {
 class distributed_partitioner {
 public:
         distributed_partitioner();
@@ -41,6 +41,6 @@ private:
         int m_cycle;
         timer m_t; 
 };
-
+}
 
 #endif /* end of include guard: DISTRIBUTED_PARTITIONER_ZYL2XF6R */

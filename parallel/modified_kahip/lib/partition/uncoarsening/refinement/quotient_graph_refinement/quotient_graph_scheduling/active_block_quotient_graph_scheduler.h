@@ -13,27 +13,27 @@
 #include "partition_config.h"
 #include "quotient_graph_scheduling.h"
 #include "random_functions.h"
-
+namespace kahip::modified {
 class active_block_quotient_graph_scheduler : public quotient_graph_scheduling {
-        public:
-                active_block_quotient_graph_scheduler( const PartitionConfig & config,
-                                QuotientGraphEdges & qgraph_edges, 
-                                unsigned int bank_account);
+public:
+        active_block_quotient_graph_scheduler( const PartitionConfig & config,
+                        QuotientGraphEdges & qgraph_edges,
+                        unsigned int bank_account);
 
-                virtual ~active_block_quotient_graph_scheduler();
+        virtual ~active_block_quotient_graph_scheduler();
 
-                virtual bool hasFinished();
-                virtual boundary_pair & getNext();
-                virtual void pushStatistics(qgraph_edge_statistics & statistic);
-                virtual void init();
+        virtual bool hasFinished();
+        virtual boundary_pair & getNext();
+        virtual void pushStatistics(qgraph_edge_statistics & statistic);
+        virtual void init();
 
-                void activate_blocks(std::unordered_map<PartitionID, PartitionID> & blocks);
+        void activate_blocks(std::unordered_map<PartitionID, PartitionID> & blocks);
 
-        private: 
-                QuotientGraphEdges & m_quotient_graph_edges;
-                QuotientGraphEdges   m_active_quotient_graph_edges;
-                PartitionID          m_no_of_active_blocks;
-                std::vector<bool>    m_is_block_active;
+private:
+        QuotientGraphEdges & m_quotient_graph_edges;
+        QuotientGraphEdges   m_active_quotient_graph_edges;
+        PartitionID          m_no_of_active_blocks;
+        std::vector<bool>    m_is_block_active;
 };
 
 inline void active_block_quotient_graph_scheduler::init() {
@@ -41,8 +41,8 @@ inline void active_block_quotient_graph_scheduler::init() {
         m_active_quotient_graph_edges.clear();
 
         for( unsigned int i = 0; i < m_quotient_graph_edges.size(); i++) {
-                PartitionID lhs = m_quotient_graph_edges[i].lhs;                      
-                PartitionID rhs = m_quotient_graph_edges[i].rhs;  
+                PartitionID lhs = m_quotient_graph_edges[i].lhs;
+                PartitionID rhs = m_quotient_graph_edges[i].rhs;
 
                 if(m_is_block_active[lhs]) m_no_of_active_blocks++;
                 if(m_is_block_active[rhs]) m_no_of_active_blocks++;
@@ -64,14 +64,14 @@ inline bool active_block_quotient_graph_scheduler::hasFinished( ) {
                 init();
         }
 
-        return m_no_of_active_blocks == 0;        
+        return m_no_of_active_blocks == 0;
 }
 
 inline boundary_pair & active_block_quotient_graph_scheduler::getNext( ) {
         boundary_pair & ret_value = m_active_quotient_graph_edges.back();
         m_active_quotient_graph_edges.pop_back();
 
-        return ret_value; 
+        return ret_value;
 }
 
 inline void active_block_quotient_graph_scheduler::pushStatistics(qgraph_edge_statistics & statistic) {
@@ -84,8 +84,8 @@ inline void active_block_quotient_graph_scheduler::pushStatistics(qgraph_edge_st
 inline void active_block_quotient_graph_scheduler::activate_blocks(std::unordered_map<PartitionID, PartitionID> & blocks) {
         std::unordered_map<PartitionID, PartitionID>::iterator it;
         for(it = blocks.begin(); it != blocks.end(); ++it) {
-             m_is_block_active[it->first] = true;
+                m_is_block_active[it->first] = true;
         }
 }
-
+}
 #endif /* end of include guard: ACTIVE_BLOCK_QUOTIENT_GRAPH_SCHEDULER_2QATIGSY */
