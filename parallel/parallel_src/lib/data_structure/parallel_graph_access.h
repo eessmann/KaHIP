@@ -61,6 +61,7 @@ struct Edge {
 #define forall_out_edges(G,e,n) { for(EdgeID e = G.get_first_edge(n), end = G.get_first_invalid_edge(n); e < end; ++e) {
 #define endfor }}
 
+
 class parallel_graph_access;
 
 //handle communication of data associated with ghost nodes
@@ -1026,5 +1027,39 @@ inline void ghost_node_communication::update_ghost_node_data_global() {
 
         MPI_Barrier(m_communicator);
 }
+
+// Modern and safe graph traversal functions
+// Function to iterate over all local nodes
+template <typename Func>
+void for_all_local_nodes(parallel_graph_access& G, Func func) {
+        for (NodeID n = 0; n < G.number_of_local_nodes(); ++n) {
+                func(n);
+        }
+}
+
+// Function to iterate over all ghost nodes
+template <typename Func>
+void for_all_ghost_nodes(parallel_graph_access& G, Func func) {
+        for (NodeID node = G.number_of_local_nodes()+1, end = G.number_of_local_nodes()+1+G.number_of_ghost_nodes(); node < end; ++node) {
+                func(node);
+        }
+}
+
+// Function to iterate over all local edges
+template <typename Func>
+void for_all_local_edges(parallel_graph_access& G, Func func) {
+        for (EdgeID e = 0; e < G.number_of_local_edges(); ++e) {
+                func(e);
+        }
+}
+
+// Function to iterate over all outgoing edges of a node
+template <typename Func>
+void for_all_out_edges(parallel_graph_access& G, NodeID n, Func func) {
+        for (EdgeID e = G.get_first_edge(n); e < G.get_first_invalid_edge(n); ++e) {
+                func(e);
+        }
+}
+
 }
 #endif /* end of include guard: PARALLEL_GRAPH_ACCESS_X6O9MRS8 */
