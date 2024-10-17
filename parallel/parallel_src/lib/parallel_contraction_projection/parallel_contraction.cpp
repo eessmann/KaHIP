@@ -427,10 +427,10 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         }
         //now distribute the node weights
         //pack messages
-        std::unordered_map< NodeID, NodeWeight >::iterator wit;
-        for( wit = node_weights.begin(); wit != node_weights.end(); wit++) {
-                NodeID node       = wit->first;
-                NodeWeight weight = wit->second;
+        //std::unordered_map< NodeID, NodeWeight >::iterator wit;
+        for(auto & node_weight : node_weights) {
+                NodeID node       = node_weight.first;
+                NodeWeight weight = node_weight.second;
                 PEID peID         = node / divisor;
 
                 m_messages[ peID ].push_back( node );
