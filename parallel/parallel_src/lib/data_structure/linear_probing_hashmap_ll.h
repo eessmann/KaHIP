@@ -9,6 +9,7 @@
 #define LINEAR_PROBING_HASHMAP_LL_KQ738TKS
 
 #include <stack>
+namespace parhip {
 
 const ULONG NOT_CONTAINED_LL = std::numeric_limits<ULONG>::max();
 
@@ -103,6 +104,6 @@ private:
         std::vector< KeyValuePair > m_internal_map;
         std::stack< ULONG > m_contained_key_positions;
 };
-
+}
 
 #endif /* end of include guard: LINEAR_PROBING_HASHMAP_KQ738TKS */

@@ -1,3 +1,6 @@
 .cache/
 build/
 deploy/
+.idea
+**/.DS_Store
+cmake-build-*

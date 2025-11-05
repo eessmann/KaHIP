@@ -12,7 +12,7 @@
 #include <vector>
 #include "data_structure/parallel_graph_access.h"
 #include "definitions.h"
-
+namespace parhip {
 class dspac {
 public:
     dspac(parallel_graph_access &graph, MPI_Comm comm, EdgeWeight infinity);
@@ -33,5 +33,5 @@ private:
     EdgeWeight m_infinity;
     parallel_graph_access &m_input_graph;
 };
-
+}
 #endif // KAHIP_DSPAC_H

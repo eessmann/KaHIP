@@ -12,47 +12,47 @@
 #include "data_structure/graph_access.h"
 #include "matching/matching.h"
 #include "partition_config.h"
-
+namespace kahip::modified {
 typedef NodeID Regions;
 
 class contraction {
-        public:
-                contraction();
-                virtual ~contraction();
+public:
+        contraction() = default;
+        virtual ~contraction() = default;
 
-                void contract(const PartitionConfig & partition_config, 
-                              graph_access & finer, 
-                              graph_access & coarser, 
-                              const Matching & edge_matching,
-                              const CoarseMapping & coarse_mapping,
-                              const NodeID & no_of_coarse_vertices,
-                              const NodePermutationMap & permutation) const;
+        void contract(const PartitionConfig & partition_config,
+                      graph_access & finer,
+                      graph_access & coarser,
+                      const Matching & edge_matching,
+                      const CoarseMapping & coarse_mapping,
+                      const NodeID & no_of_coarse_vertices,
+                      const NodePermutationMap & permutation) const;
 
-                void contract_clustering(const PartitionConfig & partition_config, 
-                              graph_access & finer, 
-                              graph_access & coarser, 
-                              const Matching & edge_matching,
-                              const CoarseMapping & coarse_mapping,
-                              const NodeID & no_of_coarse_vertices,
-                              const NodePermutationMap & permutation) const;
+        void contract_clustering(const PartitionConfig & partition_config,
+                      graph_access & finer,
+                      graph_access & coarser,
+                      const Matching & edge_matching,
+                      const CoarseMapping & coarse_mapping,
+                      const NodeID & no_of_coarse_vertices,
+                      const NodePermutationMap & permutation) const;
 
 
-                 void contract_partitioned(const PartitionConfig & partition_config, 
-                                           graph_access & G, 
-                                           graph_access & coarser, 
-                                           const Matching & edge_matching,
-                                           const CoarseMapping & coarse_mapping,
-                                           const NodeID & no_of_coarse_vertices,
-                                           const NodePermutationMap & permutation) const; 
+        void contract_partitioned(const PartitionConfig & partition_config,
+                                  graph_access & G,
+                                  graph_access & coarser,
+                                  const Matching & edge_matching,
+                                  const CoarseMapping & coarse_mapping,
+                                  const NodeID & no_of_coarse_vertices,
+                                  const NodePermutationMap & permutation) const;
 
-        private:
-                // visits an edge in G (and auxillary graph) and updates/creates and edge in coarser graph 
-                void visit_edge(graph_access & G, 
-                                graph_access & coarser,
-                                std::vector<NodeID> & edge_positions,
-                                const NodeID coarseNode,
-                                const EdgeID e,
-                                const std::vector<NodeID> & new_edge_targets) const;
+private:
+        // visits an edge in G (and auxillary graph) and updates/creates and edge in coarser graph
+        void visit_edge(graph_access & G,
+                        graph_access & coarser,
+                        std::vector<NodeID> & edge_positions,
+                        const NodeID coarseNode,
+                        const EdgeID e,
+                        const std::vector<NodeID> & new_edge_targets) const;
 
 
 };
@@ -80,7 +80,7 @@ inline void contraction::visit_edge(graph_access & G,
                 coarser.setEdgeWeight(edge_pos, new_edge_weight);                               
         }
 }
-
+}
 
 
 #endif /* end of include guard: CONTRACTION_VIXZ9K0F */

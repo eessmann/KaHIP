@@ -14,7 +14,7 @@
 #include "data_structure/graph_access.h"
 #include "partition_config.h"
 #include "timer.h"
-
+namespace kahip::modified {
 struct Individuum {
         int* partition_map;
         EdgeWeight objective;
@@ -26,77 +26,77 @@ struct ENC {
 };
 
 class population {
-        public:
-                population( MPI_Comm comm, const PartitionConfig & config );
-                virtual ~population();
+public:
+        population( MPI_Comm comm, const PartitionConfig & config );
+        virtual ~population();
 
-                void createIndividuum(const PartitionConfig & config, 
-                                      graph_access & G, 
-				      Individuum & ind, 
-				      bool output); 
+        void createIndividuum(const PartitionConfig & config,
+                              graph_access & G,
+                              Individuum & ind,
+                              bool output);
 
-                void combine(const PartitionConfig & config, 
-                             graph_access & G, 
-                             Individuum & first_ind, 
-                             Individuum & second_ind, 
-                             Individuum & output_ind); 
+        void combine(const PartitionConfig & config,
+                     graph_access & G,
+                     Individuum & first_ind,
+                     Individuum & second_ind,
+                     Individuum & output_ind);
 
-                void combine_cross(const PartitionConfig & partition_config, 
-				   graph_access & G, 
-				   Individuum & first_ind, 
-				   Individuum & output_ind);
+        void combine_cross(const PartitionConfig & partition_config,
+                           graph_access & G,
+                           Individuum & first_ind,
+                           Individuum & output_ind);
 
-                void mutate_random(const PartitionConfig & partition_config, 
-                                   graph_access & G, 
-                                   Individuum & first_ind);
+        void mutate_random(const PartitionConfig & partition_config,
+                           graph_access & G,
+                           Individuum & first_ind);
 
-                void insert(graph_access & G, Individuum & ind);
+        void insert(graph_access & G, Individuum & ind);
 
-                void set_pool_size(int size);
+        void set_pool_size(int size);
 
-                void extinction();
+        void extinction();
 
-                void get_two_random_individuals(Individuum & first, Individuum & second);
-               
-                void get_one_individual_tournament(Individuum & first); 
+        void get_two_random_individuals(Individuum & first, Individuum & second);
 
-                void get_two_individuals_tournament(Individuum & first, Individuum & second);
+        void get_one_individual_tournament(Individuum & first);
 
-                void replace(Individuum & in, Individuum & out);
+        void get_two_individuals_tournament(Individuum & first, Individuum & second);
 
-                void get_random_individuum(Individuum & ind);
+        void replace(Individuum & in, Individuum & out);
 
-                void get_best_individuum(Individuum & ind);
+        void get_random_individuum(Individuum & ind);
 
-                bool is_full(); 
+        void get_best_individuum(Individuum & ind);
 
-                void apply_fittest( graph_access & G, EdgeWeight & objective);
+        bool is_full();
 
-                unsigned size() { return m_internal_population.size(); }
-                
-                void print();
+        void apply_fittest( graph_access & G, EdgeWeight & objective);
 
-                void write_log(std::string & filename);
+        unsigned size() { return m_internal_population.size(); }
+
+        void print();
+
+        void write_log(std::string & filename);
 
 
-        private:
+private:
 
-                unsigned                m_no_partition_calls;
-                unsigned 		m_population_size;
-                std::vector<Individuum> m_internal_population;
-                std::vector< std::vector< unsigned int > > m_vertex_ENCs;
-                std::vector< ENC > m_ENCs;
+        unsigned                m_no_partition_calls;
+        unsigned 		m_population_size;
+        std::vector<Individuum> m_internal_population;
+        std::vector< std::vector< unsigned int > > m_vertex_ENCs;
+        std::vector< ENC > m_ENCs;
 
-                int m_num_NCs;
-                int m_num_NCs_computed;
-                int m_num_ENCs;
-                int m_time_stamp;
+        int m_num_NCs;
+        int m_num_NCs_computed;
+        int m_num_ENCs;
+        int m_time_stamp;
 
-                MPI_Comm m_communicator;
+        MPI_Comm m_communicator;
 
-                std::stringstream m_filebuffer_string;
-                timer   	  m_global_timer;
+        std::stringstream m_filebuffer_string;
+        timer   	  m_global_timer;
 };
-
+}
 
 #endif /* end of include guard: POPULATION_AEFH46G6 */

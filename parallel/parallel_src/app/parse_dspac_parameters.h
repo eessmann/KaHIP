@@ -10,7 +10,7 @@
 #include <regex.h>
 #include <string.h>
 #include "configuration.h"
-
+namespace parhip {
 struct DspacConfig {
     EdgeWeight infinity;
     PartitionID k;
@@ -34,9 +34,9 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
 
     // Define argtable.
     void *argtable[] = {
-            help, filename, k, seed, infinity, preconfiguration, imbalance, partition_filename, save_partition, save_partition_binary, end
-		
-    };
+        help, filename, k, seed, infinity, preconfiguration, imbalance, partition_filename, save_partition, save_partition_binary, end
+
+};
 
     // Parse arguments.
     int nerrors = arg_parse(argn, argv, argtable);
@@ -113,11 +113,11 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
     }
 
     if(save_partition->count > 0) {
-            partition_config.save_partition = true;
+        partition_config.save_partition = true;
     }
 
     if(save_partition_binary->count > 0) {
-            partition_config.save_partition_binary = true;
+        partition_config.save_partition_binary = true;
     }
 
     if (imbalance->count > 0) {
@@ -133,5 +133,5 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
 
     return 0;
 }
-
+}
 #endif // KAHIP_PARSE_DSPAC_PARAMETERS_H

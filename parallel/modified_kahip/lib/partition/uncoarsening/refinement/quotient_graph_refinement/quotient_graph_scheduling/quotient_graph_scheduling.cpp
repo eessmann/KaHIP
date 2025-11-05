@@ -6,11 +6,11 @@
  *****************************************************************************/
 
 #include "quotient_graph_scheduling.h"
-
+namespace kahip::modified {
 quotient_graph_scheduling::quotient_graph_scheduling() {
 }
 
 quotient_graph_scheduling::~quotient_graph_scheduling() {
                 
 }
-
+}

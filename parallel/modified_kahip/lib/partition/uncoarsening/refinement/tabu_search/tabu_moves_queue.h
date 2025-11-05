@@ -12,7 +12,7 @@
 #include <queue>
 
 #include "data_structure/matrix/normal_matrix.h"
-
+namespace kahip::modified {
 struct TabuTimePair {
         int time;
         NodeID node;
@@ -28,20 +28,20 @@ struct comparePair{
 typedef std::priority_queue< TabuTimePair, std::vector< TabuTimePair >, comparePair > PQ;
 
 class tabu_moves_queue  {
-        public:
-                tabu_moves_queue( ); 
-                virtual ~tabu_moves_queue() { };
+public:
+        tabu_moves_queue( );
+        virtual ~tabu_moves_queue() { };
 
-                NodeID size();  
-                bool empty();
+        NodeID size();
+        bool empty();
 
-                void insert(NodeID node, PartitionID block, int time); 
-                int minValue();
-                std::pair<NodeID, PartitionID> deleteMin();
+        void insert(NodeID node, PartitionID block, int time);
+        int minValue();
+        std::pair<NodeID, PartitionID> deleteMin();
 
-                bool contains(NodeID node, PartitionID block);
-        private:
-                PQ m_priority_queue;
+        bool contains(NodeID node, PartitionID block);
+private:
+        PQ m_priority_queue;
 };
 
 inline tabu_moves_queue::tabu_moves_queue() {
@@ -74,5 +74,5 @@ inline std::pair<NodeID, PartitionID> tabu_moves_queue::deleteMin() {
         m_priority_queue.pop();
         return p;        
 }
-
+}
 #endif /* end of include guard: BUCKET_PQ_EM8YJPA9 */

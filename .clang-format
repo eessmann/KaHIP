@@ -1,0 +1,7 @@
+BasedOnStyle: Chromium
+TabWidth: 2
+IndentWidth: 2
+SortIncludes: CaseInsensitive
+Language: Cpp
+Standard: c++20
+QualifierAlignment: Right

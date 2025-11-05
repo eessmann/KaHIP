@@ -28,7 +28,7 @@
 
 
 int main(int argn, char **argv) {
-
+        using namespace kahip::modified;
         PartitionConfig partition_config;
         std::string graph_filename;
 

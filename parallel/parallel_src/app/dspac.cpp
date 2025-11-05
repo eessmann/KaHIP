@@ -30,10 +30,12 @@
 #include "tools/distributed_quality_metrics.h"
 #include "dspac/dspac.h"
 #include "dspac/edge_balanced_graph_io.h"
-
+namespace parhip {
 static void executeParhip(parallel_graph_access &G, PPartitionConfig &partitionConfig);
+}
 
 int main(int argn, char **argv) {
+    using namespace parhip;
     MPI_Init(&argn, &argv);
 
     int rank, size;
@@ -136,115 +138,116 @@ int main(int argn, char **argv) {
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
 }
-
+namespace parhip {
 static void executeParhip(parallel_graph_access &G, PPartitionConfig &partitionConfig) {
-    timer t;
-    int rank, size;
-    MPI_Comm communicator = MPI_COMM_WORLD;
+  timer t;
+  int rank, size;
+  MPI_Comm communicator = MPI_COMM_WORLD;
+  MPI_Comm_rank(communicator, &rank);
+  MPI_Comm_size(communicator, &size);
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  if (communicator != MPI_COMM_NULL) {
     MPI_Comm_rank(communicator, &rank);
     MPI_Comm_size(communicator, &size);
 
-    MPI_Barrier(MPI_COMM_WORLD);
+    if (rank == ROOT) {
+      PRINT(std::cout << "log> cluster coarsening factor is set to "
+                      << partitionConfig.cluster_coarsening_factor << std::endl;)
+  }
 
-    if (communicator != MPI_COMM_NULL) {
-        MPI_Comm_rank(communicator, &rank);
-        MPI_Comm_size(communicator, &size);
+    partitionConfig.stop_factor /= partitionConfig.k;
+    if (rank != 0) partitionConfig.seed = partitionConfig.seed * size + rank;
+    srand(static_cast<unsigned int>(partitionConfig.seed));
 
-        if (rank == ROOT) {
-            PRINT(std::cout << "log> cluster coarsening factor is set to "
-                            << partitionConfig.cluster_coarsening_factor << std::endl;)
-        }
+    random_functions::setSeed(partitionConfig.seed);
+    parallel_graph_access::set_comm_rounds(partitionConfig.comm_rounds / size);
+    parallel_graph_access::set_comm_rounds_up(partitionConfig.comm_rounds / size);
+    distributed_partitioner::generate_random_choices(partitionConfig);
 
-        partitionConfig.stop_factor /= partitionConfig.k;
-        if (rank != 0) partitionConfig.seed = partitionConfig.seed * size + rank;
-        srand(static_cast<unsigned int>(partitionConfig.seed));
+    G.printMemoryUsage(std::cout);
 
-        random_functions::setSeed(partitionConfig.seed);
-        parallel_graph_access::set_comm_rounds(partitionConfig.comm_rounds / size);
-        parallel_graph_access::set_comm_rounds_up(partitionConfig.comm_rounds / size);
-        distributed_partitioner::generate_random_choices(partitionConfig);
-
-        G.printMemoryUsage(std::cout);
-
-        //compute some stats
-        EdgeWeight interPEedges = 0;
-        EdgeWeight localEdges = 0;
-        forall_local_nodes(G, node)
-        {
-            forall_out_edges(G, e, node)
-            {
-                NodeID target = G.getEdgeTarget(e);
-                if (!G.is_local_node(target)) {
-                    interPEedges++;
-                } else {
-                    localEdges++;
-                }
-            }
-            endfor
-        }
-        endfor
-
-        EdgeWeight globalInterEdges = 0;
-        EdgeWeight globalIntraEdges = 0;
-        MPI_Reduce(&interPEedges, &globalInterEdges, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, ROOT, communicator);
-        MPI_Reduce(&localEdges, &globalIntraEdges, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, ROOT, communicator);
-
-        if (rank == ROOT) {
-            std::cout << "log> ghost edges " << globalInterEdges / (double) G.number_of_global_edges() << std::endl;
-            std::cout << "log> local edges " << globalIntraEdges / (double) G.number_of_global_edges() << std::endl;
-        }
-
-        t.restart();
-        double epsilon = (partitionConfig.inbalance) / 100.0;
-        if (partitionConfig.vertex_degree_weights) {
-            throw std::logic_error("not allowed to overwrite vertex degrees");
+    //compute some stats
+    EdgeWeight interPEedges = 0;
+    EdgeWeight localEdges = 0;
+    forall_local_nodes(G, node)
+    {
+      forall_out_edges(G, e, node)
+      {
+        NodeID target = G.getEdgeTarget(e);
+        if (!G.is_local_node(target)) {
+          interPEedges++;
         } else {
-            partitionConfig.number_of_overall_nodes = G.number_of_global_nodes();
-            partitionConfig.upper_bound_partition =
-                    (1 + epsilon) * ceil(G.number_of_global_nodes() / (double) partitionConfig.k);
+          localEdges++;
         }
+      }
+      endfor
+  }
+    endfor
 
+    EdgeWeight globalInterEdges = 0;
+    EdgeWeight globalIntraEdges = 0;
+    MPI_Reduce(&interPEedges, &globalInterEdges, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, ROOT, communicator);
+    MPI_Reduce(&localEdges, &globalIntraEdges, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, ROOT, communicator);
 
-        distributed_partitioner dpart;
-        dpart.perform_partitioning(communicator, partitionConfig, G);
-
-        MPI_Barrier(communicator);
-
-        double running_time = t.elapsed();
-        distributed_quality_metrics qm;
-        EdgeWeight edge_cut = qm.edge_cut(G, communicator);
-        double balance = qm.balance(partitionConfig, G, communicator);
-        PRINT(double
-        balance_load = qm.balance_load(partitionConfig, G, communicator);)
-        PRINT(double
-        balance_load_dist = qm.balance_load_dist(partitionConfig, G, communicator);)
-
-        if (rank == ROOT) {
-            std::cout << "log>" << "=====================================" << std::endl;
-            std::cout << "log>" << "============AND WE R DONE============" << std::endl;
-            std::cout << "log>" << "=====================================" << std::endl;
-            std::cout << "log>total partitioning time elapsed " << running_time << std::endl;
-            std::cout << "log>final edge cut " << edge_cut << std::endl;
-            std::cout << "log>final balance " << balance << std::endl;
-            PRINT(std::cout << "log>final balance load " << balance_load << std::endl;)
-            PRINT(std::cout << "log>final balance load dist " << balance_load_dist << std::endl;)
-        }
-        PRINT(qm.comm_vol(partitionConfig, G, communicator);)
-        PRINT(qm.comm_vol_dist(G, communicator);)
+    if (rank == ROOT) {
+      std::cout << "log> ghost edges " << globalInterEdges / (double) G.number_of_global_edges() << std::endl;
+      std::cout << "log> local edges " << globalIntraEdges / (double) G.number_of_global_edges() << std::endl;
     }
 
-    MPI_Status st;
-    int flag;
+    t.restart();
+    double epsilon = (partitionConfig.inbalance) / 100.0;
+    if (partitionConfig.vertex_degree_weights) {
+      throw std::logic_error("not allowed to overwrite vertex degrees");
+    } else {
+      partitionConfig.number_of_overall_nodes = G.number_of_global_nodes();
+      partitionConfig.upper_bound_partition =
+              (1 + epsilon) * ceil(G.number_of_global_nodes() / (double) partitionConfig.k);
+    }
+
+
+    distributed_partitioner dpart;
+    dpart.perform_partitioning(communicator, partitionConfig, G);
+
+    MPI_Barrier(communicator);
+
+    double running_time = t.elapsed();
+    distributed_quality_metrics qm;
+    EdgeWeight edge_cut = qm.edge_cut(G, communicator);
+    double balance = qm.balance(partitionConfig, G, communicator);
+    PRINT(double
+    balance_load = qm.balance_load(partitionConfig, G, communicator);)
+    PRINT(double
+    balance_load_dist = qm.balance_load_dist(partitionConfig, G, communicator);)
+
+    if (rank == ROOT) {
+      std::cout << "log>" << "=====================================" << std::endl;
+      std::cout << "log>" << "============AND WE R DONE============" << std::endl;
+      std::cout << "log>" << "=====================================" << std::endl;
+      std::cout << "log>total partitioning time elapsed " << running_time << std::endl;
+      std::cout << "log>final edge cut " << edge_cut << std::endl;
+      std::cout << "log>final balance " << balance << std::endl;
+      PRINT(std::cout << "log>final balance load " << balance_load << std::endl;)
+      PRINT(std::cout << "log>final balance load dist " << balance_load_dist << std::endl;)
+  }
+    PRINT(qm.comm_vol(partitionConfig, G, communicator);)
+    PRINT(qm.comm_vol_dist(G, communicator);)
+}
+
+  MPI_Status st;
+  int flag;
+  MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
+  while (flag) {
+    std::cout << "attention: still incoming messages! rank " << rank << " from " << st.MPI_SOURCE << std::endl;
+    int message_length;
+    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
+    MPI_Status rst;
+    std::vector <NodeID> message;
+    message.resize(message_length);
+    MPI_Recv(&message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, st.MPI_TAG, MPI_COMM_WORLD, &rst);
     MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
-    while (flag) {
-        std::cout << "attention: still incoming messages! rank " << rank << " from " << st.MPI_SOURCE << std::endl;
-        int message_length;
-        MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-        MPI_Status rst;
-        std::vector <NodeID> message;
-        message.resize(message_length);
-        MPI_Recv(&message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, st.MPI_TAG, MPI_COMM_WORLD, &rst);
-        MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
-    };
-    MPI_Barrier(MPI_COMM_WORLD);
+  };
+  MPI_Barrier(MPI_COMM_WORLD);
+}
 }

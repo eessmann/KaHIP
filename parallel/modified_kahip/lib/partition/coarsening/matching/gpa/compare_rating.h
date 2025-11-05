@@ -10,19 +10,19 @@
 
 #include "data_structure/graph_access.h"
 #include "definitions.h"
-
+namespace kahip::modified {
 class compare_rating {
-        public:
-                compare_rating(graph_access * pG) : G(pG) {};
-                virtual ~compare_rating() {};
+public:
+        compare_rating(graph_access * pG) : G(pG) {};
+        virtual ~compare_rating() {};
 
-                bool operator() (const EdgeRatingType left, const EdgeRatingType right ) {
-                        return G->getEdgeRating(left) > G->getEdgeRating(right);
-                }
+        bool operator() (const EdgeRatingType left, const EdgeRatingType right ) {
+                return G->getEdgeRating(left) > G->getEdgeRating(right);
+        }
 
-        private:
-                graph_access * G;
+private:
+        graph_access * G;
 };
-
+}
 
 #endif /* end of include guard: COMPARE_RATING_750FUZ7Z */

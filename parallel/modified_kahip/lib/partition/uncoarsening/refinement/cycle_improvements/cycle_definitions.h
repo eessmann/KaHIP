@@ -11,7 +11,7 @@
 #include <unordered_map>
 
 #include "uncoarsening/refinement/quotient_graph_refinement/complete_boundary.h"
-
+namespace kahip::modified {
 struct undo_struct {
         NodeID node;
         PartitionID to;
@@ -28,6 +28,6 @@ struct data_qgraph_edge {
 };
 
 typedef std::unordered_map<const boundary_pair, data_qgraph_edge, hash_boundary_pair_directed, compare_boundary_pair_directed> edge_movements;
-
+}
 
 #endif /* end of include guard: DEFINITIONS_4GQMW8PZ */
