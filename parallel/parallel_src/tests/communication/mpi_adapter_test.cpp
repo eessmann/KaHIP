@@ -5,13 +5,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "communication/mpi_adapter.h"
+#include "parhip_interface.h"
 
 namespace test_support {
 struct wire_entry {
@@ -24,9 +27,14 @@ struct wire_entry {
 
 struct non_default_wire_entry {
   non_default_wire_entry() = delete;
+  constexpr non_default_wire_entry(std::uint64_t entry_id,
+                                   int entry_owner) noexcept
+      : id(entry_id), owner(entry_owner) {}
 
   std::uint64_t id;
   int owner;
+
+  auto operator==(non_default_wire_entry const&) const -> bool = default;
 };
 }  // namespace test_support
 
@@ -51,6 +59,8 @@ using parhip::mpi::communicator_view;
 using parhip::mpi::all_to_all_v;
 using parhip::mpi::collective_options;
 using parhip::mpi::make_mpi_datatype;
+using parhip::mpi::run_with_exception_barrier;
+using parhip::mpi::runtime_is_active;
 using parhip::mpi::segmented_buffer;
 using parhip::mpi::topology;
 
@@ -101,6 +111,37 @@ TEST_CASE("communicator and topology ownership stays scoped", "[unit][mpi]") {
   REQUIRE(MPI_Comm_free(&cartesian) == MPI_SUCCESS);
 }
 
+TEST_CASE("exception barrier captures failures without letting them escape",
+          "[unit][mpi]") {
+  REQUIRE(runtime_is_active());
+
+  std::exception_ptr captured;
+  run_with_exception_barrier(
+      [] { throw std::runtime_error{"boundary failure"}; },
+      [&](std::exception_ptr failure) noexcept { captured = failure; });
+
+  REQUIRE(captured != nullptr);
+  REQUIRE_THROWS_WITH(std::rethrow_exception(captured), "boundary failure");
+}
+
+TEST_CASE("exported partition boundary is non-throwing", "[unit][mpi]") {
+  using partition_function = void(idxtype*,
+                                  idxtype*,
+                                  idxtype*,
+                                  idxtype*,
+                                  idxtype*,
+                                  int*,
+                                  double*,
+                                  bool,
+                                  int,
+                                  int,
+                                  int*,
+                                  idxtype*,
+                                  MPI_Comm*) noexcept;
+  STATIC_REQUIRE(
+      std::is_same_v<decltype(&ParHIPPartitionKWay), partition_function*>);
+}
+
 TEST_CASE("explicit Hana wire metadata produces array-safe extent",
           "[unit][mpi]") {
   STATIC_REQUIRE(parhip::mpi::mpi_wire_datatype<test_support::wire_entry>);
@@ -118,7 +159,7 @@ TEST_CASE("explicit Hana wire metadata produces array-safe extent",
   REQUIRE(extent == static_cast<MPI_Aint>(sizeof(test_support::wire_entry)));
 }
 
-TEST_CASE("wire records need no default constructor", "[unit][mpi]") {
+TEST_CASE("wire-record exchange needs no default constructor", "[unit][mpi]") {
   STATIC_REQUIRE(
       parhip::mpi::mpi_wire_datatype<test_support::non_default_wire_entry>);
   STATIC_REQUIRE(
@@ -128,6 +169,22 @@ TEST_CASE("wire records need no default constructor", "[unit][mpi]") {
 
   auto datatype = make_mpi_datatype<test_support::non_default_wire_entry>();
   REQUIRE(datatype.owns_handle());
+
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  std::vector<std::vector<test_support::non_default_wire_entry>> segments(
+      static_cast<std::size_t>(world.size()));
+  segments[static_cast<std::size_t>(rank)].emplace_back(
+      static_cast<std::uint64_t>(rank + 1), rank);
+
+  auto received = all_to_all_v(
+      segmented_buffer<test_support::non_default_wire_entry>::from_segments(
+          segments),
+      world);
+
+  REQUIRE(std::ranges::equal(
+      received.segment(static_cast<std::size_t>(rank)),
+      segments[static_cast<std::size_t>(rank)]));
 }
 
 TEST_CASE("segmented buffers expose canonical contiguous spans",
@@ -135,7 +192,8 @@ TEST_CASE("segmented buffers expose canonical contiguous spans",
   auto buffer = segmented_buffer<int>::from_segments(
       std::vector<std::vector<int>>{{1, 2}, {}, {3, 4, 5}});
 
-  REQUIRE(buffer.storage() == std::vector<int>{1, 2, 3, 4, 5});
+  REQUIRE(std::ranges::equal(buffer.storage(),
+                             std::vector<int>{1, 2, 3, 4, 5}));
   REQUIRE(buffer.counts() == std::vector<std::size_t>{2, 0, 3});
   REQUIRE(buffer.offsets() == std::vector<std::size_t>{0, 2, 2});
   REQUIRE(std::ranges::equal(buffer.segment(0), std::array{1, 2}));
@@ -291,6 +349,96 @@ TEST_CASE("forced MPI-3 bounded rounds preserve every element",
                         source * 10'000 + rank * 100 + 4};
     REQUIRE(std::ranges::equal(
         received.segment(static_cast<std::size_t>(source)), expected));
+  }
+}
+
+TEST_CASE("forced MPI-3 rounds preserve self-only source segments",
+          "[unit][mpi]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  std::vector<std::vector<int>> segments(
+      static_cast<std::size_t>(world.size()));
+  for (int index = 0; index < 5; ++index) {
+    segments[static_cast<std::size_t>(rank)].push_back(rank * 100 + index);
+  }
+
+  auto received = all_to_all_v(
+      segmented_buffer<int>::from_segments(segments),
+      world,
+      collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
+
+  for (int source = 0; source < world.size(); ++source) {
+    auto const expected = source == rank
+                              ? segments[static_cast<std::size_t>(rank)]
+                              : std::vector<int>{};
+    REQUIRE(std::ranges::equal(
+        received.segment(static_cast<std::size_t>(source)), expected));
+  }
+}
+
+TEST_CASE("forced MPI-3 rounds preserve uneven asymmetric segments",
+          "[unit][mpi]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  std::vector<std::vector<int>> segments(
+      static_cast<std::size_t>(world.size()));
+  for (int destination = 0; destination < world.size(); ++destination) {
+    auto const count = 3 + rank + 2 * destination;
+    for (int index = 0; index < count; ++index) {
+      segments[static_cast<std::size_t>(destination)].push_back(
+          rank * 10'000 + destination * 100 + index);
+    }
+  }
+
+  auto received = all_to_all_v(
+      segmented_buffer<int>::from_segments(segments),
+      world,
+      collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
+
+  for (int source = 0; source < world.size(); ++source) {
+    std::vector<int> expected;
+    auto const count = 3 + source + 2 * rank;
+    for (int index = 0; index < count; ++index) {
+      expected.push_back(source * 10'000 + rank * 100 + index);
+    }
+    REQUIRE(std::ranges::equal(
+        received.segment(static_cast<std::size_t>(source)), expected));
+  }
+}
+
+TEST_CASE("forced MPI-3 rounds retain zero-work rank participation",
+          "[unit][mpi]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  std::vector<std::vector<int>> segments(
+      static_cast<std::size_t>(world.size()));
+  if (rank != 0) {
+    for (int destination = 1; destination < world.size(); ++destination) {
+      for (int index = 0; index < 5; ++index) {
+        segments[static_cast<std::size_t>(destination)].push_back(
+            rank * 10'000 + destination * 100 + index);
+      }
+    }
+  }
+
+  auto received = all_to_all_v(
+      segmented_buffer<int>::from_segments(segments),
+      world,
+      collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
+
+  if (rank == 0) {
+    REQUIRE(received.storage().empty());
+  } else {
+    REQUIRE(received.segment(0).empty());
+    for (int source = 1; source < world.size(); ++source) {
+      std::array expected{source * 10'000 + rank * 100,
+                          source * 10'000 + rank * 100 + 1,
+                          source * 10'000 + rank * 100 + 2,
+                          source * 10'000 + rank * 100 + 3,
+                          source * 10'000 + rank * 100 + 4};
+      REQUIRE(std::ranges::equal(
+          received.segment(static_cast<std::size_t>(source)), expected));
+    }
   }
 }
 }  // namespace

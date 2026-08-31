@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "parhip_interface.h"
+#include "communication/mpi_failure.h"
 #include "parallel_graph_io.h"
 #include "configuration.h"
 #include "distributed_partitioning/distributed_partitioner.h"
@@ -8,10 +9,13 @@
 #include "random_functions.h"
 
 
-// 3% imbalance should be specified as imbalance = 0.03 
-void ParHIPPartitionKWay(idxtype *vtxdist, idxtype *xadj, idxtype *adjncy, idxtype *vwgt, idxtype *adjwgt,
-                         int *nparts, double* imbalance, bool suppress_output, int seed, int mode, int *edgecut, idxtype *part, 
-                         MPI_Comm *comm) {
+namespace {
+// 3% imbalance should be specified as imbalance = 0.03
+void parhip_partition_kway(idxtype *vtxdist, idxtype *xadj, idxtype *adjncy,
+                           idxtype *vwgt, idxtype *adjwgt, int *nparts,
+                           double* imbalance, bool suppress_output, int seed,
+                           int mode, int *edgecut, idxtype *part,
+                           MPI_Comm *comm) {
         using namespace parhip;
 
 
@@ -165,4 +169,23 @@ void ParHIPPartitionKWay(idxtype *vtxdist, idxtype *xadj, idxtype *adjncy, idxty
         for (NodeID i = 0; i < local_number_of_nodes; ++i) {
                 part[i] = G.getNodeLabel(i);
         }
+}
+}  // namespace
+
+extern "C" void ParHIPPartitionKWay(
+    idxtype *vtxdist, idxtype *xadj, idxtype *adjncy, idxtype *vwgt,
+    idxtype *adjwgt, int *nparts, double* imbalance, bool suppress_output,
+    int seed, int mode, int *edgecut, idxtype *part,
+    MPI_Comm *comm) noexcept {
+        auto const affected = comm == nullptr ? MPI_COMM_NULL : *comm;
+        parhip::mpi::run_with_exception_barrier(
+            [&] {
+                    parhip_partition_kway(
+                        vtxdist, xadj, adjncy, vwgt, adjwgt, nparts, imbalance,
+                        suppress_output, seed, mode, edgecut, part, comm);
+            },
+            [affected](std::exception_ptr failure) noexcept {
+                    parhip::mpi::abort_on_exception(
+                        affected, "ParHIPPartitionKWay", failure);
+            });
 }

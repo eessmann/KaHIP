@@ -8,9 +8,12 @@
 #define PARHIP_INTERFACE
 #include <mpi.h>
 #ifdef __cplusplus
+#define PARHIP_NOEXCEPT noexcept
 
 extern "C"
 {
+#else
+#define PARHIP_NOEXCEPT
 #endif
 typedef unsigned long long idxtype;
 
@@ -23,10 +26,12 @@ const int ECOSOCIAL       = 5;
 
 void ParHIPPartitionKWay(idxtype *vtxdist, idxtype *xadj, idxtype *adjncy, idxtype *vwgt, idxtype *adjwgt,
                          int *nparts, double* imbalance, bool suppress_output, int seed, int mode, int *edgecut, idxtype *part, 
-                         MPI_Comm *comm);
+                         MPI_Comm *comm) PARHIP_NOEXCEPT;
 #ifdef __cplusplus
 }
 #endif
+
+#undef PARHIP_NOEXCEPT
 
 
 #endif /* end of include guard: PARHIP_INTERFAVE */

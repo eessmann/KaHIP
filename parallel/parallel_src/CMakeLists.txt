@@ -93,6 +93,7 @@ set(LIBPARALLEL_SOURCE_FILES
     lib/distributed_partitioning/initial_partitioning/distributed_evolutionary_partitioning.cpp
     lib/distributed_partitioning/initial_partitioning/random_initial_partitioning.cpp
     lib/communication/mpi_adapter.cpp
+    lib/communication/mpi_failure.cpp
     lib/communication/mpi_tools.cpp
     lib/communication/dummy_operations.cpp
     lib/io/parallel_graph_io.cpp

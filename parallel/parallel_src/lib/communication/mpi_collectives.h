@@ -133,7 +133,7 @@ inline auto needs_bounded_rounds(
 template <typename T>
 void mpi3_bounded_all_to_all_v(
     segmented_buffer<T> const& sends,
-    std::vector<T>& receive_storage,
+    std::span<T> receive_storage,
     std::vector<std::size_t> const& receive_counts,
     std::vector<std::size_t> const& receive_offsets,
     MPI_Datatype datatype,
@@ -226,18 +226,23 @@ template <mpi_datatype T>
     communicator_view communicator,
     collective_options options = {})
     -> segmented_buffer<T> {
-  auto const communicator_size = static_cast<std::size_t>(communicator.size());
+  auto owned_communicator = parhip::mpi::communicator{communicator};
+  auto const collective_communicator = owned_communicator.view();
+  auto const communicator_size =
+      static_cast<std::size_t>(collective_communicator.size());
   detail::validate_dense_layout(
-      sends.has_canonical_layout(communicator_size), communicator);
+      sends.has_canonical_layout(communicator_size), collective_communicator);
   auto const mpi3_ceiling =
-      detail::validate_collective_options(options, communicator);
+      detail::validate_collective_options(options, collective_communicator);
 
-  auto receive_counts = detail::exchange_counts(sends.counts(), communicator);
+  auto receive_counts =
+      detail::exchange_counts(sends.counts(), collective_communicator);
   auto receive_offsets = detail::canonical_offsets(receive_counts);
   auto const receive_size = receive_counts.empty()
                                 ? std::size_t{0}
                                 : receive_offsets.back() + receive_counts.back();
-  std::vector<T> receive_storage(receive_size);
+  auto received = segmented_buffer<T>::uninitialized(
+      receive_size, std::move(receive_counts), std::move(receive_offsets));
   auto datatype = make_mpi_datatype<T>();
 
 #if KAHIP_HAVE_MPI_ALLTOALLV_C
@@ -254,37 +259,39 @@ template <mpi_datatype T>
       send_counts.push_back(
           detail::checked_mpi_count(sends.counts()[index], "MPI send count"));
       receive_counts_c.push_back(detail::checked_mpi_count(
-          receive_counts[index], "MPI receive count"));
+          received.counts()[index], "MPI receive count"));
       send_offsets.push_back(
           detail::checked_mpi_aint(sends.offsets()[index], "MPI send offset"));
       receive_offsets_c.push_back(detail::checked_mpi_aint(
-          receive_offsets[index], "MPI receive offset"));
+          received.offsets()[index], "MPI receive offset"));
     }
     check(MPI_Alltoallv_c(sends.storage().data(),
                           send_counts.data(),
                           send_offsets.data(),
                           datatype.native_handle(),
-                          receive_storage.data(),
+                          received.storage().data(),
                           receive_counts_c.data(),
                           receive_offsets_c.data(),
                           datatype.native_handle(),
-                          communicator.native_handle()),
+                          collective_communicator.native_handle()),
           "MPI_Alltoallv_c(dense exchange)");
-    return segmented_buffer<T>{std::move(receive_storage),
-                               std::move(receive_counts),
-                               std::move(receive_offsets)};
+    return received;
   }
 #endif
 
   if (detail::needs_bounded_rounds(
-          sends, receive_counts, receive_offsets, mpi3_ceiling, communicator)) {
+          sends,
+          received.counts(),
+          received.offsets(),
+          mpi3_ceiling,
+          collective_communicator)) {
     detail::mpi3_bounded_all_to_all_v(sends,
-                                      receive_storage,
-                                      receive_counts,
-                                      receive_offsets,
+                                      received.storage(),
+                                      received.counts(),
+                                      received.offsets(),
                                       datatype.native_handle(),
                                       mpi3_ceiling,
-                                      communicator);
+                                      collective_communicator);
   } else {
     std::vector<int> send_counts;
     std::vector<int> receive_counts_i;
@@ -298,26 +305,25 @@ template <mpi_datatype T>
       send_counts.push_back(
           detail::checked_int(sends.counts()[index], "MPI send count"));
       receive_counts_i.push_back(
-          detail::checked_int(receive_counts[index], "MPI receive count"));
+          detail::checked_int(received.counts()[index], "MPI receive count"));
       send_offsets.push_back(
           detail::checked_int(sends.offsets()[index], "MPI send offset"));
       receive_offsets_i.push_back(
-          detail::checked_int(receive_offsets[index], "MPI receive offset"));
+          detail::checked_int(received.offsets()[index],
+                              "MPI receive offset"));
     }
     check(MPI_Alltoallv(sends.storage().data(),
                         send_counts.data(),
                         send_offsets.data(),
                         datatype.native_handle(),
-                        receive_storage.data(),
+                        received.storage().data(),
                         receive_counts_i.data(),
                         receive_offsets_i.data(),
                         datatype.native_handle(),
-                        communicator.native_handle()),
+                        collective_communicator.native_handle()),
           "MPI_Alltoallv(dense exchange)");
   }
 
-  return segmented_buffer<T>{std::move(receive_storage),
-                             std::move(receive_counts),
-                             std::move(receive_offsets)};
+  return received;
 }
 }  // namespace parhip::mpi

@@ -51,7 +51,12 @@ add_test(
 add_executable(mpi_adapter_test communication/mpi_adapter_test.cpp)
 target_link_libraries(
     mpi_adapter_test
-    PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
+    PRIVATE
+        catch_mpi_runner
+        parallel
+        parhip_interface
+        kahip_options
+        kahip_warnings
 )
 
 foreach(mpi_ranks RANGE 1 5)

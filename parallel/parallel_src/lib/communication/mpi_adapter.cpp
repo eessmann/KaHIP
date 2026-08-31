@@ -3,20 +3,6 @@
 #include <utility>
 
 namespace parhip::mpi {
-namespace {
-[[nodiscard]] auto mpi_is_active() noexcept -> bool {
-  int initialized = 0;
-  int finalized = 0;
-  if (MPI_Initialized(&initialized) != MPI_SUCCESS || initialized == 0) {
-    return false;
-  }
-  if (MPI_Finalized(&finalized) != MPI_SUCCESS) {
-    return false;
-  }
-  return finalized == 0;
-}
-}  // namespace
-
 communicator::communicator(communicator_view source) {
   check(MPI_Comm_dup(source.native_handle(), &communicator_), "MPI_Comm_dup");
   auto const handler_result =
@@ -41,7 +27,7 @@ auto communicator::operator=(communicator&& other) noexcept -> communicator& {
 }
 
 void communicator::reset() noexcept {
-  if (communicator_ != MPI_COMM_NULL && mpi_is_active()) {
+  if (communicator_ != MPI_COMM_NULL && runtime_is_active()) {
     MPI_Comm_free(&communicator_);
   }
   communicator_ = MPI_COMM_NULL;
@@ -73,7 +59,7 @@ auto datatype::operator=(datatype&& other) noexcept -> datatype& {
 }
 
 void datatype::reset() noexcept {
-  if (owns_ && handle_ != MPI_DATATYPE_NULL && mpi_is_active()) {
+  if (owns_ && handle_ != MPI_DATATYPE_NULL && runtime_is_active()) {
     MPI_Type_free(&handle_);
   }
   handle_ = MPI_DATATYPE_NULL;

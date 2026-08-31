@@ -14,10 +14,12 @@
 #include <regex.h>
 #endif
 #include <sstream>
+#include <stdexcept>
 #include <stdio.h>
 #include <string.h> 
 
 #include "communication/mpi_tools.h"
+#include "communication/mpi_failure.h"
 #include "communication/dummy_operations.h"
 #include "data_structure/parallel_graph_access.h"
 #include "distributed_partitioning/distributed_partitioner.h"
@@ -32,7 +34,16 @@
 
 int main(int argn, char **argv) {
         using namespace parhip;
-        MPI_Init(&argn, &argv);    /* starts MPI */
+        auto const init_result = MPI_Init(&argn, &argv);    /* starts MPI */
+        if (init_result != MPI_SUCCESS) {
+                mpi::abort_on_exception(
+                    MPI_COMM_NULL,
+                    "parhip MPI_Init",
+                    std::make_exception_ptr(
+                        std::runtime_error{"MPI_Init failed"}));
+        }
+
+        mpi::run_with_exception_barrier([&] {
 
         PPartitionConfig partition_config;
         std::string graph_filename;
@@ -43,7 +54,7 @@ int main(int argn, char **argv) {
 
         if(ret_code) {
                 MPI_Finalize();
-                return 0;
+                return;
         }
 
         int rank, size;
@@ -194,4 +205,10 @@ int main(int argn, char **argv) {
 
         MPI_Barrier(MPI_COMM_WORLD);
         MPI_Finalize();
+
+        }, [](std::exception_ptr failure) noexcept {
+                mpi::abort_on_exception(
+                    MPI_COMM_WORLD, "parhip executable", failure);
+        });
+        return 0;
 }
