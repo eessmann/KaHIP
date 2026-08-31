@@ -47,6 +47,30 @@ add_test(
         $<TARGET_FILE:parallel_contraction_mpi_test>
         ${MPIEXEC_POSTFLAGS}
 )
+
+add_executable(mpi_adapter_test communication/mpi_adapter_test.cpp)
+target_link_libraries(
+    mpi_adapter_test
+    PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
+)
+
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-mpi-adapter-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:mpi_adapter_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-mpi-adapter-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 10
+    )
+endforeach()
 set_tests_properties(
     unit-parallel-contraction-mpi
     PROPERTIES

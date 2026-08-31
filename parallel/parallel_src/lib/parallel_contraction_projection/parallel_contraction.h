@@ -66,4 +66,19 @@ struct bundled_node_weight {
 };
 }  // namespace contraction
 }
+
+template <>
+struct parhip::mpi::wire_members<parhip::contraction::bundled_edge> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &parhip::contraction::bundled_edge::source,
+      &parhip::contraction::bundled_edge::target,
+      &parhip::contraction::bundled_edge::weight);
+};
+
+template <>
+struct parhip::mpi::wire_members<parhip::contraction::bundled_node_weight> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &parhip::contraction::bundled_node_weight::node,
+      &parhip::contraction::bundled_node_weight::weight);
+};
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */

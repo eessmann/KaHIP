@@ -6,7 +6,31 @@ if(DETERMINISTIC_PARHIP)
     add_definitions("-DDETERMINISTIC_PARHIP")
 endif()
 
-add_subdirectory(extern/cista)
+include(CheckCXXSourceCompiles)
+include(CMakePushCheckState)
+cmake_push_check_state(RESET)
+set(CMAKE_REQUIRED_LIBRARIES MPI::MPI_CXX)
+check_cxx_source_compiles(
+    [=[
+        #include <mpi.h>
+        int main() {
+            MPI_Count counts[1]{};
+            MPI_Aint displacements[1]{};
+            return MPI_Alltoallv_c(
+                nullptr, counts, displacements, MPI_BYTE,
+                nullptr, counts, displacements, MPI_BYTE, MPI_COMM_WORLD
+            );
+        }
+    ]=]
+    KAHIP_HAVE_MPI_ALLTOALLV_C
+)
+cmake_pop_check_state()
+set(PARHIP_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${PARHIP_GENERATED_INCLUDE_DIR}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/kahip_mpi_capabilities.h.in"
+    "${PARHIP_GENERATED_INCLUDE_DIR}/kahip_mpi_capabilities.h"
+)
 
 set(
     PARHIP_PRIVATE_INCLUDE_DIRS
@@ -21,7 +45,9 @@ set(
 function(kahip_configure_parhip_object target)
     target_include_directories(
         ${target}
-        BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
+        BEFORE PUBLIC
+            ${PARHIP_PRIVATE_INCLUDE_DIRS}
+            "${PARHIP_GENERATED_INCLUDE_DIR}"
     )
     target_link_libraries(
         ${target}
@@ -66,6 +92,7 @@ set(LIBPARALLEL_SOURCE_FILES
     lib/distributed_partitioning/initial_partitioning/initial_partitioning.cpp
     lib/distributed_partitioning/initial_partitioning/distributed_evolutionary_partitioning.cpp
     lib/distributed_partitioning/initial_partitioning/random_initial_partitioning.cpp
+    lib/communication/mpi_adapter.cpp
     lib/communication/mpi_tools.cpp
     lib/communication/dummy_operations.cpp
     lib/io/parallel_graph_io.cpp
@@ -85,7 +112,6 @@ target_link_libraries(
         libmodified_kahip_interface
         argtable3
         kahip_version
-        cista::cista
         fmt::fmt
         spdlog::spdlog
         Boost::hana
@@ -95,7 +121,9 @@ target_link_libraries(
 add_library(parallel)
 target_include_directories(
     parallel
-    BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
+    BEFORE PUBLIC
+        ${PARHIP_PRIVATE_INCLUDE_DIRS}
+        "${PARHIP_GENERATED_INCLUDE_DIR}"
 )
 target_link_libraries(
     parallel
@@ -104,10 +132,11 @@ target_link_libraries(
 target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC argtable3)
 target_link_libraries(parallel PUBLIC kahip_version)
-target_link_libraries(parallel PUBLIC MPI::MPI_CXX cista::cista)
+target_link_libraries(parallel PUBLIC MPI::MPI_CXX)
 target_link_libraries(
     parallel
-    PRIVATE fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
+    PRIVATE fmt::fmt spdlog::spdlog
+    PUBLIC Boost::hana Boost::mp11
 )
 
 set(LIBGRAPH2BGF_SOURCE_FILES

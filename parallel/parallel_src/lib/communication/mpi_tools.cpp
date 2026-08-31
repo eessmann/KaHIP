@@ -206,14 +206,4 @@ void mpi_tools::distribute_local_graph(MPI_Comm communicator,
   delete[] vwgt;
   delete[] adjwgt;
 }
-auto mpi::exchange_num_messages(std::vector<int> const& num_sent_per_rank,
-                                MPI_Comm communicator) -> std::vector<int> {
-  PEID size;
-  MPI_Comm_size(communicator, &size);
-  // Preparing receive buffers for the lengths
-  std::vector<int> num_recv_from_rank(size, 0);
-  MPI_Alltoall(num_sent_per_rank.data(), 1, MPI_INT, num_recv_from_rank.data(),
-               1, MPI_INT, communicator);
-  return num_recv_from_rank;
-}
 }

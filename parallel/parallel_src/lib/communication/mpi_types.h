@@ -1,311 +1,181 @@
-//
-// Created by Erich Essmann on 03/09/2024.
-//
-
-// mpi_datatype_trait.h
 #pragma once
 
 #include <mpi.h>
+
+#include <boost/hana/for_each.hpp>
+#include <boost/hana/tuple.hpp>
+#include <boost/mp11/algorithm.hpp>
+#include <boost/mp11/list.hpp>
+
+#include <array>
 #include <complex>
-#include <concepts>
 #include <cstddef>
-#include <cstdint>
-#include <mutex>
+#include <memory>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
-#include <cista/reflection/arity.h>
-#include <cista/reflection/for_each_field.h>
-#include <cista/serialization.h>
-namespace parhip {
-namespace mpi {
-namespace details {
-// Define an enum to represent the kind of MPI data
-enum class mpi_data_kinds : uint8_t { none, base, composite };
+#include "communication/mpi_error.h"
 
-// Trait to determine the MPI data kind
-template <typename DataType>
-struct mpi_data_kind_trait {
-  static constexpr mpi_data_kinds kind = mpi_data_kinds::none;
-};
+namespace parhip::mpi {
+namespace detail {
+using native_mpi_types = boost::mp11::mp_list<
+    char,
+    wchar_t,
+    signed char,
+    unsigned char,
+    short,
+    unsigned short,
+    int,
+    unsigned int,
+    long,
+    unsigned long,
+    long long,
+    unsigned long long,
+    float,
+    double,
+    long double,
+    bool,
+    std::complex<float>,
+    std::complex<double>,
+    std::complex<long double>>;
 
-// Mutex for thread safety; needed for the cleanup function
-inline std::mutex mpi_type_mutex;
-
-// Function to get the list of custom MPI datatypes
-inline std::vector<MPI_Datatype>& get_custom_mpi_types() {
-  static std::vector<MPI_Datatype> custom_types;
-  return custom_types;
-}
-
-// Declare the keyval for the attribute
-inline constinit int mpi_type_cleanup_keyval = MPI_KEYVAL_INVALID;
-
-// Cleanup function called during MPI_Finalize
-inline int mpi_type_cleanup(MPI_Comm  /*comm*/,
-                            int  /*keyval*/,
-                            void*  /*attribute_val*/,
-                            void*  /*extra_state*/) {
-  std::scoped_lock const lock{mpi_type_mutex};
-
-  auto& custom_types = get_custom_mpi_types();
-  for (auto&& datatype : custom_types) {
-    if (datatype != MPI_DATATYPE_NULL) {
-      MPI_Type_free(&datatype);
-      datatype = MPI_DATATYPE_NULL;
-    }
-  }
-  custom_types.clear();
-
-  // Free the keyval
-  MPI_Comm_free_keyval(&mpi_type_cleanup_keyval);
-  mpi_type_cleanup_keyval = MPI_KEYVAL_INVALID;
-
-  return MPI_SUCCESS;
-}
-
-// Initialize the attribute and set the cleanup function
-inline void initialize_mpi_type_cleanup() {
-  // Use a static function-local variable to ensure initialization occurs only
-  // once
-  static bool const initialized = []() {
-    int mpi_error =
-        MPI_Comm_create_keyval(MPI_COMM_NULL_COPY_FN, mpi_type_cleanup,
-                               &mpi_type_cleanup_keyval, nullptr);
-    if (mpi_error != MPI_SUCCESS) {
-      throw std::runtime_error("MPI_Comm_create_keyval() failed");
-    }
-
-    // Set an attribute on MPI_COMM_WORLD
-    mpi_error =
-        MPI_Comm_set_attr(MPI_COMM_WORLD, mpi_type_cleanup_keyval, nullptr);
-    if (mpi_error != MPI_SUCCESS) {
-      throw std::runtime_error("MPI_Comm_set_attr() failed");
-    }
-
-    return true;
-  }();
-  (void)initialized;  // Suppress unused variable warning
-}
-
-// Detect aggregate types and set kind to composite
 template <typename T>
-  requires std::is_aggregate_v<T>
-struct mpi_data_kind_trait<T> {
-  static constexpr mpi_data_kinds kind = mpi_data_kinds::composite;
+using unqualified_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+template <typename T>
+inline constexpr bool is_native_mpi_type =
+    boost::mp11::mp_contains<native_mpi_types, unqualified_t<T>>::value;
+
+template <typename T>
+  requires is_native_mpi_type<T>
+auto native_mpi_handle() noexcept -> MPI_Datatype {
+  constexpr auto index =
+      boost::mp11::mp_find<native_mpi_types, unqualified_t<T>>::value;
+  auto const handles = std::array{
+      MPI_CHAR,
+      MPI_WCHAR,
+      MPI_SIGNED_CHAR,
+      MPI_UNSIGNED_CHAR,
+      MPI_SHORT,
+      MPI_UNSIGNED_SHORT,
+      MPI_INT,
+      MPI_UNSIGNED,
+      MPI_LONG,
+      MPI_UNSIGNED_LONG,
+      MPI_LONG_LONG_INT,
+      MPI_UNSIGNED_LONG_LONG,
+      MPI_FLOAT,
+      MPI_DOUBLE,
+      MPI_LONG_DOUBLE,
+      MPI_CXX_BOOL,
+      MPI_CXX_FLOAT_COMPLEX,
+      MPI_CXX_DOUBLE_COMPLEX,
+      MPI_CXX_LONG_DOUBLE_COMPLEX};
+  return handles[index];
+}
+}  // namespace detail
+
+template <typename T>
+concept mpi_native_datatype = detail::is_native_mpi_type<T>;
+
+template <typename T>
+struct wire_members;
+
+template <typename T>
+concept mpi_wire_datatype =
+    std::is_standard_layout_v<detail::unqualified_t<T>> &&
+    std::is_trivially_copyable_v<detail::unqualified_t<T>> && requires {
+      wire_members<detail::unqualified_t<T>>::value;
+    };
+
+template <typename T>
+concept mpi_datatype = mpi_native_datatype<T> || mpi_wire_datatype<T>;
+
+class datatype {
+public:
+  ~datatype() noexcept;
+
+  datatype(datatype const&) = delete;
+  auto operator=(datatype const&) -> datatype& = delete;
+  datatype(datatype&& other) noexcept;
+  auto operator=(datatype&& other) noexcept -> datatype&;
+
+  [[nodiscard]] static auto borrowed(MPI_Datatype handle) noexcept
+      -> datatype {
+    return datatype{handle, false};
+  }
+  [[nodiscard]] static auto owned(MPI_Datatype handle) noexcept -> datatype {
+    return datatype{handle, true};
+  }
+
+  [[nodiscard]] auto native_handle() const noexcept -> MPI_Datatype {
+    return handle_;
+  }
+  [[nodiscard]] auto owns_handle() const noexcept -> bool { return owns_; }
+
+private:
+  explicit datatype(MPI_Datatype handle, bool owns) noexcept
+      : handle_(handle), owns_(owns) {}
+  void reset() noexcept;
+
+  MPI_Datatype handle_ = MPI_DATATYPE_NULL;
+  bool owns_ = false;
 };
 
-// Macro to specialize mpi_data_kind_trait for unique base types
-#define MPI_BASE_TYPE_KIND(type)                                 \
-template <>                                                    \
-struct mpi_data_kind_trait<type> {                             \
-static constexpr mpi_data_kinds kind = mpi_data_kinds::base; \
-};
-
-// Specializations for unique base types
-MPI_BASE_TYPE_KIND(char)
-MPI_BASE_TYPE_KIND(wchar_t)
-MPI_BASE_TYPE_KIND(signed char)
-MPI_BASE_TYPE_KIND(unsigned char)
-MPI_BASE_TYPE_KIND(short)
-MPI_BASE_TYPE_KIND(unsigned short)
-MPI_BASE_TYPE_KIND(int)
-MPI_BASE_TYPE_KIND(unsigned int)
-MPI_BASE_TYPE_KIND(long)
-MPI_BASE_TYPE_KIND(unsigned long)
-MPI_BASE_TYPE_KIND(long long)
-MPI_BASE_TYPE_KIND(unsigned long long)
-MPI_BASE_TYPE_KIND(float)
-MPI_BASE_TYPE_KIND(double)
-MPI_BASE_TYPE_KIND(long double)
-MPI_BASE_TYPE_KIND(bool)
-MPI_BASE_TYPE_KIND(std::complex<double>)
-
-#undef MPI_BASE_TYPE_KIND
-
-// Trait to get the MPI_Datatype for a given DataType
-template <typename DataType>
-struct mpi_datatype_trait;
-
-// Macro to specialize mpi_datatype_trait for unique base types
-#define MPI_DATATYPE_TRAIT(type, mpi_type_const) \
-template <>                                    \
-struct mpi_datatype_trait<type> {              \
-static MPI_Datatype get_mpi_type() {         \
-return mpi_type_const;                     \
-}                                            \
-};
-
-// Map unique base types to MPI_Datatypes
-MPI_DATATYPE_TRAIT(char, MPI_CHAR)
-MPI_DATATYPE_TRAIT(wchar_t, MPI_WCHAR)
-MPI_DATATYPE_TRAIT(signed char, MPI_SIGNED_CHAR)
-MPI_DATATYPE_TRAIT(unsigned char, MPI_UNSIGNED_CHAR)
-MPI_DATATYPE_TRAIT(short, MPI_SHORT)
-MPI_DATATYPE_TRAIT(unsigned short, MPI_UNSIGNED_SHORT)
-MPI_DATATYPE_TRAIT(int, MPI_INT)
-MPI_DATATYPE_TRAIT(unsigned int, MPI_UNSIGNED)
-MPI_DATATYPE_TRAIT(long, MPI_LONG)
-MPI_DATATYPE_TRAIT(unsigned long, MPI_UNSIGNED_LONG)
-MPI_DATATYPE_TRAIT(long long, MPI_LONG_LONG_INT)
-MPI_DATATYPE_TRAIT(unsigned long long, MPI_UNSIGNED_LONG_LONG)
-MPI_DATATYPE_TRAIT(float, MPI_FLOAT)
-MPI_DATATYPE_TRAIT(double, MPI_DOUBLE)
-MPI_DATATYPE_TRAIT(long double, MPI_LONG_DOUBLE)
-MPI_DATATYPE_TRAIT(bool, MPI_CXX_BOOL)
-MPI_DATATYPE_TRAIT(std::complex<double>, MPI_CXX_DOUBLE_COMPLEX)
-
-#undef MPI_DATATYPE_TRAIT
-
-}  // namespace details
-
-// Concept to check if a type is a native MPI datatype
-template <typename DataType>
-concept mpi_native_datatype = requires(DataType) {
-  requires details::mpi_data_kind_trait<DataType>::kind ==
-               details::mpi_data_kinds::base;
-};
-
-template <typename DataType>
-concept mpi_composite_datatype = requires(DataType) {
-  requires details::mpi_data_kind_trait<DataType>::kind ==
-               details::mpi_data_kinds::composite;
-};
-
-// mpi_datatype concept combines native and composite datatypes
-template <typename DataType>
-concept mpi_datatype = requires(DataType) {
-  requires mpi_native_datatype<DataType> || mpi_composite_datatype<DataType>;
-};
-
-template <typename DataType>
-auto get_mpi_datatype() -> MPI_Datatype {
-  if constexpr (mpi_native_datatype<DataType>) {
-    return details::mpi_datatype_trait<DataType>::get_mpi_type();
-  } else if constexpr (mpi_composite_datatype<DataType>) {
-    return details::mpi_datatype_trait<DataType>::get_mpi_type();
-  } else if constexpr (std::is_same_v<DataType, int8_t>) {
-    // int8_t may be the same as signed char
-    return get_mpi_datatype<signed char>();
-  } else if constexpr (std::is_same_v<DataType, uint8_t>) {
-    // uint8_t may be the same as unsigned char
-    return get_mpi_datatype<unsigned char>();
-  } else if constexpr (std::is_same_v<DataType, int16_t>) {
-    // int16_t may be the same as short
-    return get_mpi_datatype<short>();
-  } else if constexpr (std::is_same_v<DataType, uint16_t>) {
-    // uint16_t may be the same as unsigned short
-    return get_mpi_datatype<unsigned short>();
-  } else if constexpr (std::is_same_v<DataType, int32_t>) {
-    // int32_t may be the same as int or long
-    if constexpr (sizeof(int32_t) == sizeof(int)) {
-      return get_mpi_datatype<int>();
-    } else if constexpr (sizeof(int32_t) == sizeof(long)) {
-      return get_mpi_datatype<long>();
-    } else {
-      static_assert(sizeof(DataType) == 0, "Unsupported 32-bit integer type");
-    }
-  } else if constexpr (std::is_same_v<DataType, uint32_t>) {
-    // uint32_t may be the same as unsigned int or unsigned long
-    if constexpr (sizeof(uint32_t) == sizeof(unsigned int)) {
-      return get_mpi_datatype<unsigned int>();
-    } else if constexpr (sizeof(uint32_t) == sizeof(unsigned long)) {
-      return get_mpi_datatype<unsigned long>();
-    } else {
-      static_assert(sizeof(DataType) == 0,
-                    "Unsupported 32-bit unsigned integer type");
-    }
-  } else if constexpr (std::is_same_v<DataType, int64_t>) {
-    // int64_t may be the same as long or long long
-    if constexpr (sizeof(int64_t) == sizeof(long)) {
-      return get_mpi_datatype<long>();
-    } else if constexpr (sizeof(int64_t) == sizeof(long long)) {
-      return get_mpi_datatype<long long>();
-    } else {
-      static_assert(sizeof(DataType) == 0, "Unsupported 64-bit integer type");
-    }
-  } else if constexpr (std::is_same_v<DataType, uint64_t>) {
-    // uint64_t may be the same as unsigned long or unsigned long long
-    if constexpr (sizeof(uint64_t) == sizeof(unsigned long)) {
-      return get_mpi_datatype<unsigned long>();
-    } else if constexpr (sizeof(uint64_t) == sizeof(unsigned long long)) {
-      return get_mpi_datatype<unsigned long long>();
-    } else {
-      static_assert(sizeof(DataType) == 0,
-                    "Unsupported 64-bit unsigned integer type");
-    }
+template <mpi_datatype T>
+[[nodiscard]] auto make_mpi_datatype() -> datatype {
+  using value_type = detail::unqualified_t<T>;
+  if constexpr (mpi_native_datatype<value_type>) {
+    return datatype::borrowed(detail::native_mpi_handle<value_type>());
   } else {
-    static_assert(sizeof(DataType) == 0,
-                  "Unsupported data type for MPI communication");
-    return MPI_DATATYPE_NULL;  // This line will never be reached due to
-    // static_assert
+    alignas(value_type) std::array<std::byte, sizeof(value_type)> sample_storage;
+    auto* sample =
+        std::start_lifetime_as<value_type>(sample_storage.data());
+    MPI_Aint sample_address = 0;
+    check(MPI_Get_address(sample, &sample_address),
+          "MPI_Get_address(wire record)");
+
+    std::vector<int> block_lengths;
+    std::vector<MPI_Aint> offsets;
+    std::vector<MPI_Datatype> member_types;
+    boost::hana::for_each(wire_members<value_type>::value, [&](auto member) {
+      using member_type = detail::unqualified_t<decltype(sample->*member)>;
+      static_assert(mpi_native_datatype<member_type>,
+                    "wire record members must use native MPI types");
+      MPI_Aint member_address = 0;
+      check(MPI_Get_address(std::addressof(sample->*member), &member_address),
+            "MPI_Get_address(wire member)");
+      block_lengths.push_back(1);
+      offsets.push_back(member_address - sample_address);
+      member_types.push_back(detail::native_mpi_handle<member_type>());
+    });
+
+    MPI_Datatype structure = MPI_DATATYPE_NULL;
+    check(MPI_Type_create_struct(static_cast<int>(block_lengths.size()),
+                                 block_lengths.data(),
+                                 offsets.data(),
+                                 member_types.data(),
+                                 &structure),
+          "MPI_Type_create_struct");
+
+    MPI_Datatype resized = MPI_DATATYPE_NULL;
+    auto const resize_result = MPI_Type_create_resized(
+        structure, 0, static_cast<MPI_Aint>(sizeof(value_type)), &resized);
+    MPI_Type_free(&structure);
+    check(resize_result, "MPI_Type_create_resized");
+
+    auto const commit_result = MPI_Type_commit(&resized);
+    if (commit_result != MPI_SUCCESS) {
+      MPI_Type_free(&resized);
+      check(commit_result, "MPI_Type_commit");
+    }
+    return datatype::owned(resized);
   }
 }
 
-// Handle composite types using reflection
-template <typename DataType>
-  requires mpi_composite_datatype<DataType>
-struct mpi::details::mpi_datatype_trait<DataType> {
-  static MPI_Datatype get_mpi_type() {
-    // Function-local static variable initialized via lambda
-    static MPI_Datatype const mpi_type = []() -> MPI_Datatype {
-      MPI_Datatype mpi_type_val = MPI_DATATYPE_NULL;
-
-      constexpr std::size_t num_fields = cista::arity<DataType>();
-      std::vector<int> block_lengths(num_fields, 1);
-      std::vector<MPI_Datatype> types;
-      std::vector<MPI_Aint> offsets;
-
-      DataType const tmp{};
-
-      cista::for_each_field(tmp, [&types, &offsets, &tmp](auto&& field) {
-        using field_type = std::decay_t<decltype(field)>;
-        types.push_back(mpi::get_mpi_datatype<field_type>());
-        auto offset = reinterpret_cast<std::ptrdiff_t>(&field) -
-                      reinterpret_cast<std::ptrdiff_t>(&tmp);
-        offsets.push_back(offset);
-      });
-
-      // Create the MPI datatype
-      int mpi_error = MPI_Type_create_struct(
-          static_cast<int>(num_fields), block_lengths.data(), offsets.data(),
-          types.data(), &mpi_type_val);
-      if (mpi_error != MPI_SUCCESS) {
-        throw std::runtime_error("MPI_Type_create_struct() failed");
-      }
-
-      mpi_error = MPI_Type_commit(&mpi_type_val);
-      if (mpi_error != MPI_SUCCESS) {
-        throw std::runtime_error("MPI_Type_commit() failed");
-      }
-
-      // Register the datatype and initialize cleanup
-      {
-        std::scoped_lock const lock{mpi::details::mpi_type_mutex};
-        mpi::details::get_custom_mpi_types().push_back(mpi_type_val);
-        mpi::details::initialize_mpi_type_cleanup();
-      }
-
-      return mpi_type_val;
-    }();
-
-    return mpi_type;
-  }
-};
-
-}  // namespace mpi
-
-// Example struct
-struct MyType {
-  int a{};
-  double b{};
-  double c{};
-
-  friend bool operator==(const MyType& lhs, const MyType& rhs) {
-    return std::tie(lhs.a, lhs.b, lhs.c) == std::tie(rhs.a, rhs.b, rhs.c);
-  }
-  friend bool operator!=(const MyType& lhs, const MyType& rhs) {
-    return !(lhs == rhs);
-  }
-};
+template <mpi_native_datatype T>
+[[nodiscard]] auto get_mpi_datatype() noexcept -> MPI_Datatype {
+  return detail::native_mpi_handle<T>();
 }
+}  // namespace parhip::mpi

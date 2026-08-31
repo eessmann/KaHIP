@@ -11,6 +11,11 @@ int main(int argc, char* argv[]) {
     int returnCode = session.applyCommandLine(argc, argv);
     if (returnCode != 0)  // Indicates a command line error
         return returnCode;
+    // Every rank must enter collective-bearing tests in the same order and
+    // use the same generator seed.
+    session.configData().runOrder = Catch::TestRunOrder::Declared;
+    session.configData().rngSeed = 1;
+    session.configData().rngSeedWasFixed = true;
     // global setup...
     MPI_Init(&argc, &argv);
 	  MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);

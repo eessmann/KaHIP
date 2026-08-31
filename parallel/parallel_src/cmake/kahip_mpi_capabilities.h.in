@@ -1,0 +1,3 @@
+#pragma once
+
+#cmakedefine01 KAHIP_HAVE_MPI_ALLTOALLV_C

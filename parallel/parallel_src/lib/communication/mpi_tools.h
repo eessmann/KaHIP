@@ -13,11 +13,9 @@
 #include <numeric>
 #include <ranges>
 #include <string>
-#include <string_view>
-#include <sstream>
 
 #include "data_structure/parallel_graph_access.h"
-#include "mpi_types.h"
+#include "communication/mpi_adapter.h"
 #include "partition_config.h"
 namespace parhip {
 class mpi_tools {
@@ -43,12 +41,9 @@ namespace mpi {
 template <typename Elem>
 struct mpi_packed_message {
   std::vector<Elem> packed_message;
-  std::vector<int> offsets;
-  std::vector<int> lengths;
+  std::vector<std::size_t> offsets;
+  std::vector<std::size_t> lengths;
 };
-
-auto exchange_num_messages(std::vector<int> const& num_sent_per_rank,
-                           MPI_Comm communicator) -> std::vector<int>;
 
 template <std::ranges::forward_range Input>
   requires std::ranges::forward_range<std::ranges::range_value_t<Input>>
@@ -63,15 +58,17 @@ auto pack_messages(const Input& messages) -> mpi_packed_message<
                                             flattened_view.end()};
 
   // Calculating lengths of the inner ranges
-  std::vector<int> lengths;
+  std::vector<std::size_t> lengths;
   lengths.reserve(std::ranges::distance(messages));
   for (const auto& inner : messages) {
-    lengths.push_back(static_cast<int>(std::ranges::distance(inner)));
+    lengths.push_back(
+        static_cast<std::size_t>(std::ranges::distance(inner)));
   }
 
   // Calculating offsets using exclusive_scan
-  std::vector<int> offsets(lengths.size());
-  std::exclusive_scan(lengths.begin(), lengths.end(), offsets.begin(), 0);
+  std::vector<std::size_t> offsets(lengths.size());
+  std::exclusive_scan(lengths.begin(), lengths.end(), offsets.begin(),
+                      std::size_t{0});
 
   return mpi_packed_message<ElementType>{flattened_vector, offsets, lengths};
 }
@@ -90,7 +87,8 @@ auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
 
   // Use std::transform to construct the sub-vectors
   std::transform(recv_displs.begin(), recv_displs.end(), recv_counts.begin(),
-                 std::back_inserter(result), [&recv_buf](int displ, int count) {
+                 std::back_inserter(result),
+                 [&recv_buf](std::size_t displ, std::size_t count) {
                    auto const start = recv_buf.begin() + displ;
                    auto const end = start + count;
                    return std::vector<Elem>(start, end);
@@ -133,63 +131,16 @@ auto all_to_all(Input const& sends, MPI_Comm communicator)
   using InnerRange = std::ranges::range_value_t<Input>;
   using ElementType = std::ranges::range_value_t<InnerRange>;
 
-  PEID rank{};
-  PEID size{};
-  MPI_Comm_rank(communicator, &rank);
-  MPI_Comm_size(communicator, &size);
-
-  // Packing messages
-  auto [send_packed_messages, send_offsets, send_lengths] =
-      mpi::pack_messages(sends);
-
-  if (send_offsets.size() != send_lengths.size()) {
-    throw std::runtime_error("mpi::pack_messages(): send_offsets.size() (" +
-                             std::to_string(send_offsets.size()) +
-                             ") != send_lengths.size() (" +
-                             std::to_string(send_lengths.size()) + ")");
-  } else if ((send_offsets.size() != static_cast<std::size_t>(size)) ||
-             (send_lengths.size() != static_cast<std::size_t>(size))) {
-    throw std::runtime_error("mpi::pack_messages(): send_offsets.size() (" +
-                             std::to_string(send_offsets.size()) +
-                             ") != mpi size (" + std::to_string(size) + ")");
-             }
-
-  // Exchanging message sizes
-  auto const recv_lengths = exchange_num_messages(send_lengths, communicator);
-
-  // Calculating total receive buffer size
-  auto const recv_buff_size =
-      std::accumulate(recv_lengths.begin(), recv_lengths.end(), 0);
-
-  // Preparing receive buffers
-  std::vector<ElementType> recv_packed_messages(recv_buff_size);
-  std::vector<int> recv_offsets(size, 0);
-
-  // Calculating receive offsets
-  std::exclusive_scan(recv_lengths.begin(), recv_lengths.end(),
-                      recv_offsets.begin(), 0);
-
-  // Performing MPI communication
-  auto mpi_error = MPI_Alltoallv(
-      send_packed_messages.data(), send_lengths.data(), send_offsets.data(),
-      get_mpi_datatype<ElementType>(), recv_packed_messages.data(),
-      recv_lengths.data(), recv_offsets.data(), get_mpi_datatype<ElementType>(),
-      communicator);
-
-  if (mpi_error != MPI_SUCCESS) {
-    std::array<char, MPI_MAX_ERROR_STRING> error_string{};
-    int length_of_error_string = 0;
-    MPI_Error_string(mpi_error, error_string.data(), &length_of_error_string);
-    auto mpi_error_message =
-        std::string_view(error_string.data(), length_of_error_string);
-    std::stringstream errmeg{};
-    errmeg << "mpi::all_to_all() failed with error: " << mpi_error_message;
-    throw std::runtime_error(errmeg.str());
+  auto received = all_to_all_v(
+      segmented_buffer<ElementType>::from_segments(sends),
+      communicator_view{communicator});
+  std::vector<std::vector<ElementType>> result;
+  result.reserve(received.segment_count());
+  for (std::size_t source = 0; source < received.segment_count(); ++source) {
+    auto const segment = received.segment(source);
+    result.emplace_back(segment.begin(), segment.end());
   }
-
-  // Unpacking messages
-  return mpi::unpack_messages<ElementType>(
-      {recv_packed_messages, recv_offsets, recv_lengths});
+  return result;
 }
 }  // namespace mpi
 }
