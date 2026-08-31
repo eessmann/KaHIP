@@ -1,5 +1,42 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b580d0a..0861d1c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -118,6 +118,8 @@ option(NOMPI "disable all targets that depend on MPI (kaffpaE, ParHIP)" OFF)
+ # ParHIP
+ option(PARHIP "build ParHIP" ON)
+ option(DETERMINISTIC_PARHIP "enforce deterministic computations in ParHIP" OFF)
++option(KAHIP_ENABLE_TASK5_ORACLE_TRACE
++       "enable Task 5 trace-only upstream oracle instrumentation" OFF)
+ 
+ # Look for MPI (needed for ParHIP and kaffpaE)
+ # Report which MPI we actually found,
+diff --git a/parallel/parallel_src/CMakeLists.txt b/parallel/parallel_src/CMakeLists.txt
+index ae973e7..cdb9a36 100644
+--- a/parallel/parallel_src/CMakeLists.txt
++++ b/parallel/parallel_src/CMakeLists.txt
+@@ -37,6 +37,9 @@ set(LIBPARALLEL_SOURCE_FILES
+   extern/argtable3-3.2.2/argtable3.c)
+ add_library(libparallel OBJECT ${LIBPARALLEL_SOURCE_FILES})
+ target_include_directories(libparallel PUBLIC $<TARGET_PROPERTY:libmodified_kahip_interface,INTERFACE_INCLUDE_DIRECTORIES>)
++target_compile_definitions(
++  libparallel PRIVATE
++  KAHIP_ENABLE_TASK5_ORACLE_TRACE=$<BOOL:${KAHIP_ENABLE_TASK5_ORACLE_TRACE}>)
+ 
+ set(LIBGRAPH2BGF_SOURCE_FILES
+   lib/data_structure/parallel_graph_access.cpp
+@@ -62,6 +65,9 @@ add_library(libdspac OBJECT ${LIBDSPAC_SOURCE_FILES})
+ 
+ add_executable(parhip app/parhip.cpp $<TARGET_OBJECTS:libparallel>)
+ target_compile_definitions(parhip PRIVATE "-DGRAPH_GENERATOR_MPI" "-DGRAPHGEN_DISTRIBUTED_MEMORY" "-DPARALLEL_LABEL_COMPRESSION")
++target_compile_definitions(
++  parhip PRIVATE
++  KAHIP_ENABLE_TASK5_ORACLE_TRACE=$<BOOL:${KAHIP_ENABLE_TASK5_ORACLE_TRACE}>)
+ target_link_libraries(parhip PRIVATE libmodified_kahip_interface)
+ install(TARGETS parhip DESTINATION bin)
+ 
 diff --git a/parallel/parallel_src/app/parhip.cpp b/parallel/parallel_src/app/parhip.cpp
-index 124ef0b..38c5bf0 100644
+index 124ef0b..3e71f42 100644
 --- a/parallel/parallel_src/app/parhip.cpp
 +++ b/parallel/parallel_src/app/parhip.cpp
 @@ -18,6 +18,7 @@
@@ -10,47 +47,69 @@ index 124ef0b..38c5bf0 100644
  #include "communication/dummy_operations.h"
  #include "data_structure/parallel_graph_access.h"
  #include "distributed_partitioning/distributed_partitioner.h"
-@@ -80,6 +81,18 @@ int main(int argn, char **argv) {
+@@ -80,6 +81,26 @@ int main(int argn, char **argv) {
  
                  parallel_graph_access G(communicator);
                  parallel_graph_io::readGraphWeighted(partition_config, G, graph_filename, rank, size, communicator);
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
++                KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++                    0, 0, kahip_task5_oracle_trace::input_epoch);
 +                forall_local_nodes(G, node) {
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::graph_distribution_node(
-+                                G.getGlobalID(node), rank, G.getNodeWeight(node)));
++                                kahip_task5_oracle_trace::current_hierarchy(),
++                                G.getGlobalID(node), rank,
++                                G.getNodeWeight(node)));
 +                        forall_out_edges(G, e, node) {
 +                                NodeID target = G.getEdgeTarget(e);
 +                                KAHIP_TASK5_ORACLE_TRACE(
 +                                    kahip_task5_oracle_trace::graph_distribution_edge(
-+                                        G.getGlobalID(node), G.getGlobalID(target),
++                                        kahip_task5_oracle_trace::current_hierarchy(),
++                                        G.getGlobalID(node), rank,
++                                        G.getGlobalID(target),
 +                                        G.getEdgeWeight(e)));
 +                        } endfor
 +                } endfor
++#endif
                  //parallel_graph_io::readGraphWeightedFlexible(G, graph_filename, rank, size, communicator);
                  if( rank == ROOT ) std::cout <<  "took " <<  t.elapsed()  << std::endl;
                  if( rank == ROOT ) std::cout <<  "n:" <<  G.number_of_global_nodes() << " m: " <<  G.number_of_global_edges()  << std::endl;
-@@ -143,6 +156,13 @@ int main(int argn, char **argv) {
+@@ -143,6 +164,21 @@ int main(int argn, char **argv) {
                  dpart.perform_partitioning( communicator, partition_config, G);
  
                  MPI_Barrier(communicator);
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
++                KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++                    partition_config.num_vcycles == 0
++                        ? 0
++                        : partition_config.num_vcycles - 1,
++                    0, kahip_task5_oracle_trace::final_partition_epoch);
 +                forall_local_nodes(G, node) {
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::final_partition(
-+                                G.getGlobalID(node), G.getNodeLabel(node)));
++                                kahip_task5_oracle_trace::current_hierarchy(),
++                                G.getGlobalID(node), rank,
++                                G.getNodeLabel(node)));
 +                } endfor
-+                kahip_task5_oracle_trace::write_rank_file_if_requested(
-+                    communicator);
++                KAHIP_TASK5_ORACLE_WRITE(communicator);
++#endif
  
                  double running_time = t.elapsed();
                  distributed_quality_metrics qm;
 diff --git a/parallel/parallel_src/lib/communication/task5_oracle_trace.h b/parallel/parallel_src/lib/communication/task5_oracle_trace.h
 new file mode 100644
-index 0000000..e342182
+index 0000000..67f467c
 --- /dev/null
 +++ b/parallel/parallel_src/lib/communication/task5_oracle_trace.h
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,315 @@
 +#ifndef KAHIP_TASK5_ORACLE_TRACE_H
 +#define KAHIP_TASK5_ORACLE_TRACE_H
++
++#ifndef KAHIP_ENABLE_TASK5_ORACLE_TRACE
++#define KAHIP_ENABLE_TASK5_ORACLE_TRACE 0
++#endif
++
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
 +
 +#include <mpi.h>
 +
@@ -76,9 +135,34 @@ index 0000000..e342182
 +  final_partition_stage
 +};
 +
++enum epoch {
++  input_epoch,
++  coarsening_epoch,
++  contraction_epoch,
++  initial_partition_epoch,
++  projection_epoch,
++  refinement_epoch,
++  final_partition_epoch
++};
++
++struct hierarchy_position {
++  unsigned cycle;
++  unsigned level;
++  epoch epoch_id;
++  unsigned round;
++};
++
++struct semantic_actors {
++  int owner;
++  int requester;
++  int receiver;
++};
++
 +struct record {
 +  stage stage_id;
++  hierarchy_position hierarchy;
 +  unsigned long long global_id;
++  semantic_actors actors;
 +  std::string semantic_key;
 +  std::string payload;
 +};
@@ -92,77 +176,127 @@ index 0000000..e342182
 +  return names[static_cast<int>(value)];
 +}
 +
-+inline record graph_distribution_node(unsigned long long id, int owner,
++inline const char* epoch_name(epoch value) {
++  static const char* names[] = {
++      "input", "coarsening", "contraction", "initial-partition",
++      "projection", "refinement", "final-partition"};
++  return names[static_cast<int>(value)];
++}
++
++inline std::string rank_name(int rank) {
++  return rank < 0 ? "-" : std::to_string(rank);
++}
++
++inline hierarchy_position& current_hierarchy_storage() {
++  static hierarchy_position value = {0, 0, input_epoch, 0};
++  return value;
++}
++
++inline hierarchy_position current_hierarchy() {
++  return current_hierarchy_storage();
++}
++
++inline hierarchy_position current_hierarchy_with_round(unsigned round) {
++  hierarchy_position value = current_hierarchy();
++  value.round = round;
++  return value;
++}
++
++inline void set_hierarchy(unsigned cycle, unsigned level, epoch epoch_id) {
++  hierarchy_position value = {cycle, level, epoch_id, 0};
++  current_hierarchy_storage() = value;
++}
++
++inline record graph_distribution_node(hierarchy_position hierarchy,
++                                      unsigned long long id, int owner,
 +                                      unsigned long long weight) {
-+  return {graph_distribution_node_stage, id,
++  semantic_actors actors = {owner, -1, owner};
++  return {graph_distribution_node_stage, hierarchy, id, actors,
 +          "owner:" + std::to_string(owner),
 +          "weight=" + std::to_string(weight)};
 +}
 +
-+inline record graph_distribution_edge(unsigned long long source,
++inline record graph_distribution_edge(hierarchy_position hierarchy,
++                                      unsigned long long source, int owner,
 +                                      unsigned long long target,
 +                                      unsigned long long weight) {
-+  return {graph_distribution_edge_stage, source,
++  semantic_actors actors = {owner, -1, owner};
++  return {graph_distribution_edge_stage, hierarchy, source, actors,
 +          "target:" + std::to_string(target),
 +          "weight=" + std::to_string(weight)};
 +}
 +
-+inline record contraction_label(unsigned long long id,
++inline record contraction_label(hierarchy_position hierarchy,
++                                unsigned long long id, int owner,
 +                                unsigned long long label,
 +                                unsigned long long coarse) {
-+  return {contraction_label_stage, id,
++  semantic_actors actors = {owner, -1, owner};
++  return {contraction_label_stage, hierarchy, id, actors,
 +          "label:" + std::to_string(label),
 +          "coarse=" + std::to_string(coarse)};
 +}
 +
-+inline record quotient_node_weight(unsigned long long id,
++inline record quotient_node_weight(hierarchy_position hierarchy,
++                                   unsigned long long id, int owner,
 +                                   unsigned long long weight) {
-+  return {quotient_node_weight_stage, id, "node",
++  semantic_actors actors = {owner, -1, owner};
++  return {quotient_node_weight_stage, hierarchy, id, actors, "node",
 +          "weight=" + std::to_string(weight)};
 +}
 +
-+inline record quotient_edge(unsigned long long source,
++inline record quotient_edge(hierarchy_position hierarchy,
++                            unsigned long long source, int owner,
 +                            unsigned long long target,
 +                            unsigned long long weight) {
-+  return {quotient_edge_stage, source,
++  semantic_actors actors = {owner, -1, owner};
++  return {quotient_edge_stage, hierarchy, source, actors,
 +          "target:" + std::to_string(target),
 +          "weight=" + std::to_string(weight)};
 +}
 +
-+inline record projection_request(unsigned long long request_id, int source,
-+                                 int destination,
-+                                 unsigned long long coarse) {
-+  return {projection_request_stage, coarse,
++inline record projection_request(hierarchy_position hierarchy,
++                                 unsigned long long request_id, int requester,
++                                 int owner, unsigned long long coarse) {
++  semantic_actors actors = {owner, requester, owner};
++  return {projection_request_stage, hierarchy, coarse, actors,
 +          "request:" + std::to_string(request_id),
-+          "source=" + std::to_string(source) +
-+              " destination=" + std::to_string(destination)};
++          "requester=" + std::to_string(requester) +
++              " owner=" + std::to_string(owner)};
 +}
 +
-+inline record projection_reply(unsigned long long request_id, int source,
-+                               int destination, unsigned long long coarse,
++inline record projection_reply(hierarchy_position hierarchy,
++                               unsigned long long request_id, int requester,
++                               int owner, unsigned long long coarse,
 +                               unsigned long long label) {
-+  return {projection_reply_stage, coarse,
++  semantic_actors actors = {owner, requester, requester};
++  return {projection_reply_stage, hierarchy, coarse, actors,
 +          "request:" + std::to_string(request_id),
-+          "source=" + std::to_string(source) +
-+              " destination=" + std::to_string(destination) +
++          "requester=" + std::to_string(requester) +
++              " owner=" + std::to_string(owner) +
 +              " label=" + std::to_string(label)};
 +}
 +
-+inline record ghost_update(unsigned long long id, int owner,
++inline record ghost_update(hierarchy_position hierarchy,
++                           unsigned long long id, int owner, int receiver,
 +                           unsigned long long label) {
-+  return {ghost_update_stage, id, "owner:" + std::to_string(owner),
++  semantic_actors actors = {owner, -1, receiver};
++  return {ghost_update_stage, hierarchy, id, actors, "label",
 +          "label=" + std::to_string(label)};
 +}
 +
-+inline record block_propagation(unsigned long long id,
++inline record block_propagation(hierarchy_position hierarchy,
++                                unsigned long long id, int owner, int receiver,
 +                                unsigned long long block) {
-+  return {block_propagation_stage, id, "block",
++  semantic_actors actors = {owner, -1, receiver};
++  return {block_propagation_stage, hierarchy, id, actors, "block",
 +          "block=" + std::to_string(block)};
 +}
 +
-+inline record final_partition(unsigned long long id,
++inline record final_partition(hierarchy_position hierarchy,
++                              unsigned long long id, int owner,
 +                              unsigned long long block) {
-+  return {final_partition_stage, id, "partition",
++  semantic_actors actors = {owner, -1, owner};
++  return {final_partition_stage, hierarchy, id, actors, "partition",
 +          "block=" + std::to_string(block)};
 +}
 +
@@ -172,34 +306,79 @@ index 0000000..e342182
 +}
 +
 +inline void append(record value) {
-+  if (std::getenv("KAHIP_MPI_TRACE_PATH") != NULL) {
-+    records().push_back(value);
-+  }
++  records().push_back(value);
 +}
 +
 +inline std::string canonical_text() {
 +  std::vector<record> values = records();
 +  std::sort(values.begin(), values.end(),
 +            [](const record& lhs, const record& rhs) {
-+              return std::tie(lhs.stage_id, lhs.global_id, lhs.semantic_key,
++              return std::tie(lhs.stage_id, lhs.hierarchy.cycle,
++                              lhs.hierarchy.level, lhs.hierarchy.epoch_id,
++                              lhs.hierarchy.round, lhs.global_id,
++                              lhs.actors.owner, lhs.actors.requester,
++                              lhs.actors.receiver, lhs.semantic_key,
 +                              lhs.payload) <
-+                     std::tie(rhs.stage_id, rhs.global_id, rhs.semantic_key,
++                     std::tie(rhs.stage_id, rhs.hierarchy.cycle,
++                              rhs.hierarchy.level, rhs.hierarchy.epoch_id,
++                              rhs.hierarchy.round, rhs.global_id,
++                              rhs.actors.owner, rhs.actors.requester,
++                              rhs.actors.receiver, rhs.semantic_key,
 +                              rhs.payload);
 +            });
 +  std::string output =
-+      "kahip-mpi-trace-v1 upstream="
++      "kahip-mpi-trace-v2 upstream="
 +      "5935f349f65f1788a9b68fcf6d853e698d86956d\n";
 +  for (std::vector<record>::const_iterator value = values.begin();
 +       value != values.end(); ++value) {
 +    output += std::string(stage_name(value->stage_id)) +
++              " cycle=" + std::to_string(value->hierarchy.cycle) +
++              " level=" + std::to_string(value->hierarchy.level) +
++              " epoch=" + std::string(epoch_name(value->hierarchy.epoch_id)) +
++              " round=" + std::to_string(value->hierarchy.round) +
 +              " global=" + std::to_string(value->global_id) +
++              " owner=" + rank_name(value->actors.owner) +
++              " requester=" + rank_name(value->actors.requester) +
++              " receiver=" + rank_name(value->actors.receiver) +
 +              " key=" + value->semantic_key;
-+    if (!value->payload.empty()) {
-+      output += " " + value->payload;
-+    }
++    if (!value->payload.empty()) output += " " + value->payload;
 +    output += "\n";
 +  }
 +  return output;
++}
++
++inline std::string sanitize_run_id(const std::string& run_id) {
++  std::string result = run_id;
++  for (std::string::iterator character = result.begin();
++       character != result.end(); ++character) {
++    const bool ascii_alphanumeric =
++        (*character >= 'a' && *character <= 'z') ||
++        (*character >= 'A' && *character <= 'Z') ||
++        (*character >= '0' && *character <= '9');
++    if (!ascii_alphanumeric && *character != '-' && *character != '_') {
++      *character = '_';
++    }
++  }
++  return result;
++}
++
++inline std::string requested_run_id() {
++  static const char* variables[] = {
++      "KAHIP_MPI_TRACE_RUN_ID", "SLURM_JOB_ID", "PBS_JOBID", "LSB_JOBID",
++      "PMI_JOBID", "OMPI_MCA_orte_ess_jobid"};
++  for (unsigned index = 0; index < sizeof(variables) / sizeof(variables[0]);
++       ++index) {
++    const char* value = std::getenv(variables[index]);
++    if (value != NULL && *value != '\0') return value;
++  }
++  return "";
++}
++
++inline std::string rank_file_path(const std::string& base,
++                                  const std::string& run_id, int rank) {
++  std::string path = base;
++  if (!run_id.empty()) path += ".run-" + sanitize_run_id(run_id);
++  return path + ".rank" + std::to_string(rank) + ".trace";
 +}
 +
 +inline void write_rank_file_if_requested(MPI_Comm communicator) {
@@ -209,8 +388,7 @@ index 0000000..e342182
 +  if (MPI_Comm_rank(communicator, &rank) != MPI_SUCCESS) {
 +    throw std::runtime_error("oracle trace rank query failed");
 +  }
-+  const std::string path =
-+      std::string(base) + ".rank" + std::to_string(rank) + ".trace";
++  const std::string path = rank_file_path(base, requested_run_id(), rank);
 +  std::ofstream output(path.c_str(), std::ios::binary | std::ios::trunc);
 +  if (!output) throw std::runtime_error("oracle trace open failed");
 +  output << canonical_text();
@@ -220,10 +398,27 @@ index 0000000..e342182
 +
 +#define KAHIP_TASK5_ORACLE_TRACE(expression) \
 +  do { kahip_task5_oracle_trace::append((expression)); } while (false)
++#define KAHIP_TASK5_ORACLE_SET_HIERARCHY(cycle, level, epoch_value) \
++  do {                                                                \
++    kahip_task5_oracle_trace::set_hierarchy(                           \
++        static_cast<unsigned>(cycle), static_cast<unsigned>(level),    \
++        (epoch_value));                                                \
++  } while (false)
++#define KAHIP_TASK5_ORACLE_WRITE(communicator) \
++  do { kahip_task5_oracle_trace::write_rank_file_if_requested(communicator); } \
++  while (false)
++
++#else
++
++#define KAHIP_TASK5_ORACLE_TRACE(expression) do { } while (false)
++#define KAHIP_TASK5_ORACLE_SET_HIERARCHY(cycle, level, epoch_value) \
++  do { } while (false)
++#define KAHIP_TASK5_ORACLE_WRITE(communicator) do { } while (false)
 +
 +#endif
++#endif
 diff --git a/parallel/parallel_src/lib/data_structure/parallel_graph_access.h b/parallel/parallel_src/lib/data_structure/parallel_graph_access.h
-index 7e73ffa..bfe7399 100644
+index 7e73ffa..ded5f78 100644
 --- a/parallel/parallel_src/lib/data_structure/parallel_graph_access.h
 +++ b/parallel/parallel_src/lib/data_structure/parallel_graph_access.h
 @@ -17,6 +17,7 @@
@@ -234,28 +429,98 @@ index 7e73ffa..bfe7399 100644
  #include "definitions.h"
  #include "partition_config.h"
  #include "tools/timer.h"
-@@ -924,6 +925,9 @@ void ghost_node_communication::receive_messages_of_neighbors() {
+@@ -924,6 +925,13 @@ void ghost_node_communication::receive_messages_of_neighbors() {
                          NodeID local_id = m_G->m_global_to_local_id[global_id];
                          m_G->update_non_contained_block_balance(m_G->getNodeLabel(local_id), label, m_G->getNodeWeight(local_id));
                          m_G->setNodeLabel(local_id, label);
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::ghost_update(
-+                                global_id, st.MPI_SOURCE, label));
++                                kahip_task5_oracle_trace::
++                                    current_hierarchy_with_round(
++                                        static_cast<unsigned>(
++                                            m_recv_iteration)),
++                                global_id, st.MPI_SOURCE, m_rank, label));
                  }
          }
  
-@@ -1033,6 +1037,9 @@ inline void ghost_node_communication::update_ghost_node_data_global() {
+@@ -1033,6 +1041,10 @@ inline void ghost_node_communication::update_ghost_node_data_global() {
                          NodeID label     = message[i+1];
  
                          m_G->setNodeLabel( m_G->m_global_to_local_id[global_id], label);
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::ghost_update(
-+                                global_id, st.MPI_SOURCE, label));
++                                kahip_task5_oracle_trace::current_hierarchy(),
++                                global_id, st.MPI_SOURCE, m_rank, label));
                  }
          }
  
+diff --git a/parallel/parallel_src/lib/distributed_partitioning/distributed_partitioner.cpp b/parallel/parallel_src/lib/distributed_partitioning/distributed_partitioner.cpp
+index d487f73..baad526 100644
+--- a/parallel/parallel_src/lib/distributed_partitioning/distributed_partitioner.cpp
++++ b/parallel/parallel_src/lib/distributed_partitioning/distributed_partitioner.cpp
+@@ -6,6 +6,7 @@
+  *****************************************************************************/
+ 
+ #include <sstream>
++#include "communication/task5_oracle_trace.h"
+ #include "communication/mpi_tools.h"
+ #include "distributed_partitioner.h"
+ #include "initial_partitioning/initial_partitioning.h"
+@@ -149,6 +150,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig &
+ 
+         
+         m_level++;
++        KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++            m_cycle, m_level, kahip_task5_oracle_trace::coarsening_epoch);
+         config.label_iterations = config.label_iterations_coarsening;
+         config.total_num_labels = G.number_of_global_nodes();
+         //
+@@ -173,6 +176,9 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig &
+         t.restart();
+ 
+         {
++                KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++                    m_cycle, m_level,
++                    kahip_task5_oracle_trace::contraction_epoch);
+                 parallel_contraction parallel_contract;
+                 parallel_contract.contract_to_distributed_quotient( communicator, config, G, Q); // contains one Barrier
+ 
+@@ -209,6 +215,9 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig &
+ #endif
+                 t.restart();
+ 
++                KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++                    m_cycle, m_level,
++                    kahip_task5_oracle_trace::initial_partition_epoch);
+                 initial_partitioning_algorithm ip;
+                 ip.perform_partitioning( communicator, config, Q );
+ 
+@@ -229,6 +238,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig &
+ #endif
+ 
+         t.restart();
++        KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++            m_cycle, m_level, kahip_task5_oracle_trace::projection_epoch);
+         parallel_projection parallel_project;
+         parallel_project.parallel_project( communicator, G, Q ); // contains a Barrier
+ 
+@@ -242,6 +253,9 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig &
+         config.label_iterations = config.label_iterations_refinement;
+ 
+         if( config.label_iterations != 0 ) {
++                KAHIP_TASK5_ORACLE_SET_HIERARCHY(
++                    m_cycle, m_level,
++                    kahip_task5_oracle_trace::refinement_epoch);
+                 config.total_num_labels = config.k;
+                 config.upper_bound_cluster = config.upper_bound_partition;
+ 
+@@ -431,4 +445,3 @@ void distributed_partitioner::check( MPI_Comm communicator, PPartitionConfig & c
+ 
+         MPI_Barrier(communicator);
+ }
+-
 diff --git a/parallel/parallel_src/lib/parallel_contraction_projection/parallel_block_down_propagation.cpp b/parallel/parallel_src/lib/parallel_contraction_projection/parallel_block_down_propagation.cpp
-index e45b135..89ff5fe 100644
+index e45b135..d3a3bea 100644
 --- a/parallel/parallel_src/lib/parallel_contraction_projection/parallel_block_down_propagation.cpp
 +++ b/parallel/parallel_src/lib/parallel_contraction_projection/parallel_block_down_propagation.cpp
 @@ -6,6 +6,7 @@
@@ -266,31 +531,36 @@ index e45b135..89ff5fe 100644
  
  parallel_block_down_propagation::parallel_block_down_propagation() {
                  
-@@ -95,6 +96,12 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
+@@ -95,6 +96,16 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
                  }
          }
  
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
 +        forall_local_nodes(Q, node) {
 +                KAHIP_TASK5_ORACLE_TRACE(
 +                    kahip_task5_oracle_trace::block_propagation(
-+                        Q.getGlobalID(node), Q.getSecondPartitionIndex(node)));
++                        kahip_task5_oracle_trace::current_hierarchy(),
++                        Q.getGlobalID(node), rank, rank,
++                        Q.getSecondPartitionIndex(node)));
 +        } endfor
++#endif
 +
          update_ghost_nodes_blocks( communicator, Q );
  }
  
-@@ -164,6 +171,9 @@ void parallel_block_down_propagation::update_ghost_nodes_blocks( MPI_Comm commun
+@@ -164,6 +175,10 @@ void parallel_block_down_propagation::update_ghost_nodes_blocks( MPI_Comm commun
                          NodeWeight  block  = message[i+1];
  
                          G.setSecondPartitionIndex( G.getLocalID(global_id), block );
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::block_propagation(
-+                                global_id, block));
++                                kahip_task5_oracle_trace::current_hierarchy(),
++                                global_id, st.MPI_SOURCE, rank, block));
                  }
          }
  
 diff --git a/parallel/parallel_src/lib/parallel_contraction_projection/parallel_contraction.cpp b/parallel/parallel_src/lib/parallel_contraction_projection/parallel_contraction.cpp
-index 83cf67b..fd3f61e 100644
+index 83cf67b..85c5a36 100644
 --- a/parallel/parallel_src/lib/parallel_contraction_projection/parallel_contraction.cpp
 +++ b/parallel/parallel_src/lib/parallel_contraction_projection/parallel_contraction.cpp
 @@ -6,6 +6,7 @@
@@ -301,38 +571,60 @@ index 83cf67b..fd3f61e 100644
  #include "data_structure/hashed_graph.h"
  #include "tools/helpers.h"
  
-@@ -33,6 +34,10 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
+@@ -17,9 +18,13 @@ parallel_contraction::~parallel_contraction() {
+                 
+ }
+ 
+-void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config, 
++void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config,
+                                                              parallel_graph_access & G, 
+                                                              parallel_graph_access & Q) {
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
++        PEID trace_rank = 0;
++        MPI_Comm_rank(communicator, &trace_rank);
++#endif
+ 
+         NodeID number_of_distinct_labels; // equals global number of coarse nodes
+ 
+@@ -33,6 +38,11 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
          G.allocate_node_to_cnode();
          forall_local_nodes(G, node) {
                  G.setCNode( node, label_mapping[ G.getNodeLabel( node )]);
 +                KAHIP_TASK5_ORACLE_TRACE(
 +                    kahip_task5_oracle_trace::contraction_label(
-+                        G.getGlobalID(node), G.getNodeLabel(node),
++                        kahip_task5_oracle_trace::current_hierarchy(),
++                        G.getGlobalID(node), trace_rank, G.getNodeLabel(node),
 +                        G.getCNode(node)));
          } endfor
  
          get_nodes_to_cnodes_ghost_nodes( communicator, G );   
-@@ -54,6 +59,18 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
+@@ -54,6 +64,24 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
  
          redistribute_hased_graph_and_build_graph_locally( communicator, hG, node_weights, number_of_distinct_labels, Q );
          update_ghost_nodes_weights( communicator, Q );
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
 +        forall_local_nodes(Q, node) {
 +                KAHIP_TASK5_ORACLE_TRACE(
 +                    kahip_task5_oracle_trace::quotient_node_weight(
-+                        Q.getGlobalID(node), Q.getNodeWeight(node)));
++                        kahip_task5_oracle_trace::current_hierarchy(),
++                        Q.getGlobalID(node), trace_rank,
++                        Q.getNodeWeight(node)));
 +                forall_out_edges(Q, edge, node) {
 +                        NodeID target = Q.getEdgeTarget(edge);
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::quotient_edge(
-+                                Q.getGlobalID(node), Q.getGlobalID(target),
++                                kahip_task5_oracle_trace::current_hierarchy(),
++                                Q.getGlobalID(node), trace_rank,
++                                Q.getGlobalID(target),
 +                                Q.getEdgeWeight(edge)));
 +                } endfor
 +        } endfor
++#endif
  }
  
  void parallel_contraction::compute_label_mapping( MPI_Comm communicator, parallel_graph_access & G, 
 diff --git a/parallel/parallel_src/lib/parallel_contraction_projection/parallel_projection.cpp b/parallel/parallel_src/lib/parallel_contraction_projection/parallel_projection.cpp
-index 7003251..b46feaa 100644
+index 7003251..3fe1314 100644
 --- a/parallel/parallel_src/lib/parallel_contraction_projection/parallel_projection.cpp
 +++ b/parallel/parallel_src/lib/parallel_contraction_projection/parallel_projection.cpp
 @@ -6,6 +6,7 @@
@@ -343,34 +635,39 @@ index 7003251..b46feaa 100644
  
  parallel_projection::parallel_projection() {
                  
-@@ -26,6 +27,7 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
+@@ -26,6 +27,9 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
          m_messages.resize(size);
  
          std::unordered_map< NodeID, std::vector< NodeID > > cnode_to_nodes;
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
 +        std::unordered_map< NodeID, NodeID > request_id_by_cnode;
++#endif
          forall_local_nodes(finer, node) {
                  NodeID cnode = finer.getCNode(node);
                  //std::cout <<  "cnode " <<  cnode  << std::endl;
-@@ -38,6 +40,11 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
+@@ -38,6 +42,13 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
  
                          if( cnode_to_nodes.find( cnode ) == cnode_to_nodes.end()) {
                                  m_messages[peID].push_back(cnode); // we are requesting the label of this node 
++#if KAHIP_ENABLE_TASK5_ORACLE_TRACE
 +                                request_id_by_cnode[cnode] = finer.getGlobalID(node);
++#endif
 +                                KAHIP_TASK5_ORACLE_TRACE(
 +                                    kahip_task5_oracle_trace::projection_request(
-+                                        finer.getGlobalID(node), rank, peID,
-+                                        cnode));
++                                        kahip_task5_oracle_trace::current_hierarchy(),
++                                        finer.getGlobalID(node), rank, peID, cnode));
                          }
  
                          cnode_to_nodes[cnode].push_back(node);
-@@ -125,6 +132,10 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
+@@ -125,6 +136,11 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
                  for( ULONG i = 0; i < (ULONG)incmessage.size(); i++) {
                          std::vector< NodeID > & proj = cnode_to_nodes[m_messages[peID][i]];
                          NodeID label = incmessage[i];
 +                        KAHIP_TASK5_ORACLE_TRACE(
 +                            kahip_task5_oracle_trace::projection_reply(
++                                kahip_task5_oracle_trace::current_hierarchy(),
 +                                request_id_by_cnode[m_messages[peID][i]],
-+                                peID, rank, m_messages[peID][i], label));
++                                rank, peID, m_messages[peID][i], label));
  
                          for( ULONG j = 0; j < proj.size(); j++) {
                                  finer.setNodeLabel(proj[j], label);

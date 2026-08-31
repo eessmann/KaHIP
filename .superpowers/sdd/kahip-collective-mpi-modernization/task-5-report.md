@@ -268,3 +268,135 @@ passed.
   with the later transport tasks.
 - Existing legacy compiler warnings were retained; no warnings were
   suppressed.
+
+## Fix round 1: stronger trace identity and portable protocol probe
+
+This section supersedes the v1 trace-schema hashes and the earlier
+instrumentation-patch hash above. The Task 5 algorithm and RNG contract are
+unchanged; this fix round closes the three Important review findings and the
+filename Minor on top of Task 5 commit
+`2640360e1b8098b9a7e3371c33343841df8710fc`.
+
+### Focused RED/GREEN evidence
+
+The hierarchy/actor regression was written first. Its RED compile failed
+because `mpi::trace::epoch` and `hierarchy_position` did not exist. The added
+fixture deliberately uses the same quotient global ID and payload at levels 1
+and 2, and the same ghost ID/owner/label at receivers 0 and 2. The GREEN
+serialization contains distinct `cycle`, `level`, `epoch`, `round`, `owner`,
+`requester`, and `receiver` fields. Context setters are placed at the actual
+partitioner `m_cycle`/`m_level` transitions for coarsening, contraction,
+initial partitioning, projection, and refinement. The asynchronous ghost hook
+uses its existing receive-iteration value as the deterministic logical round.
+
+The run-ID fixture was also RED before implementation because
+`rank_file_path` did not exist. GREEN covers exact sanitization:
+`trace/output` plus `job/42`, rank 3 becomes
+`trace/output.run-job_42.rank3.trace`. `KAHIP_MPI_TRACE_RUN_ID` is the explicit
+contract; common SLURM, PBS, LSF, PMI, and Open MPI job identifiers are
+fallbacks. With none available, the legacy deterministic filename is
+preserved. The integration smoke's v2-schema RED was
+`trace smoke is missing stage graph-distribution-node`; after giving the smoke
+an explicit `smoke` run ID and matching the hierarchy fields it passed.
+
+The projection PMPI regression's RED compile failed on the intentionally new
+`dense_payload_collective_calls` expectation. GREEN conditionally interposes
+both `MPI_Alltoallv` and, when feature-probed, `MPI_Alltoallv_c`, sums those
+counts, and requires exactly two dense payload collectives plus zero
+`MPI_Isend` and zero `MPI_Probe`. The real two-rank fixture passed on both
+ranks with its stable request-ID label expectations and exact semantic-actor
+trace. This host's generated capability remains
+`KAHIP_HAVE_MPI_ALLTOALLV_C 0`; no MPI-4 macro was faked. The guarded
+`MPI_Count`/`MPI_Aint` and `PMPI_Alltoallv_c` branch is compiled automatically
+when a later MPI-4 feature probe succeeds.
+
+### Compile-time-OFF upstream provenance
+
+The old checked-in oracle header had a focused RED: with
+`KAHIP_ENABLE_TASK5_ORACLE_TRACE` absent, this expression still executed and
+the probe returned 1:
+
+```cpp
+int evaluated = 0;
+KAHIP_TASK5_ORACLE_TRACE(
+    (++evaluated, kahip_task5_oracle_trace::final_partition(7, 1)));
+```
+
+The regenerated header puts every trace type, helper, allocation, and I/O path
+inside `#if KAHIP_ENABLE_TASK5_ORACLE_TRACE`; the OFF macros discard their
+arguments. The same probe then returned 0. Whole graph/quotient/block
+instrumentation traversals and the trace-only rank query are also preprocessor
+guarded. Thus OFF performs no trace argument evaluation, extra graph
+traversal, string construction, trace read, or trace branch.
+
+The reproducible artifact is
+`task-5-upstream-trace.patch`, generated from the disposable worktree at exact
+upstream `5935f349f65f1788a9b68fcf6d853e698d86956d`. Its SHA-256 is:
+
+```text
+2116f157e9b7c3008cdf329fb0366455fbfc224d47340ceed430d61abc50021c
+```
+
+The checked-in bytes and the disposable worktree's
+`git diff --binary --no-ext-diff HEAD` have that same hash. Applying with
+`git apply --check` in the pristine pinned worktree returned 0.
+
+An OFF build of the instrumented upstream, run with both trace environment
+variables set, produced no trace file and retained the exact partition-vector
+SHA-256:
+
+```text
+a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0
+```
+
+### Strengthened exact oracle comparison
+
+The ON upstream and ON candidate were compared again for exactly
+`examples/rgg_n_2_15_s0.graph`, ranks 2, k 2, `ultrafastmesh`, seed 0. Their
+partition files were byte-identical and both hashed to `a600acd...`. After
+deduplicating the common header and globally sorting all v2 canonical records,
+both aggregates had 436,722 lines, compared byte-for-byte equal, and had
+SHA-256:
+
+```text
+efe70e273a9ff2be779bd9b42e79054c32aa43ecfbf82835154b4d17c534d59f
+```
+
+The rank-local hashes are intentionally different across implementations
+because projection replies are observed at different physical locations:
+
+```text
+upstream rank 0  4e80b5d9178c6c28b0b715f5a739b5306bd672637773ef18bd2d22c1db962fa5
+upstream rank 1  eec9e3d6601b6e16d49bc4a2f657577c245df2180526863498a63e4cddc375ed
+candidate rank 0 01fa48dcaa9ca90e7028cb5bc1400a4d2ed2c867612ecc99c4f9cedaac77f92e
+candidate rank 1 90c191a6e4b82da4ec6d196ab4aa1bddb6a71c24e7dc4e0522f8222b7e63c162
+```
+
+The global equality is now meaningful because request/reply records encode
+the same semantic requester/owner/receiver relationship independent of the
+observer. Stage counts remain those recorded in the manifest. This tuple still
+does not execute vcycle-only block propagation; the focused two-rank hook test
+now verifies its hierarchy and actor schema, while algorithmic block-path
+parity remains later-task coverage.
+
+### Fix-round verification
+
+- Trace-ON debug preset: full build at `-j2`, then `44/44` CTest tests passed.
+  This includes all five pinned RNG tests, the hierarchy/actor schema tests,
+  run-ID test, exact projection and vcycle block-hook fixtures, integration
+  smoke, and adapter ranks 1 through 5.
+- Default-OFF release preset: full build at `-j2`, then `43/43` CTest tests
+  passed. The only absent test is the intentionally trace-ON integration
+  smoke.
+- The focused projection regression passed with exactly two dense payload
+  collectives and no legacy `MPI_Isend`/`MPI_Probe` use.
+- Generated debug and release capability headers both report
+  `#define KAHIP_HAVE_MPI_ALLTOALLV_C 0`; the host exercised the MPI-3 path.
+- Production Cista and superseded projection P2P/member searches both returned
+  no matches (`status=1`).
+- The patch hash/live-diff hash comparison, pristine `git apply --check`, OFF
+  evaluation probe, OFF no-file check, exact partition comparison, and exact
+  v2 aggregate comparison all passed.
+
+This remains scoped evidence for the recorded tuple and focused fixtures, not
+a claim of all-configuration parity or algorithmic vcycle block-path parity.

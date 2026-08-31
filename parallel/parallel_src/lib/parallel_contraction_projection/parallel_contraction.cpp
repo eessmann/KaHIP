@@ -13,6 +13,10 @@ namespace parhip {
 void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config,
                                                              parallel_graph_access & G, 
                                                              parallel_graph_access & Q) {
+#if KAHIP_ENABLE_MPI_TRACE
+  PEID trace_rank = 0;
+  MPI_Comm_rank(communicator, &trace_rank);
+#endif
 
   NodeID number_of_distinct_labels; // equals global number of coarse nodes
 
@@ -27,7 +31,8 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
   forall_local_nodes(G, node) {
     G.setCNode( node, label_mapping[ G.getNodeLabel( node )]);
     KAHIP_MPI_TRACE(mpi::trace::contraction_label(
-        G.getGlobalID(node), G.getNodeLabel(node), G.getCNode(node)));
+        mpi::trace::current_hierarchy(), G.getGlobalID(node), trace_rank,
+        G.getNodeLabel(node), G.getCNode(node)));
   } endfor
 
   get_nodes_to_cnodes_ghost_nodes( communicator, G );
@@ -48,11 +53,13 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
   update_ghost_nodes_weights( communicator, Q );
   forall_local_nodes(Q, node) {
     KAHIP_MPI_TRACE(mpi::trace::quotient_node_weight(
-        Q.getGlobalID(node), Q.getNodeWeight(node)));
+        mpi::trace::current_hierarchy(), Q.getGlobalID(node), trace_rank,
+        Q.getNodeWeight(node)));
     forall_out_edges(Q, edge, node) {
       auto const target = Q.getEdgeTarget(edge);
       KAHIP_MPI_TRACE(mpi::trace::quotient_edge(
-          Q.getGlobalID(node), Q.getGlobalID(target), Q.getEdgeWeight(edge)));
+          mpi::trace::current_hierarchy(), Q.getGlobalID(node), trace_rank,
+          Q.getGlobalID(target), Q.getEdgeWeight(edge)));
     } endfor
   } endfor
 }

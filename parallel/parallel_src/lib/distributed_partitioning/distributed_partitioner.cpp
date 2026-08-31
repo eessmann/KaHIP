@@ -6,6 +6,7 @@
  *****************************************************************************/
 
 #include <sstream>
+#include "communication/mpi_trace.h"
 #include "communication/mpi_tools.h"
 #include "distributed_partitioner.h"
 #include "initial_partitioning/initial_partitioning.h"
@@ -149,6 +150,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig & 
 
 
   m_level++;
+  KAHIP_MPI_TRACE_SET_HIERARCHY(
+      m_cycle, m_level, mpi::trace::epoch::coarsening);
   config.label_iterations = config.label_iterations_coarsening;
   config.total_num_labels = G.number_of_global_nodes();
   //
@@ -173,6 +176,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig & 
   t.restart();
 
   {
+    KAHIP_MPI_TRACE_SET_HIERARCHY(
+        m_cycle, m_level, mpi::trace::epoch::contraction);
     parallel_contraction parallel_contract;
     parallel_contract.contract_to_distributed_quotient( communicator, config, G, Q); // contains one Barrier
 
@@ -209,6 +214,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig & 
 #endif
     t.restart();
 
+    KAHIP_MPI_TRACE_SET_HIERARCHY(
+        m_cycle, m_level, mpi::trace::epoch::initial_partition);
     initial_partitioning_algorithm ip;
     ip.perform_partitioning( communicator, config, Q );
 
@@ -229,6 +236,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig & 
 #endif
 
   t.restart();
+  KAHIP_MPI_TRACE_SET_HIERARCHY(
+      m_cycle, m_level, mpi::trace::epoch::projection);
   parallel_projection parallel_project;
   parallel_project.parallel_project( communicator, G, Q ); // contains a Barrier
 
@@ -242,6 +251,8 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig & 
   config.label_iterations = config.label_iterations_refinement;
 
   if( config.label_iterations != 0 ) {
+    KAHIP_MPI_TRACE_SET_HIERARCHY(
+        m_cycle, m_level, mpi::trace::epoch::refinement);
     config.total_num_labels = config.k;
     config.upper_bound_cluster = config.upper_bound_partition;
 

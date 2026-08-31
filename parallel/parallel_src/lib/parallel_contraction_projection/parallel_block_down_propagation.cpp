@@ -98,7 +98,8 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
 
   forall_local_nodes(Q, node) {
     KAHIP_MPI_TRACE(mpi::trace::block_propagation(
-        Q.getGlobalID(node), Q.getSecondPartitionIndex(node)));
+        mpi::trace::current_hierarchy(), Q.getGlobalID(node), rank, rank,
+        Q.getSecondPartitionIndex(node)));
   } endfor
 
   update_ghost_nodes_blocks( communicator, Q );
@@ -170,7 +171,9 @@ for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
       NodeWeight  block  = message[i+1];
 
       G.setSecondPartitionIndex( G.getLocalID(global_id), block );
-      KAHIP_MPI_TRACE(mpi::trace::block_propagation(global_id, block));
+      KAHIP_MPI_TRACE(mpi::trace::block_propagation(
+          mpi::trace::current_hierarchy(), global_id, st.MPI_SOURCE, rank,
+          block));
     }
   }
 

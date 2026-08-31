@@ -4,10 +4,14 @@ if(NOT DEFINED PARHIP_EXECUTABLE OR NOT DEFINED MPIEXEC_EXECUTABLE OR
     message(FATAL_ERROR "MPI trace smoke is missing a required path")
 endif()
 
-file(REMOVE "${TRACE_BASE}.rank0.trace" "${TRACE_BASE}.rank1.trace")
+set(trace_run_id "smoke")
+set(trace_run_base "${TRACE_BASE}.run-${trace_run_id}")
+file(REMOVE "${trace_run_base}.rank0.trace" "${trace_run_base}.rank1.trace")
 execute_process(
     COMMAND
-        "${CMAKE_COMMAND}" -E env "KAHIP_MPI_TRACE_PATH=${TRACE_BASE}"
+        "${CMAKE_COMMAND}" -E env
+        "KAHIP_MPI_TRACE_PATH=${TRACE_BASE}"
+        "KAHIP_MPI_TRACE_RUN_ID=${trace_run_id}"
         "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 2
         "${PARHIP_EXECUTABLE}" "${GRAPH_PATH}"
         --k=2 --preconfiguration=ultrafastmesh --seed=0
@@ -23,7 +27,7 @@ endif()
 
 set(combined_trace "")
 foreach(rank RANGE 0 1)
-    set(trace_file "${TRACE_BASE}.rank${rank}.trace")
+    set(trace_file "${trace_run_base}.rank${rank}.trace")
     if(NOT EXISTS "${trace_file}")
         message(FATAL_ERROR "trace file was not written: ${trace_file}")
     endif()
@@ -41,7 +45,8 @@ foreach(required_stage
         projection-reply
         ghost-update
         final-partition)
-    if(NOT combined_trace MATCHES "${required_stage} global=")
+    if(NOT combined_trace MATCHES
+       "${required_stage} cycle=[0-9]+ level=[0-9]+ epoch=[a-z-]+ round=[0-9]+ global=")
         message(FATAL_ERROR
             "trace smoke is missing stage ${required_stage}"
         )

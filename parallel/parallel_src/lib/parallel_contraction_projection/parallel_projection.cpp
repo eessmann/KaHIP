@@ -67,7 +67,7 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
     });
     for (auto const& request : destination_requests) {
       KAHIP_MPI_TRACE(mpi::trace::projection_request(
-          request.request_id,
+          mpi::trace::current_hierarchy(), request.request_id,
           rank,
           static_cast<int>(destination),
           request.coarse_global_id));
@@ -98,9 +98,9 @@ void parallel_projection::parallel_project( MPI_Comm communicator, parallel_grap
     });
     for (auto const& reply : replies) {
       KAHIP_MPI_TRACE(mpi::trace::projection_reply(
-          reply.request_id,
-          rank,
+          mpi::trace::current_hierarchy(), reply.request_id,
           static_cast<int>(source),
+          rank,
           reply.coarse_global_id,
           reply.label));
     }

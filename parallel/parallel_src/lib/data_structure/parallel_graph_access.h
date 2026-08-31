@@ -915,7 +915,9 @@ void ghost_node_communication::receive_messages_of_neighbors() {
                         m_G->update_non_contained_block_balance(m_G->getNodeLabel(local_id), label, m_G->getNodeWeight(local_id));
                         m_G->setNodeLabel(local_id, label);
                         KAHIP_MPI_TRACE(mpi::trace::ghost_update(
-                            global_id, st.MPI_SOURCE, label));
+                            mpi::trace::current_hierarchy_with_round(
+                                static_cast<std::uint32_t>(m_recv_iteration)),
+                            global_id, st.MPI_SOURCE, m_rank, label));
                 }
         }
 
@@ -1026,7 +1028,8 @@ inline void ghost_node_communication::update_ghost_node_data_global() {
 
                         m_G->setNodeLabel( m_G->m_global_to_local_id[global_id], label);
                         KAHIP_MPI_TRACE(mpi::trace::ghost_update(
-                            global_id, st.MPI_SOURCE, label));
+                            mpi::trace::current_hierarchy(), global_id,
+                            st.MPI_SOURCE, m_rank, label));
                 }
         }
 

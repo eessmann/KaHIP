@@ -92,13 +92,16 @@ int main(int argn, char **argv) {
 
                 parallel_graph_access G(communicator);
                 parallel_graph_io::readGraphWeighted(partition_config, G, graph_filename, rank, size, communicator);
+                KAHIP_MPI_TRACE_SET_HIERARCHY(0, 0, mpi::trace::epoch::input);
                 forall_local_nodes(G, node) {
                         KAHIP_MPI_TRACE(mpi::trace::graph_distribution_node(
-                            G.getGlobalID(node), rank, G.getNodeWeight(node)));
+                            mpi::trace::current_hierarchy(), G.getGlobalID(node),
+                            rank, G.getNodeWeight(node)));
                         forall_out_edges(G, e, node) {
                                 NodeID target = G.getEdgeTarget(e);
                                 KAHIP_MPI_TRACE(mpi::trace::graph_distribution_edge(
-                                    G.getGlobalID(node),
+                                    mpi::trace::current_hierarchy(),
+                                    G.getGlobalID(node), rank,
                                     G.getGlobalID(target),
                                     G.getEdgeWeight(e)));
                         } endfor
@@ -166,9 +169,16 @@ int main(int argn, char **argv) {
                 dpart.perform_partitioning( communicator, partition_config, G);
 
                 MPI_Barrier(communicator);
+                KAHIP_MPI_TRACE_SET_HIERARCHY(
+                    partition_config.num_vcycles == 0
+                        ? 0
+                        : partition_config.num_vcycles - 1,
+                    0,
+                    mpi::trace::epoch::final_partition);
                 forall_local_nodes(G, node) {
                         KAHIP_MPI_TRACE(mpi::trace::final_partition(
-                            G.getGlobalID(node), G.getNodeLabel(node)));
+                            mpi::trace::current_hierarchy(), G.getGlobalID(node),
+                            rank, G.getNodeLabel(node)));
                 } endfor
                 mpi::trace::write_rank_file_if_requested(communicator);
 

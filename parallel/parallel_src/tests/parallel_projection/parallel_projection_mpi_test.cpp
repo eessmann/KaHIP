@@ -7,14 +7,20 @@
 
 #include "data_structure/parallel_graph_access.h"
 #include "communication/mpi_trace.h"
+#include "kahip_mpi_capabilities.h"
 #include "parallel_contraction_projection/parallel_block_down_propagation.h"
 #include "parallel_contraction_projection/parallel_projection.h"
 
 namespace protocol_probe {
 inline bool active = false;
 inline int all_to_all_v_calls = 0;
+inline int all_to_all_v_c_calls = 0;
 inline int isend_calls = 0;
 inline int probe_calls = 0;
+
+[[nodiscard]] auto dense_payload_collective_calls() -> int {
+  return all_to_all_v_calls + all_to_all_v_c_calls;
+}
 }  // namespace protocol_probe
 
 extern "C" int MPI_Alltoallv(const void* send_buffer,
@@ -39,6 +45,31 @@ extern "C" int MPI_Alltoallv(const void* send_buffer,
                         receive_datatype,
                         communicator);
 }
+
+#if KAHIP_HAVE_MPI_ALLTOALLV_C
+extern "C" int MPI_Alltoallv_c(const void* send_buffer,
+                               const MPI_Count send_counts[],
+                               const MPI_Aint send_displacements[],
+                               MPI_Datatype send_datatype,
+                               void* receive_buffer,
+                               const MPI_Count receive_counts[],
+                               const MPI_Aint receive_displacements[],
+                               MPI_Datatype receive_datatype,
+                               MPI_Comm communicator) {
+  if (protocol_probe::active) {
+    ++protocol_probe::all_to_all_v_c_calls;
+  }
+  return PMPI_Alltoallv_c(send_buffer,
+                          send_counts,
+                          send_displacements,
+                          send_datatype,
+                          receive_buffer,
+                          receive_counts,
+                          receive_displacements,
+                          receive_datatype,
+                          communicator);
+}
+#endif
 
 extern "C" int MPI_Isend(const void* buffer,
                          int count,
@@ -112,10 +143,13 @@ TEST_CASE("projection uses two dense exchanges and correlates stable request IDs
   }
 
   protocol_probe::all_to_all_v_calls = 0;
+  protocol_probe::all_to_all_v_c_calls = 0;
   protocol_probe::isend_calls = 0;
   protocol_probe::probe_calls = 0;
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
+  KAHIP_MPI_TRACE_SET_HIERARCHY(
+      7, 3, parhip::mpi::trace::epoch::projection);
   protocol_probe::active = true;
   parhip::parallel_projection{}.parallel_project(
       MPI_COMM_WORLD, finer, coarser);
@@ -127,32 +161,45 @@ TEST_CASE("projection uses two dense exchanges and correlates stable request IDs
   REQUIRE(finer.getNodeLabel(0) == expected[0]);
   REQUIRE(finer.getNodeLabel(1) == expected[1]);
   CAPTURE(protocol_probe::all_to_all_v_calls,
+          protocol_probe::all_to_all_v_c_calls,
           protocol_probe::isend_calls,
           protocol_probe::probe_calls);
-  REQUIRE(protocol_probe::all_to_all_v_calls == 2);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
   REQUIRE(protocol_probe::isend_calls == 0);
   REQUIRE(protocol_probe::probe_calls == 0);
 
 #if KAHIP_ENABLE_MPI_TRACE
   auto const expected_trace = rank == 0
       ? std::string{
-            "kahip-mpi-trace-v1 upstream="
+            "kahip-mpi-trace-v2 upstream="
             "5935f349f65f1788a9b68fcf6d853e698d86956d\n"
-            "projection-request global=2 key=request:1 source=0 destination=1\n"
-            "projection-request global=3 key=request:0 source=0 destination=1\n"
-            "projection-reply global=0 key=request:3 source=0 destination=1 "
-            "label=100\n"
-            "projection-reply global=1 key=request:2 source=0 destination=1 "
-            "label=101\n"}
+            "projection-request cycle=7 level=3 epoch=projection round=0 "
+            "global=2 owner=1 requester=0 receiver=1 key=request:1 "
+            "requester=0 owner=1\n"
+            "projection-request cycle=7 level=3 epoch=projection round=0 "
+            "global=3 owner=1 requester=0 receiver=1 key=request:0 "
+            "requester=0 owner=1\n"
+            "projection-reply cycle=7 level=3 epoch=projection round=0 "
+            "global=0 owner=0 requester=1 receiver=1 key=request:3 "
+            "requester=1 owner=0 label=100\n"
+            "projection-reply cycle=7 level=3 epoch=projection round=0 "
+            "global=1 owner=0 requester=1 receiver=1 key=request:2 "
+            "requester=1 owner=0 label=101\n"}
       : std::string{
-            "kahip-mpi-trace-v1 upstream="
+            "kahip-mpi-trace-v2 upstream="
             "5935f349f65f1788a9b68fcf6d853e698d86956d\n"
-            "projection-request global=0 key=request:3 source=1 destination=0\n"
-            "projection-request global=1 key=request:2 source=1 destination=0\n"
-            "projection-reply global=2 key=request:1 source=1 destination=0 "
-            "label=202\n"
-            "projection-reply global=3 key=request:0 source=1 destination=0 "
-            "label=203\n"};
+            "projection-request cycle=7 level=3 epoch=projection round=0 "
+            "global=0 owner=0 requester=1 receiver=0 key=request:3 "
+            "requester=1 owner=0\n"
+            "projection-request cycle=7 level=3 epoch=projection round=0 "
+            "global=1 owner=0 requester=1 receiver=0 key=request:2 "
+            "requester=1 owner=0\n"
+            "projection-reply cycle=7 level=3 epoch=projection round=0 "
+            "global=2 owner=1 requester=0 receiver=0 key=request:1 "
+            "requester=0 owner=1 label=202\n"
+            "projection-reply cycle=7 level=3 epoch=projection round=0 "
+            "global=3 owner=1 requester=0 receiver=0 key=request:0 "
+            "requester=0 owner=1 label=203\n"};
   REQUIRE(parhip::mpi::trace::canonical_text(
               parhip::mpi::trace::snapshot()) == expected_trace);
 #else
@@ -188,6 +235,8 @@ TEST_CASE("vcycle block-down hook emits canonical records",
   parhip::PPartitionConfig config{};
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
+  KAHIP_MPI_TRACE_SET_HIERARCHY(
+      2, 4, parhip::mpi::trace::epoch::contraction);
   parhip::parallel_block_down_propagation{}.propagate_block_down(
       MPI_COMM_WORLD, config, finer, coarser);
 
@@ -199,11 +248,15 @@ TEST_CASE("vcycle block-down hook emits canonical records",
 #if KAHIP_ENABLE_MPI_TRACE
   auto const first_global = static_cast<parhip::NodeID>(rank) * 2;
   auto const expected_trace =
-      std::string{"kahip-mpi-trace-v1 upstream="
+      std::string{"kahip-mpi-trace-v2 upstream="
                   "5935f349f65f1788a9b68fcf6d853e698d86956d\n"} +
-      "block-propagation global=" + std::to_string(first_global) +
+      "block-propagation cycle=2 level=4 epoch=contraction round=0 global=" +
+      std::to_string(first_global) + " owner=" + std::to_string(rank) +
+      " requester=- receiver=" + std::to_string(rank) +
       " key=block block=" + std::to_string(expected_blocks[0]) + "\n" +
-      "block-propagation global=" + std::to_string(first_global + 1) +
+      "block-propagation cycle=2 level=4 epoch=contraction round=0 global=" +
+      std::to_string(first_global + 1) + " owner=" + std::to_string(rank) +
+      " requester=- receiver=" + std::to_string(rank) +
       " key=block block=" + std::to_string(expected_blocks[1]) + "\n";
   REQUIRE(parhip::mpi::trace::canonical_text(
               parhip::mpi::trace::snapshot()) == expected_trace);
