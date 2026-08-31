@@ -19,6 +19,9 @@
 #include <utility>
 #include <vector>
 
+#include "communication/mpi_error.h"
+#include "communication/mpi_handles.h"
+
 #ifndef KAHIP_ENABLE_MPI_TRACE
 #define KAHIP_ENABLE_MPI_TRACE 0
 #endif
@@ -407,10 +410,8 @@ inline hierarchy_position hierarchy{
   auto length = rank == 0
                     ? static_cast<unsigned long long>(root_value.size())
                     : 0ULL;
-  if (MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, communicator) !=
-      MPI_SUCCESS) {
-    throw std::runtime_error{"MPI trace run-ID length broadcast failed"};
-  }
+  check(MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, communicator),
+        "MPI_Bcast(trace string length)");
   if (length >
       static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
     throw std::runtime_error{"MPI trace run ID is too long"};
@@ -420,11 +421,41 @@ inline hierarchy_position hierarchy{
   if (rank == 0) {
     std::ranges::copy(root_value, bytes.begin());
   }
-  if (MPI_Bcast(bytes.data(), static_cast<int>(length), MPI_CHAR, 0,
-                communicator) != MPI_SUCCESS) {
-    throw std::runtime_error{"MPI trace run-ID payload broadcast failed"};
-  }
+  check(MPI_Bcast(bytes.data(), static_cast<int>(length), MPI_CHAR, 0,
+                  communicator),
+        "MPI_Bcast(trace string payload)");
   return {bytes.begin(), bytes.end()};
+}
+
+[[nodiscard]] inline auto resolve_base_path_collectively(
+    MPI_Comm communicator,
+    char const* local_base_path) -> std::optional<std::string> {
+  int rank = 0;
+  check(MPI_Comm_rank(communicator, &rank), "MPI_Comm_rank(trace path)");
+
+  auto const local_present = local_base_path == nullptr ? 0 : 1;
+  auto root_present = rank == 0 ? local_present : 0;
+  check(MPI_Bcast(&root_present, 1, MPI_INT, 0, communicator),
+        "MPI_Bcast(trace path presence)");
+  auto const root_path = broadcast_string(
+      communicator, rank,
+      rank == 0 && local_base_path != nullptr ? local_base_path : "");
+  auto const local_mismatch =
+      local_present != root_present ||
+      (local_present != 0 && std::string_view{local_base_path} != root_path);
+  auto mismatch = local_mismatch ? 1 : 0;
+  auto any_mismatch = 0;
+  check(MPI_Allreduce(&mismatch, &any_mismatch, 1, MPI_INT, MPI_MAX,
+                      communicator),
+        "MPI_Allreduce(trace path agreement)");
+  if (any_mismatch != 0) {
+    throw std::runtime_error{
+        "MPI trace path differs across communicator ranks"};
+  }
+  if (root_present == 0) {
+    return std::nullopt;
+  }
+  return root_path;
 }
 }  // namespace detail
 
@@ -505,17 +536,19 @@ inline void append(record value) {
   }
 }
 inline void write_rank_file_if_requested(MPI_Comm communicator) {
-  auto const* base_path = std::getenv("KAHIP_MPI_TRACE_PATH");
-  if (base_path == nullptr) {
+  auto owned_communicator = ::parhip::mpi::communicator{
+      ::parhip::mpi::communicator_view{communicator}};
+  auto const collective_communicator = owned_communicator.view();
+  auto const base_path = detail::resolve_base_path_collectively(
+      collective_communicator.native_handle(),
+      std::getenv("KAHIP_MPI_TRACE_PATH"));
+  if (!base_path) {
     return;
   }
-  int rank = 0;
-  if (MPI_Comm_rank(communicator, &rank) != MPI_SUCCESS) {
-    throw std::runtime_error{"MPI trace could not query rank"};
-  }
-  auto const run_id =
-      resolve_run_id_collectively(communicator, requested_run_id());
-  auto const path = rank_file_path(base_path, run_id, rank);
+  auto const rank = collective_communicator.rank();
+  auto const run_id = resolve_run_id_collectively(
+      collective_communicator.native_handle(), requested_run_id());
+  auto const path = rank_file_path(*base_path, run_id, rank);
   auto output = std::ofstream{path, std::ios::binary | std::ios::trunc};
   if (!output) {
     throw std::runtime_error{"MPI trace could not open " + path};

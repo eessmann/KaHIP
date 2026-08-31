@@ -1,7 +1,7 @@
 KaHIP Task 5 oracle provenance
 upstream_revision=5935f349f65f1788a9b68fcf6d853e698d86956d
 instrumentation_patch=task-5-upstream-trace.patch
-instrumentation_patch_sha256=8266c743ba828a6bd08c87def268940dfbda41910140e7dff29cc327da985cdc
+instrumentation_patch_sha256=f8542af7d02588b1491b39c30f99ba4c30b5a98b2fe04e0bfaab781a27020180
 
 tuple.graph=examples/rgg_n_2_15_s0.graph
 tuple.ranks=2

@@ -125,6 +125,54 @@ catch_discover_tests(
     OUTPUT_PREFIX "unit-"
 )
 if(KAHIP_ENABLE_MPI_TRACE)
+    add_executable(
+        mpi_trace_writer_mpi_test
+        communication/mpi_trace_writer_mpi_test.cpp
+    )
+    target_link_libraries(
+        mpi_trace_writer_mpi_test
+        PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
+    )
+
+    function(add_mpi_trace_writer_test test_name catch_test_name)
+        add_test(
+            NAME ${test_name}
+            COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "KAHIP_TRACE_WRITER_TEST_BASE=${CMAKE_CURRENT_BINARY_DIR}/trace-writer"
+                "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 2
+                ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:mpi_trace_writer_mpi_test>
+                "${catch_test_name}"
+                ${MPIEXEC_POSTFLAGS}
+        )
+        set_tests_properties(
+            ${test_name}
+            PROPERTIES
+                PROCESSORS 2
+                RUN_SERIAL TRUE
+                TIMEOUT 4
+                LABELS "mpi;trace"
+        )
+    endfunction()
+
+    add_mpi_trace_writer_test(
+        unit-mpi-trace-writer-presence-mismatch
+        "trace writer rejects rank-local enablement mismatch"
+    )
+    add_mpi_trace_writer_test(
+        unit-mpi-trace-writer-path-mismatch
+        "trace writer rejects different rank-local base paths"
+    )
+    add_mpi_trace_writer_test(
+        unit-mpi-trace-writer-all-unset
+        "trace writer returns collectively when tracing is unset"
+    )
+    add_mpi_trace_writer_test(
+        unit-mpi-trace-writer-common-path
+        "trace writer uses one agreed base path"
+    )
+
     add_test(
         NAME integration-mpi-trace-smoke
         COMMAND

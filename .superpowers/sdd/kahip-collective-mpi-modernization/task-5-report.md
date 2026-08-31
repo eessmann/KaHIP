@@ -513,3 +513,98 @@ fixture still does not execute the algorithmic vcycle block path.
 - The regenerated patch live-diff comparison, pristine apply-check, OFF
   evaluation probe, OFF no-file check, fixed partition comparison, exact v3
   aggregate comparison, and `git diff --check` all passed.
+
+## Fix round 3: collective trace-path agreement
+
+This narrow round is based on Task 5 fix-round-2 commit
+`f31eea3214ca910c67ec5b82cb62887d64bcf797`. It changes only trace-writer
+path agreement, its real two-rank regressions, and the aligned pinned-upstream
+trace-only provenance artifact. The projection algorithm and every Task 6
+path remain unchanged.
+
+### Writer-level RED/GREEN evidence
+
+Four CTest cases invoke the real trace writer under two MPI ranks with a four
+second timeout. The pre-fix RED was protocol-level rather than a resolver-only
+unit failure:
+
+- rank 0 unset and rank 1 set timed out after 4.04 seconds. Rank 0 returned
+  locally and reached the test barrier, while rank 1 blocked in the run-ID
+  broadcast;
+- two different nonempty base paths completed but returned no error and wrote
+  split rank-local files. Both ranks failed the common-error and no-partial-file
+  assertions (12 of 15 assertions passed on each rank);
+- all-unset and one common path were baseline GREEN.
+
+The writer now duplicates the supplied communicator through the reviewed RAII
+handle, whose duplicate uses `MPI_ERRORS_RETURN`, before reading the local
+environment. On that internal communicator it broadcasts root presence and
+the exact root path bytes, reduces every presence/value mismatch, and only
+then either returns collectively, throws the same
+`MPI trace path differs across communicator ranks` runtime error on every
+rank, or continues with the agreed base path. No file is opened before this
+agreement. The existing collective run-ID resolver then operates on the same
+internal communicator. The focused GREEN completed all four cases in 0.35
+seconds; the full debug suite repeated them individually under the timeout.
+
+All of this code remains inside `#if KAHIP_ENABLE_MPI_TRACE`. The default-OFF
+header stub neither reads trace environment variables nor performs communicator
+duplication or any other trace MPI operation.
+
+### Regenerated pinned-upstream provenance and exact oracle
+
+The same consensus semantics were added to the trace-only disposable upstream
+worktree at exact revision
+`5935f349f65f1788a9b68fcf6d853e698d86956d`, using a C++11 RAII duplicated
+communicator with `MPI_ERRORS_RETURN`. The checked-in
+`task-5-upstream-trace.patch` is byte-identical to that worktree's
+`git diff --binary --no-ext-diff HEAD`. Its new SHA-256 is:
+
+```text
+f8542af7d02588b1491b39c30f99ba4c30b5a98b2fe04e0bfaab781a27020180
+```
+
+`git apply --check` against the pristine pinned worktree returned zero. The
+trace-OFF expression-evaluation probe was rebuilt under C++11 and returned
+zero. A full trace-OFF upstream build, run with both trace environment
+variables set, wrote no trace file and retained the exact fixed partition
+SHA-256:
+
+```text
+a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0
+```
+
+For exactly `examples/rgg_n_2_15_s0.graph`, ranks 2, k 2,
+`ultrafastmesh`, seed 0, trace-ON upstream and candidate partition files were
+byte-identical and both had that same SHA-256. After removing each rank-local
+header and globally sorting complete canonical v3 records, the two 436,721
+record aggregates compared byte-for-byte equal and both had SHA-256:
+
+```text
+a179bb30213dbb26638657a1d611e951a8bf900b817647fc03d4c700a83f0a18
+```
+
+Thus path consensus changes writer setup only; the recorded trace content is
+unchanged. This remains exact evidence for the stated tuple, not a broad
+all-configuration or algorithmic vcycle-path parity claim.
+
+### Fix-round-3 verification
+
+- Trace-ON debug full build completed at `-j2`; full CTest passed 48 of 48.
+  This includes the four writer-level path cases, integration smoke, all five
+  pinned RNG regressions, exact projection and real ghost regressions, schema,
+  aggregation, vcycle hook, and adapter ranks 1 through 5.
+- Default-OFF release full build completed at `-j2`; full CTest passed 43 of
+  43. The writer executable and its four tests are target-scoped to trace-ON
+  and are absent from the default-OFF suite. Ninja reported its recoverable
+  pre-existing premature build-log EOF warning, regenerated the build graph,
+  and exited successfully.
+- Debug and release capability headers both report
+  `KAHIP_HAVE_MPI_ALLTOALLV_C 0`; this host exercised the MPI-3 path without
+  faking the guarded MPI-4 capability.
+- Production Cista and superseded projection
+  `MPI_Isend`/`MPI_Probe`/`MPI_Recv`/request-buffer searches returned no
+  matches.
+- Patch live-diff equality, patch SHA, pristine apply-check, OFF no-evaluation
+  probe, OFF no-file check, fixed partition and v3 aggregate comparisons, and
+  `git diff --check` all passed.
