@@ -4,6 +4,7 @@ include(Catch)
 add_library(catch_mpi_runner catch_mpi/catch_mpi_runner.cpp)
 target_link_libraries(catch_mpi_runner PUBLIC MPI::MPI_CXX)
 target_link_libraries(catch_mpi_runner PUBLIC Catch2::Catch2)
+target_link_libraries(catch_mpi_runner PRIVATE kahip_options)
 
 # Parallel contraction
 add_executable(

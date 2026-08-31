@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0)
+cmake_minimum_required(VERSION 4.0...4.3)
 include(CheckCXXCompilerFlag)
 project(KaHIP VERSION 3.24 LANGUAGES C CXX)
 include(CTest)
@@ -100,40 +100,80 @@ option(USE_ILP "build local ILP improver - introduces dependency on Gurobi" OFF)
 # Argtable3
 add_subdirectory(extern/argtable3-3.2.2)
 
-add_library(kahip_headers INTERFACE)
-target_include_directories(kahip_headers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(
-    kahip_headers
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/app
-)
-target_include_directories(
-    kahip_headers
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib
-)
-target_include_directories(
-    kahip_headers
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
-)
-target_include_directories(
-    kahip_headers
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
-)
-target_include_directories(
-    kahip_headers
-    INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
-)
-target_include_directories(
-    kahip_headers
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
-)
-
 add_library(kahip_version INTERFACE)
 target_include_directories(
     kahip_version
     INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/version
 )
-target_link_libraries(kahip_headers INTERFACE kahip_version)
+
+set(
+    KAHIP_PRIVATE_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/version
+)
+
+function(kahip_add_private_header_set target base_dir)
+    target_sources(
+        ${target}
+        PRIVATE
+            FILE_SET private_headers
+            TYPE HEADERS
+            BASE_DIRS "${base_dir}"
+            FILES ${ARGN}
+    )
+endfunction()
+
+function(kahip_configure_root_object target)
+    target_include_directories(${target} PUBLIC ${KAHIP_PRIVATE_INCLUDE_DIRS})
+    target_link_libraries(
+        ${target}
+        PUBLIC kahip_options
+        PRIVATE kahip_warnings
+    )
+endfunction()
+
+file(
+    GLOB_RECURSE KAHIP_CORE_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/app/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/*.h"
+)
+list(
+    FILTER KAHIP_CORE_HEADERS
+    EXCLUDE
+    REGEX "/lib/(mapping|node_ordering|parallel_mh|spac)/"
+)
+file(
+    GLOB_RECURSE KAHIP_COLLECTIVE_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/parallel_mh/*.h"
+)
+list(
+    APPEND KAHIP_COLLECTIVE_HEADERS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/graph_communication.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/mpi_tools.h"
+)
+file(
+    GLOB_RECURSE KAHIP_MAPPING_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/mapping/*.h"
+)
+file(
+    GLOB_RECURSE KAHIP_SPAC_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/spac/*.h"
+)
+file(
+    GLOB_RECURSE KAHIP_ORDERING_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/node_ordering/*.h"
+)
 
 set(LIBKAFFPA_SOURCE_FILES
     lib/data_structure/graph_hierarchy.cpp
@@ -198,10 +238,17 @@ set(LIBKAFFPA_SOURCE_FILES
     lib/partition/uncoarsening/refinement/cycle_improvements/cycle_refinement.cpp
     lib/partition/uncoarsening/refinement/tabu_search/tabu_search.cpp
 )
-add_library(libkaffpa OBJECT ${LIBKAFFPA_SOURCE_FILES})
+add_library(kahip_core_obj OBJECT ${LIBKAFFPA_SOURCE_FILES})
+kahip_add_private_header_set(
+    kahip_core_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${KAHIP_CORE_HEADERS}
+)
+kahip_configure_root_object(kahip_core_obj)
 target_link_libraries(
-    libkaffpa
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    kahip_core_obj
+    PUBLIC kahip_version
+    PRIVATE argtable3
 )
 
 if(NOT NOMPI)
@@ -214,10 +261,20 @@ if(NOT NOMPI)
         lib/tools/graph_communication.cpp
         lib/tools/mpi_tools.cpp
     )
-    add_library(libkaffpa_parallel OBJECT ${LIBKAFFPA_PARALLEL_SOURCE_FILES})
+    add_library(
+        kahip_collective_obj
+        OBJECT
+        ${LIBKAFFPA_PARALLEL_SOURCE_FILES}
+    )
+    kahip_add_private_header_set(
+        kahip_collective_obj
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        ${KAHIP_COLLECTIVE_HEADERS}
+    )
+    kahip_configure_root_object(kahip_collective_obj)
     target_link_libraries(
-        libkaffpa_parallel
-        PRIVATE kahip_headers kahip_options kahip_warnings MPI::MPI_CXX
+        kahip_collective_obj
+        PUBLIC MPI::MPI_CXX
     )
 endif()
 
@@ -231,18 +288,22 @@ set(LIBMAPPING_SOURCE_FILES
     lib/mapping/mapping_algorithms.cpp
     lib/mapping/construct_mapping.cpp
 )
-add_library(libmapping OBJECT ${LIBMAPPING_SOURCE_FILES})
-target_link_libraries(
-    libmapping
-    PRIVATE kahip_headers kahip_options kahip_warnings
+add_library(kahip_mapping_obj OBJECT ${LIBMAPPING_SOURCE_FILES})
+kahip_add_private_header_set(
+    kahip_mapping_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${KAHIP_MAPPING_HEADERS}
 )
+kahip_configure_root_object(kahip_mapping_obj)
 
 set(LIBSPAC_SOURCE_FILES lib/spac/spac.cpp)
-add_library(libspac OBJECT ${LIBSPAC_SOURCE_FILES})
-target_link_libraries(
-    libspac
-    PRIVATE kahip_headers kahip_options kahip_warnings
+add_library(kahip_spac_obj OBJECT ${LIBSPAC_SOURCE_FILES})
+kahip_add_private_header_set(
+    kahip_spac_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${KAHIP_SPAC_HEADERS}
 )
+kahip_configure_root_object(kahip_spac_obj)
 
 set(NODE_ORDERING_SOURCE_FILES
     lib/node_ordering/min_degree_ordering.cpp
@@ -250,20 +311,22 @@ set(NODE_ORDERING_SOURCE_FILES
     lib/node_ordering/ordering_tools.cpp
     lib/node_ordering/reductions.cpp
 )
-add_library(libnodeordering OBJECT ${NODE_ORDERING_SOURCE_FILES})
-target_link_libraries(
-    libnodeordering
-    PRIVATE kahip_headers kahip_options kahip_warnings
+add_library(kahip_ordering_obj OBJECT ${NODE_ORDERING_SOURCE_FILES})
+kahip_add_private_header_set(
+    kahip_ordering_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${KAHIP_ORDERING_HEADERS}
 )
+kahip_configure_root_object(kahip_ordering_obj)
 
 # generate targets for each binary
 add_executable(kaffpa app/kaffpa.cpp)
-target_link_libraries(kaffpa PRIVATE libkaffpa libmapping)
+target_link_libraries(kaffpa PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(kaffpa PRIVATE "-DMODE_KAFFPA")
 target_link_libraries(kaffpa PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     kaffpa
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS kaffpa DESTINATION bin)
 if(USE_TCMALLOC)
@@ -277,7 +340,7 @@ if(USE_TCMALLOC)
 endif()
 
 add_executable(global_multisection app/global_multisection.cpp)
-target_link_libraries(global_multisection PRIVATE libkaffpa libmapping)
+target_link_libraries(global_multisection PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(
     global_multisection
     PRIVATE "-DMODE_KAFFPA" "-DMODE_GLOBALMS"
@@ -285,7 +348,7 @@ target_compile_definitions(
 target_link_libraries(global_multisection PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     global_multisection
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS global_multisection DESTINATION bin)
 if(USE_TCMALLOC)
@@ -299,43 +362,43 @@ if(USE_TCMALLOC)
 endif()
 
 add_executable(evaluator app/evaluator.cpp)
-target_link_libraries(evaluator PRIVATE libkaffpa libmapping)
+target_link_libraries(evaluator PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(evaluator PRIVATE "-DMODE_EVALUATOR")
 target_link_libraries(evaluator PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     evaluator
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS evaluator DESTINATION bin)
 
 add_executable(edge_evaluator app/edge_evaluator.cpp)
-target_link_libraries(edge_evaluator PRIVATE libkaffpa libmapping)
+target_link_libraries(edge_evaluator PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(edge_evaluator PRIVATE "-DMODE_EVALUATOR")
 target_link_libraries(edge_evaluator PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     edge_evaluator
-    PRIVATE kahip_headers kahip_options kahip_warnings
+    PRIVATE kahip_options kahip_warnings
 )
 target_link_libraries(edge_evaluator PRIVATE argtable3)
 install(TARGETS edge_evaluator DESTINATION bin)
 
 add_executable(node_separator app/node_separator_ml.cpp)
-target_link_libraries(node_separator PRIVATE libkaffpa libmapping)
+target_link_libraries(node_separator PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(node_separator PRIVATE "-DMODE_NODESEP")
 target_link_libraries(node_separator PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     node_separator
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS node_separator DESTINATION bin)
 
 add_executable(label_propagation app/label_propagation.cpp)
-target_link_libraries(label_propagation PRIVATE libkaffpa libmapping)
+target_link_libraries(label_propagation PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(label_propagation PRIVATE "-DMODE_LABELPROPAGATION")
 target_link_libraries(label_propagation PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     label_propagation
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS label_propagation DESTINATION bin)
 
@@ -345,7 +408,7 @@ add_executable(
 )
 target_link_libraries(
     partition_to_vertex_separator
-    PRIVATE libkaffpa libmapping
+    PRIVATE kahip_core_obj kahip_mapping_obj
 )
 target_compile_definitions(
     partition_to_vertex_separator
@@ -354,7 +417,7 @@ target_compile_definitions(
 target_link_libraries(partition_to_vertex_separator PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     partition_to_vertex_separator
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS partition_to_vertex_separator DESTINATION bin)
 
@@ -365,7 +428,7 @@ add_executable(
 )
 target_link_libraries(
     interface_test
-    PRIVATE libkaffpa libmapping libnodeordering libspac
+    PRIVATE kahip_core_obj kahip_mapping_obj kahip_ordering_obj kahip_spac_obj
 )
 target_include_directories(
     interface_test
@@ -375,7 +438,7 @@ target_compile_definitions(interface_test PRIVATE "-DMODE_KAFFPA")
 target_link_libraries(interface_test PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     interface_test
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 if(metis_FOUND)
     target_link_libraries(interface_test PUBLIC metis GKlib)
@@ -386,39 +449,39 @@ if(NOT NOMPI)
     add_executable(kaffpaE app/kaffpaE.cpp)
     target_link_libraries(
         kaffpaE
-        PRIVATE libkaffpa libmapping libkaffpa_parallel
+        PRIVATE kahip_core_obj kahip_mapping_obj kahip_collective_obj
     )
     target_compile_definitions(kaffpaE PRIVATE "-DMODE_KAFFPAE")
     target_link_libraries(kaffpaE PRIVATE MPI::MPI_CXX OpenMP::OpenMP_CXX)
     target_link_libraries(
         kaffpaE
-        PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+        PRIVATE kahip_options kahip_warnings argtable3
     )
     install(TARGETS kaffpaE DESTINATION bin)
 endif()
 
 add_executable(graphchecker app/graphchecker.cpp)
-target_link_libraries(graphchecker PRIVATE libkaffpa libmapping)
+target_link_libraries(graphchecker PRIVATE kahip_core_obj kahip_mapping_obj)
 target_compile_definitions(graphchecker PRIVATE "-DMODE_GRAPHCHECKER")
 target_link_libraries(graphchecker PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     graphchecker
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS graphchecker DESTINATION bin)
 
 add_executable(edge_partitioning app/spac.cpp)
-target_link_libraries(edge_partitioning PRIVATE libkaffpa libmapping libspac)
+target_link_libraries(edge_partitioning PRIVATE kahip_core_obj kahip_mapping_obj kahip_spac_obj)
 target_compile_definitions(edge_partitioning PRIVATE "-DMODE_KAFFPA")
 target_link_libraries(edge_partitioning PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     edge_partitioning
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS edge_partitioning DESTINATION bin)
 
 add_executable(node_ordering app/node_ordering.cpp)
-target_link_libraries(node_ordering PRIVATE libkaffpa libnodeordering)
+target_link_libraries(node_ordering PRIVATE kahip_core_obj kahip_ordering_obj)
 target_compile_definitions(
     node_ordering
     PRIVATE "-DMODE_NODESEP" "-DMODE_NODEORDERING"
@@ -426,7 +489,7 @@ target_compile_definitions(
 target_link_libraries(node_ordering PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     node_ordering
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 install(TARGETS node_ordering DESTINATION bin)
 
@@ -434,7 +497,7 @@ if(metis_FOUND)
     add_executable(fast_node_ordering app/fast_node_ordering.cpp)
     target_link_libraries(
         fast_node_ordering
-        PRIVATE libkaffpa libmapping libnodeordering
+        PRIVATE kahip_core_obj kahip_mapping_obj kahip_ordering_obj
     )
     target_compile_definitions(
         fast_node_ordering
@@ -446,28 +509,45 @@ if(metis_FOUND)
     )
     target_link_libraries(
         fast_node_ordering
-        PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+        PRIVATE kahip_options kahip_warnings argtable3
     )
     install(TARGETS fast_node_ordering DESTINATION bin)
 endif()
 
 # Shared interface library
 add_library(kahip SHARED interface/kaHIP_interface.cpp)
+target_sources(
+    kahip
+    PUBLIC
+        FILE_SET public_headers
+        TYPE HEADERS
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_interface.h"
+)
 target_link_libraries(
     kahip
-    PRIVATE libkaffpa libmapping libnodeordering libspac
+    PRIVATE kahip_core_obj kahip_mapping_obj kahip_ordering_obj kahip_spac_obj
 )
-target_include_directories(kahip PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface)
+target_include_directories(
+    kahip
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/interface>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 target_compile_definitions(kahip PRIVATE "-DMODE_KAFFPA")
 target_link_libraries(kahip PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
     kahip
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 if(metis_FOUND)
     target_link_libraries(kahip PRIVATE metis GKlib)
 endif()
-install(TARGETS kahip DESTINATION lib)
+install(
+    TARGETS kahip
+    DESTINATION lib
+    FILE_SET public_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
 
 # pkg-config
 configure_file("lib/kahip.pc.in" "${CMAKE_CURRENT_BINARY_DIR}/kahip.pc" @ONLY)
@@ -478,21 +558,20 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/kahip.pc" DESTINATION "${CMAKE_INSTAL
 add_library(kahip_static interface/kaHIP_interface.cpp)
 target_link_libraries(
     kahip_static
-    PRIVATE libkaffpa libmapping libnodeordering libspac
+    PRIVATE kahip_core_obj kahip_mapping_obj kahip_ordering_obj kahip_spac_obj
 )
 target_include_directories(
     kahip_static
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/interface>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_definitions(kahip_static PRIVATE "-DMODE_KAFFPA")
 target_link_libraries(kahip_static PRIVATE OpenMP::OpenMP_CXX)
-set_target_properties(
-    kahip_static
-    PROPERTIES PUBLIC_HEADER interface/kaHIP_interface.h
-)
 target_link_libraries(
     kahip_static
-    PRIVATE kahip_headers kahip_options kahip_warnings argtable3
+    PRIVATE kahip_options kahip_warnings argtable3
 )
 if(metis_FOUND)
     target_link_libraries(kahip_static PRIVATE metis GKlib)
@@ -502,7 +581,6 @@ install(
     TARGETS kahip_static
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
-    PUBLIC_HEADER DESTINATION include
 )
 
 # ParHIP
@@ -522,7 +600,7 @@ if(USE_ILP)
     find_package(Gurobi REQUIRED)
     message("Using Gurobi for ILP solver in ilp_improve")
     add_executable(ilp_improve app/ilp_improve.cpp)
-    target_link_libraries(ilp_improve PRIVATE libkaffpa libmapping)
+    target_link_libraries(ilp_improve PRIVATE kahip_core_obj kahip_mapping_obj)
     target_include_directories(ilp_improve PUBLIC ${GUROBI_INCLUDE_DIR})
     target_compile_definitions(ilp_improve PRIVATE "-DMODE_ILPIMPROVE")
     target_link_libraries(
@@ -531,7 +609,7 @@ if(USE_ILP)
     )
 
     add_executable(ilp_exact app/ilp_exact.cpp)
-    target_link_libraries(ilp_exact PRIVATE libkaffpa libmapping)
+    target_link_libraries(ilp_exact PRIVATE kahip_core_obj kahip_mapping_obj)
     target_include_directories(ilp_exact PUBLIC ${GUROBI_INCLUDE_DIR})
     target_compile_definitions(
         ilp_exact
@@ -559,5 +637,6 @@ if (BUILDPYTHONMODULE)
   endif()
 
   target_link_libraries(kahip_python_binding PUBLIC kahip_static)
+  target_link_libraries(kahip_python_binding PRIVATE kahip_options)
   set_target_properties(kahip_python_binding PROPERTIES OUTPUT_NAME "kahip")
 endif ()

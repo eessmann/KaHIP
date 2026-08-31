@@ -55,7 +55,7 @@ endif()
 include(${CMAKE_SOURCE_DIR}/cmake/StandardProjectSettings.cmake)
 
 # tweak compiler flags
-target_compile_features(kahip_options INTERFACE cxx_std_20)
+target_compile_features(kahip_options INTERFACE cxx_std_23)
 message(VERBOSE "Checking compiler feature support")
 check_cxx_compiler_flag(-funroll-loops COMPILER_SUPPORTS_FUNROLL_LOOPS)
 target_compile_options(

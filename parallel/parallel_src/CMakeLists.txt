@@ -8,37 +8,49 @@ endif()
 
 add_subdirectory(extern/cista)
 
-add_library(parhip_headers INTERFACE)
-target_include_directories(
-    parhip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/app
+set(
+    PARHIP_PRIVATE_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
 )
-target_include_directories(
-    parhip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib
+
+function(kahip_configure_parhip_object target)
+    target_include_directories(
+        ${target}
+        BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
+    )
+    target_link_libraries(
+        ${target}
+        PUBLIC kahip_options MPI::MPI_CXX
+        PRIVATE kahip_warnings
+    )
+endfunction()
+
+file(
+    GLOB_RECURSE PARHIP_CORE_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/app/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/*.h"
 )
-target_include_directories(
-    parhip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
+list(
+    FILTER PARHIP_CORE_HEADERS
+    EXCLUDE
+    REGEX "/lib/dspac/"
 )
-target_include_directories(
-    parhip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
+file(
+    GLOB_RECURSE PARHIP_GRAPH_IO_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/data_structure/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/io/*.h"
 )
-target_include_directories(
-    parhip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
-)
-target_include_directories(
-    parhip_headers
-    BEFORE
-    INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
+file(
+    GLOB_RECURSE PARHIP_DSPAC_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/dspac/*.h"
 )
 
 set(LIBPARALLEL_SOURCE_FILES
@@ -60,9 +72,35 @@ set(LIBPARALLEL_SOURCE_FILES
     lib/io/parallel_vector_io.cpp
     lib/tools/distributed_quality_metrics.cpp
 )
-add_library(parallel ${LIBPARALLEL_SOURCE_FILES})
-target_link_libraries(parallel PRIVATE kahip_options kahip_warnings)
-target_link_libraries(parallel PUBLIC parhip_headers)
+add_library(parhip_core_obj OBJECT ${LIBPARALLEL_SOURCE_FILES})
+kahip_add_private_header_set(
+    parhip_core_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${PARHIP_CORE_HEADERS}
+)
+kahip_configure_parhip_object(parhip_core_obj)
+target_link_libraries(
+    parhip_core_obj
+    PRIVATE
+        libmodified_kahip_interface
+        argtable3
+        kahip_version
+        cista::cista
+        fmt::fmt
+        spdlog::spdlog
+        Boost::hana
+        Boost::mp11
+)
+
+add_library(parallel)
+target_include_directories(
+    parallel
+    BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
+)
+target_link_libraries(
+    parallel
+    PRIVATE parhip_core_obj kahip_options kahip_warnings
+)
 target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC argtable3)
 target_link_libraries(parallel PUBLIC kahip_version)
@@ -79,10 +117,13 @@ set(LIBGRAPH2BGF_SOURCE_FILES
     lib/data_structure/balance_management_refinement.cpp
     lib/data_structure/balance_management_coarsening.cpp
 )
-add_library(libgraph2bgf OBJECT ${LIBGRAPH2BGF_SOURCE_FILES})
-target_link_libraries(libgraph2bgf PUBLIC MPI::MPI_CXX)
-target_link_libraries(libgraph2bgf PUBLIC parhip_headers)
-target_link_libraries(libgraph2bgf PRIVATE kahip_options kahip_warnings)
+add_library(parhip_graph_io_obj OBJECT ${LIBGRAPH2BGF_SOURCE_FILES})
+kahip_add_private_header_set(
+    parhip_graph_io_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${PARHIP_GRAPH_IO_HEADERS}
+)
+kahip_configure_parhip_object(parhip_graph_io_obj)
 
 set(LIBEDGELIST_SOURCE_FILES
     lib/data_structure/parallel_graph_access.cpp
@@ -91,19 +132,47 @@ set(LIBEDGELIST_SOURCE_FILES
     lib/data_structure/balance_management_refinement.cpp
     lib/data_structure/balance_management_coarsening.cpp
 )
-add_library(libedgelist STATIC ${LIBEDGELIST_SOURCE_FILES})
+add_library(parhip_edge_list_obj OBJECT ${LIBEDGELIST_SOURCE_FILES})
+kahip_add_private_header_set(
+    parhip_edge_list_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${PARHIP_GRAPH_IO_HEADERS}
+)
+kahip_configure_parhip_object(parhip_edge_list_obj)
+
+add_library(libedgelist STATIC)
+target_link_libraries(
+    libedgelist
+    PRIVATE parhip_edge_list_obj kahip_options kahip_warnings
+)
 target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3)
-target_link_libraries(libedgelist PUBLIC parhip_headers)
-target_link_libraries(libedgelist PRIVATE kahip_options kahip_warnings)
+target_include_directories(
+    libedgelist
+    BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
+)
 
 set(LIBDSPAC_SOURCE_FILES
     lib/dspac/dspac.cpp
     lib/dspac/edge_balanced_graph_io.cpp
 )
-add_library(libdspac STATIC ${LIBDSPAC_SOURCE_FILES})
+add_library(parhip_dspac_obj OBJECT ${LIBDSPAC_SOURCE_FILES})
+kahip_add_private_header_set(
+    parhip_dspac_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${PARHIP_DSPAC_HEADERS}
+)
+kahip_configure_parhip_object(parhip_dspac_obj)
+
+add_library(libdspac STATIC)
+target_link_libraries(
+    libdspac
+    PRIVATE parhip_dspac_obj kahip_options kahip_warnings
+)
 target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
-target_link_libraries(libdspac PUBLIC parhip_headers)
-target_link_libraries(libdspac PRIVATE kahip_options kahip_warnings)
+target_include_directories(
+    libdspac
+    BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
+)
 
 add_executable(parhip app/parhip.cpp)
 target_compile_definitions(
@@ -133,7 +202,7 @@ target_compile_definitions(
     PRIVATE
         "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF"
 )
-target_link_libraries(graph2binary PRIVATE libgraph2bgf)
+target_link_libraries(graph2binary PRIVATE parhip_graph_io_obj)
 target_link_libraries(graph2binary PRIVATE kahip_version)
 target_link_libraries(graph2binary PRIVATE MPI::MPI_CXX)
 target_link_libraries(graph2binary PRIVATE kahip_options kahip_warnings)
@@ -145,7 +214,7 @@ target_compile_definitions(
     PRIVATE
         "-DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF"
 )
-target_link_libraries(graph2binary_external PRIVATE libgraph2bgf)
+target_link_libraries(graph2binary_external PRIVATE parhip_graph_io_obj)
 target_link_libraries(graph2binary_external PRIVATE kahip_version)
 target_link_libraries(graph2binary_external PRIVATE kahip_options kahip_warnings)
 install(TARGETS graph2binary_external DESTINATION bin)
@@ -156,7 +225,7 @@ target_compile_definitions(
     PRIVATE
         "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION"
 )
-target_link_libraries(readbgf PRIVATE libgraph2bgf)
+target_link_libraries(readbgf PRIVATE parhip_graph_io_obj)
 target_link_libraries(readbgf PRIVATE kahip_version)
 target_link_libraries(readbgf PRIVATE kahip_options kahip_warnings)
 install(TARGETS readbgf DESTINATION bin)
@@ -176,11 +245,6 @@ target_link_libraries(edge_list_to_metis_graph PRIVATE kahip_version)
 target_link_libraries(edge_list_to_metis_graph PRIVATE kahip_options kahip_warnings)
 install(TARGETS edge_list_to_metis_graph DESTINATION bin)
 
-#add_executable(friendster_list_to_metis_graph app/friendster_list_to_metis_graph.cpp $<TARGET_OBJECTS:libedgelist>)
-#target_compile_definitions(friendster_list_to_metis_graph PRIVATE "-DGRAPH_GENERATOR_MPI" "-DGRAPHGEN_DISTRIBUTED_MEMORY" "-DKRONECKER_GENERATOR_PROGRAM")
-#target_link_libraries(edge_list_to_metis_graph PRIVATE libmodified_kahip_interface)
-#install(TARGETS friendster_list_to_metis_graph DESTINATION bin)
-
 add_executable(dspac app/dspac.cpp)
 target_compile_definitions(
     dspac
@@ -193,6 +257,14 @@ target_link_libraries(dspac PRIVATE kahip_options kahip_warnings)
 install(TARGETS dspac DESTINATION bin)
 
 add_library(parhip_interface SHARED interface/parhip_interface.cpp)
+target_sources(
+    parhip_interface
+    PUBLIC
+        FILE_SET public_headers
+        TYPE HEADERS
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/interface/parhip_interface.h"
+)
 target_compile_definitions(
     parhip_interface
     PRIVATE
@@ -200,18 +272,16 @@ target_compile_definitions(
 )
 target_include_directories(
     parhip_interface
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/interface>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_link_libraries(parhip_interface PRIVATE parallel)
 target_link_libraries(parhip_interface PRIVATE kahip_options kahip_warnings)
-set_target_properties(
-    parhip_interface
-    PROPERTIES PUBLIC_HEADER interface/parhip_interface.h
-)
 install(
     TARGETS parhip_interface
-    LIBRARY DESTINATION lib
-    PUBLIC_HEADER DESTINATION include
+    DESTINATION lib
+    FILE_SET public_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
 
 # pkg-config
@@ -246,7 +316,9 @@ target_compile_definitions(
 )
 target_include_directories(
     parhip_interface_static
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/interface
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/interface>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_link_libraries(parhip_interface_static PRIVATE parallel)
 target_link_libraries(parhip_interface_static PRIVATE kahip_options kahip_warnings)

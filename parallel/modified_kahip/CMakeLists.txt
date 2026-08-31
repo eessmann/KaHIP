@@ -1,29 +1,43 @@
-add_library(modified_kahip_headers INTERFACE)
-target_include_directories(
-    modified_kahip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib
+set(
+    MODIFIED_KAHIP_PRIVATE_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
 )
-target_include_directories(
-    modified_kahip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
+
+function(kahip_configure_modified_object target)
+    target_include_directories(
+        ${target}
+        BEFORE PUBLIC ${MODIFIED_KAHIP_PRIVATE_INCLUDE_DIRS}
+    )
+    target_link_libraries(
+        ${target}
+        PUBLIC kahip_options MPI::MPI_CXX
+        PRIVATE kahip_warnings
+    )
+endfunction()
+
+file(
+    GLOB_RECURSE MODIFIED_KAHIP_CORE_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/app/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/*.h"
 )
-target_include_directories(
-    modified_kahip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
+list(
+    FILTER MODIFIED_KAHIP_CORE_HEADERS
+    EXCLUDE
+    REGEX "/lib/parallel_mh/"
 )
-target_include_directories(
-    modified_kahip_headers
-    BEFORE
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
+file(
+    GLOB_RECURSE MODIFIED_KAHIP_COLLECTIVE_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/parallel_mh/*.h"
 )
-target_include_directories(
-    modified_kahip_headers
-    BEFORE
-    INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
+list(
+    APPEND MODIFIED_KAHIP_COLLECTIVE_HEADERS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/graph_communication.h"
 )
 
 set(LIBMODIFIED_KAFFPA_SOURCE_FILES
@@ -86,10 +100,17 @@ set(LIBMODIFIED_KAFFPA_SOURCE_FILES
     lib/parallel_mh/galinier_combine/construct_partition.cpp
     lib/partition/uncoarsening/refinement/tabu_search/tabu_search.cpp
 )
-add_library(libmodified_kaffpa OBJECT ${LIBMODIFIED_KAFFPA_SOURCE_FILES})
-target_link_libraries(libmodified_kaffpa PRIVATE kahip_options kahip_warnings)
-target_link_libraries(libmodified_kaffpa PRIVATE modified_kahip_headers)
-target_link_libraries(libmodified_kaffpa PRIVATE MPI::MPI_CXX)
+add_library(
+    modified_kahip_core_obj
+    OBJECT
+    ${LIBMODIFIED_KAFFPA_SOURCE_FILES}
+)
+kahip_add_private_header_set(
+    modified_kahip_core_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${MODIFIED_KAHIP_CORE_HEADERS}
+)
+kahip_configure_modified_object(modified_kahip_core_obj)
 
 set(LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES
     lib/parallel_mh/parallel_mh_async.cpp
@@ -98,24 +119,28 @@ set(LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES
     lib/tools/graph_communication.cpp
 )
 add_library(
-    libmodified_kaffpa_async
+    modified_kahip_collective_obj
     OBJECT
     ${LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES}
 )
-target_link_libraries(libmodified_kaffpa_async PRIVATE modified_kahip_headers)
-target_link_libraries(libmodified_kaffpa_async PRIVATE MPI::MPI_CXX)
-target_link_libraries(libmodified_kaffpa_async PRIVATE kahip_options kahip_warnings)
+kahip_add_private_header_set(
+    modified_kahip_collective_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${MODIFIED_KAHIP_COLLECTIVE_HEADERS}
+)
+kahip_configure_modified_object(modified_kahip_collective_obj)
 
 add_library(libmodified_kahip_interface STATIC interface/kaHIP_interface.cpp)
+kahip_add_private_header_set(
+    libmodified_kahip_interface
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_interface.h"
+)
 target_link_libraries(
     libmodified_kahip_interface
-    PRIVATE libmodified_kaffpa libmodified_kaffpa_async
+    PRIVATE modified_kahip_core_obj modified_kahip_collective_obj
 )
 target_link_libraries(libmodified_kahip_interface PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(libmodified_kahip_interface PRIVATE MPI::MPI_CXX)
-target_link_libraries(
-    libmodified_kahip_interface
-    PRIVATE modified_kahip_headers
-)
 target_link_libraries(libmodified_kahip_interface PRIVATE kahip_options kahip_warnings)
 target_include_directories(libmodified_kahip_interface PUBLIC interface)
