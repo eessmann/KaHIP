@@ -1,8 +1,61 @@
-KaHIP v3.21  [![Codacy Badge](https://app.codacy.com/project/badge/Grade/9d0d08ba6b2d42699ab74fe5f9697bb9)](https://www.codacy.com/gh/KaHIP/KaHIP/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=KaHIP/KaHIP&amp;utm_campaign=Badge_Grade)
+KaHIP v3.25
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![C++](https://img.shields.io/badge/C++-11/14-blue.svg)](https://isocpp.org/)
+[![CMake](https://img.shields.io/badge/CMake-3.10+-064F8C.svg)](https://cmake.org/)
+[![Build](https://github.com/KaHIP/KaHIP/actions/workflows/build.yml/badge.svg)](https://github.com/KaHIP/KaHIP/actions/workflows/build.yml)
+[![Windows CI](https://github.com/KaHIP/KaHIP/actions/workflows/build_windows.yml/badge.svg)](https://github.com/KaHIP/KaHIP/actions/workflows/build_windows.yml)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/9d0d08ba6b2d42699ab74fe5f9697bb9)](https://www.codacy.com/gh/KaHIP/KaHIP/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=KaHIP/KaHIP&amp;utm_campaign=Badge_Grade)
+[![GitHub Release](https://img.shields.io/github/v/release/KaHIP/KaHIP)](https://github.com/KaHIP/KaHIP/releases/latest)
+[![PyPI version](https://img.shields.io/pypi/v/kahip)](https://pypi.org/project/kahip/)
+[![Homebrew](https://img.shields.io/badge/Homebrew-available-orange)](https://github.com/KaHIP/homebrew-kahip)
+[![Linux](https://img.shields.io/badge/Linux-supported-success.svg)](https://github.com/KaHIP/KaHIP)
+[![macOS](https://img.shields.io/badge/macOS-supported-success.svg)](https://github.com/KaHIP/KaHIP)
+[![Windows](https://img.shields.io/badge/Windows-supported-success.svg)](https://github.com/KaHIP/KaHIP)
+[![GitHub Stars](https://img.shields.io/github/stars/KaHIP/KaHIP)](https://github.com/KaHIP/KaHIP/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/KaHIP/KaHIP)](https://github.com/KaHIP/KaHIP/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/KaHIP/KaHIP)](https://github.com/KaHIP/KaHIP/commits)
+[![arXiv](https://img.shields.io/badge/arXiv-1210.0477-b31b1b.svg)](https://arxiv.org/abs/1210.0477)
+[![arXiv](https://img.shields.io/badge/arXiv-1404.4797-b31b1b.svg)](https://arxiv.org/abs/1404.4797)
+[![arXiv](https://img.shields.io/badge/arXiv-1702.04164-b31b1b.svg)](https://arxiv.org/abs/1702.04164)
+[![arXiv](https://img.shields.io/badge/arXiv-1710.08231-b31b1b.svg)](https://arxiv.org/abs/1710.08231)
+[![arXiv](https://img.shields.io/badge/arXiv-1802.07144-b31b1b.svg)](https://arxiv.org/abs/1802.07144)
+[![arXiv](https://img.shields.io/badge/arXiv-1808.06411-b31b1b.svg)](https://arxiv.org/abs/1808.06411)
+[![arXiv](https://img.shields.io/badge/arXiv-2001.07134-b31b1b.svg)](https://arxiv.org/abs/2001.07134)
+[![arXiv](https://img.shields.io/badge/arXiv-2004.11315-b31b1b.svg)](https://arxiv.org/abs/2004.11315)
+[![Agent-Ready](https://img.shields.io/badge/Agent--Ready-yes-blue)](https://github.com/KaHIP/KaHIP)
+[![Heidelberg University](https://img.shields.io/badge/Heidelberg-University-c1002a)](https://www.uni-heidelberg.de)
 =====
+<p align="center">
+  <img src="https://raw.githubusercontent.com/KaHIP/.github/main/profile/kahip-logo.png" alt="KaHIP Logo" width="600"/>
+</p>
 
-The graph partitioning framework KaHIP -- Karlsruhe High Quality Partitioning.
+## Table of Contents
+
+- [About](#about)
+- [What's New](#new-in-v325)
+- [Installation](#installation-notes)
+  - [Install via Homebrew](#install-via-homebrew)
+  - [Downloading KaHIP](#downloading-kahip)
+  - [Compiling KaHIP](#compiling-kahip)
+- [Running Programs](#running-programs)
+  - [Default Partitioning](#overview-of-programs-and-usecase)
+  - [Distributed Memory Parallel Partitioning](#distributed-memory-parallel-partitioning)
+  - [Node Separators](#node-separators)
+  - [Node Ordering](#node-ordering)
+  - [Edge Partitioning](#edge-partitioning)
+  - [Process Mapping](#process-mapping)
+  - [ILP Improvements](#ilp-exact-solver-and-ilp-improvements)
+- [Linking the KaHIP Library](#linking-the-kahip-library)
+- [Linking the ParHIP Library](#linking-the-parhip-library-parallel-partitioning)
+- [Using KaHIP in Python](#using-kahip-in-python)
+- [Licence](#licence)
+- [Contributors](#project-contributors-sorted-by-last-name)
+
+<a id="about"></a>
+
+The graph partitioning framework KaHIP -- High Quality Partitioning. Part of the [KaHIP](https://github.com/KaHIP) organization. KaHIP supports Linux, macOS and Windows.
+
+> **Python Interface:** An easy-to-use Python interface for this software is available in [CHSZLabLib](https://github.com/CHSZLab/CHSZLabLib).
 
 The graph partitioning problem asks for a division of a graph's node set into k equally sized blocks such that the number of edges that run between the blocks is minimized. KaHIP is a family of graph partitioning programs. It includes KaFFPa (Karlsruhe Fast Flow Partitioner), which is a multilevel graph partitioning algorithm, in its variants Strong, Eco and Fast, KaFFPaE (KaFFPaEvolutionary), which is a parallel evolutionary algorithm that uses KaFFPa to provide combine and mutation operations, as well as KaBaPE which extends the evolutionary algorithm. Moreover, specialized techniques are included to partition road networks (Buffoon), to output a vertex separator from a given partition as well as techniques geared towards the efficient partitioning of social networks. Here is an overview of our framework:
 
@@ -12,6 +65,24 @@ The graph partitioning problem asks for a division of a graph's node set into k 
   width="601" height="558">
 </p>
 
+
+## NEW in v3.25:
+- *Connected Blocks (Experimental)*: KaFFPa and KaFFPaE now support `--connected_blocks` (strong preconfiguration only) to produce partitions where each block is a connected subgraph. The input graph must be connected. Connectivity is enforced via checkpoint-based component elimination during uncoarsening, combined with connectivity-aware refinement and greedy rebalancing. When this flag is not used, KaHIP behavior is unchanged.
+
+## NEW in v3.24:
+- *64-bit Edge Support*: The C interface now supports 64-bit edges via a compile-time `kahip_idx` typedef. Compile with `-D64BITMODE=On` to enable `int64_t` for all edge-related arrays and values (xadj, adjncy, adjcwgt, edgecut). Node-related parameters remain `int`.
+- *Windows Support*: KaHIP now builds on Windows with MSVC. Windows pip wheels are available on PyPI.
+- *Python 3.13/3.14*: Pip wheels now available for Python 3.10-3.14 on Linux, macOS and Windows.
+- *pkg-config Support*: KaHIP and ParHIP are now discoverable via `pkg-config`.
+- *ParHIP Example*: Added a ParHIP interface usage example (`misc/example_parhip_call/`).
+- *Runtime Index Query*: Added `kahip_sizeof_idx()` to query whether the library was compiled with 32-bit or 64-bit indices.
+
+## NEW in v3.23:
+*Homebrew Support*: KaHIP can now be installed via Homebrew on macOS and Linux using 
+
+```console
+brew install KaHIP/kahip/kahip
+```
 
 ## NEW in v3.21:
 *KaFFPa* can now be used with pip. Simply run
@@ -50,11 +121,33 @@ and use the example Python code below.
 *Edge Partitioning Algorithms:* Our new algorithms to compute edge partitionings of graphs. 
 
 
-## Main project site:
-https://kahip.github.io
+## Main org site:
+https://github.com/kahip/
 
 Installation Notes
 =====
+
+## Install via Homebrew
+
+```console
+brew install KaHIP/kahip/kahip
+```
+
+If open-mpi fails to build from source (non-standard Homebrew prefix), either install it separately first:
+
+```console
+brew install open-mpi
+brew install KaHIP/kahip/kahip
+```
+
+or set the compiler explicitly:
+
+```console
+export HOMEBREW_CC=gcc-15
+export HOMEBREW_CXX=g++-15
+brew install KaHIP/kahip/kahip
+```
+
 ## Downloading KaHIP: 
 You can download KaHIP with the following command line:
 
@@ -94,7 +187,7 @@ If you use the option -DUSE_ILP=On and you have Gurobi installed, the build scri
 ```console 
 ./compile_withcmake -DUSE_ILP=On
 ```
-We also provide an option to support 64 bit edges. In order to use this, compile KaHIP with the option -D64BITMODE=On.
+We also provide an option to support 64-bit edges. In order to use this, compile KaHIP with the option -D64BITMODE=On. When enabled, the C interface uses `kahip_idx` (typedef for `int64_t`) instead of `int32_t` for all edge-related arrays and values (xadj, adjncy, adjcwgt, edgecut, infinity_edge_weight). Node-related parameters (n, vwgt, nparts, part) remain `int`. No additional flags are needed; `-D64BITMODE=On` enables both the internal 64-bit edge types and the public `kahip_idx` typedef.
 
 
 Lastly, we provide an option for determinism in ParHIP, e.g. two runs with the same seed will give you the same result. Note however that this option can reduce the quality of partitions, as initial partitioning algorithms do not use sophisticated memetic algorithms, but only multilevel algorithms to compute initial partitionings. ONLY use this option if you use ParHIP as a tool. Do not use this option if you want to make quality comparisons against ParHIP. To make use of this option, run 
@@ -114,7 +207,7 @@ These programs and configurations take a graph and partition it more or less seq
 
 | Use Case               | Input  | Programs                                                                                           |
 | ---------------------- | ------ | -------------------------------------------------------------------------------------------------- |
-| Graph Format           |        | graph_checker                                                                                      |
+| Graph Format           |        | graphchecker                                                                                      |
 | Evaluate Partitions    |        | evaluator                                                                                          |
 | Fast Partitioning      | Meshes | kaffpa preconfiguration set to fast                                                                |
 | Good Partitioning      | Meshes | kaffpa preconfiguration set to eco                                                                 |
@@ -125,9 +218,10 @@ These programs and configurations take a graph and partition it more or less seq
 | Very Good Partitioning | Social | kaffpa preconfiguration set to ssocial                                                             |
 | Highest Quality        | Social | kaffpaE, use mpirun, large time limit, preconfiguration ssocial                                    |
 | Even Higher Quality    |        | kaffpaE, use mpirun, large time limit, use the options --mh_enable_tabu_search, --mh_enable_kabapE |
+| Connected Blocks (Exp) |        | kaffpa or kaffpaE, preconfiguration strong, --connected_blocks (input graph must be connected)      |
 #### Example Runs
 ```console
-./deploy/graph_checker ./examples/rgg_n_2_15_s0.graph 
+./deploy/graphchecker ./examples/rgg_n_2_15_s0.graph 
 ```
 
 ```console
@@ -135,7 +229,12 @@ These programs and configurations take a graph and partition it more or less seq
 ```
 
 ```console
-mpirun -n 24 ./deploy/kaffpaE ./examples/rgg_n_2_15_s0.graph --k 4  --time_limit=3600 --mh_enable_tabu_search --mh_enable_kabapE 
+mpirun -n 24 ./deploy/kaffpaE ./examples/rgg_n_2_15_s0.graph --k 4  --time_limit=3600 --mh_enable_tabu_search --mh_enable_kabapE
+```
+
+Connected blocks (experimental): each block of the partition is guaranteed to be a connected subgraph. Only supported with the strong preconfiguration. The input graph must be connected.
+```console
+./deploy/kaffpa ./examples/rgg_n_2_15_s0.graph --k 4 --preconfiguration=strong --connected_blocks
 ```
 
 
@@ -285,26 +384,105 @@ int main(int argn, char **argv) {
 
         std::cout <<  "partitioning graph from the manual"  << std::endl;
 
-        int n            = 5;
-        int* xadj        = new int[6];
+        int n              = 5;
+        kahip_idx* xadj    = new kahip_idx[6];
         xadj[0] = 0; xadj[1] = 2; xadj[2] = 5; xadj[3] = 7; xadj[4] = 9; xadj[5] = 12;
 
-        int* adjncy      = new int[12];
-        adjncy[0]  = 1; adjncy[1]  = 4; adjncy[2]  = 0; adjncy[3]  = 2; adjncy[4]  = 4; adjncy[5]  = 1; 
-        adjncy[6]  = 3; adjncy[7]  = 2; adjncy[8]  = 4; adjncy[9]  = 0; adjncy[10] = 1; adjncy[11] = 3; 
-        
-        double imbalance = 0.03;
-        int* part        = new int[n];
-        int edge_cut     = 0;
-        int nparts       = 2;
-        int* vwgt        = NULL;
-        int* adjcwgt     = NULL;
+        kahip_idx* adjncy  = new kahip_idx[12];
+        adjncy[0]  = 1; adjncy[1]  = 4; adjncy[2]  = 0; adjncy[3]  = 2; adjncy[4]  = 4; adjncy[5]  = 1;
+        adjncy[6]  = 3; adjncy[7]  = 2; adjncy[8]  = 4; adjncy[9]  = 0; adjncy[10] = 1; adjncy[11] = 3;
 
-        kaffpa(&n, vwgt, xadj, adjcwgt, adjncy, &nparts, &imbalance, false, 0, ECO, & edge_cut, part);
+        double imbalance   = 0.03;
+        int* part          = new int[n];
+        kahip_idx edge_cut = 0;
+        int nparts         = 2;
+        int* vwgt          = NULL;
+        kahip_idx* adjcwgt = NULL;
+
+        kaffpa(&n, vwgt, xadj, adjcwgt, adjncy, &nparts, &imbalance, false, 0, ECO, &edge_cut, part);
 
         std::cout <<  "edge cut " <<  edge_cut  << std::endl;
 }
 ```
+
+Linking the ParHIP Library (Parallel Partitioning)
+=====
+ParHIP provides a parallel graph partitioning interface using MPI. Each process reads the METIS graph file but only stores its local portion of the distributed CSR structure. The full example can be found in `misc/example_parhip_call/`.
+
+```cpp
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <mpi.h>
+
+#include "parhip_interface.h"
+
+int main(int argc, char **argv) {
+        MPI_Init(&argc, &argv);
+
+        int rank, size;
+        MPI_Comm comm = MPI_COMM_WORLD;
+        MPI_Comm_rank(comm, &rank);
+        MPI_Comm_size(comm, &size);
+
+        // Read header to get number of nodes
+        std::ifstream in(argv[1]);
+        std::string line;
+        while (std::getline(in, line)) { if (line[0] != '%') break; }
+        idxtype n_global; { std::stringstream ss(line); ss >> n_global; }
+
+        // Compute which nodes this PE owns
+        std::vector<idxtype> vtxdist(size + 1);
+        for (int p = 0; p <= size; p++)
+                vtxdist[p] = (idxtype)p * n_global / size;
+        idxtype local_from = vtxdist[rank];
+        idxtype local_to   = vtxdist[rank + 1];
+        idxtype local_n    = local_to - local_from;
+
+        // Scan file, only store local nodes
+        std::vector<idxtype> xadj(local_n + 1);
+        std::vector<idxtype> adjncy;
+        idxtype node = 0, local_idx = 0;
+        xadj[0] = 0;
+        while (std::getline(in, line)) {
+                if (line[0] == '%') continue;
+                if (node >= local_from && node < local_to) {
+                        std::stringstream ss(line);
+                        idxtype target;
+                        while (ss >> target) adjncy.push_back(target - 1);
+                        local_idx++;
+                        xadj[local_idx] = adjncy.size();
+                }
+                node++;
+                if (node >= local_to) break;
+        }
+        in.close();
+
+        // Partition
+        int nparts = 2;
+        double imbalance = 0.03;
+        int edgecut = 0;
+        std::vector<idxtype> part(local_n);
+
+        ParHIPPartitionKWay(vtxdist.data(), xadj.data(), adjncy.data(),
+                            NULL, NULL, &nparts, &imbalance,
+                            false, 0, FASTSOCIAL,
+                            &edgecut, part.data(), &comm);
+
+        if (rank == 0) std::cout << "edge cut: " << edgecut << std::endl;
+
+        MPI_Finalize();
+        return 0;
+}
+```
+
+Compile and run:
+```console
+mpicxx -o parhip_test parhip_test.cpp -I/path/to/kahip/include -L/path/to/kahip/lib -lparhip_interface
+mpirun -np 4 ./parhip_test graph.metis
+```
+
 Using KaHIP in Python
 =====
 KaHIP can also be used in Python. The easiest way is to install it using pip:
@@ -416,15 +594,44 @@ If you use our parallel partitioner ParHIP please also cite the following paper:
 If you use mapping algorithm please also cite the following paper:
 
 ```
-@inproceedings{schulztraeff2017,
-             AUTHOR = {Schulz, Christian and Träff, Jesper Larsson},
+@article{vonkirchbachschulztraeff2020,
+             AUTHOR = {von Kirchbach, Konrad and Schulz, Christian and Tr{\"{a}}ff, Jesper Larsson},
              TITLE = {{Better Process Mapping and Sparse Quadratic Assignment}},
-             BOOKTITLE = {Proceedings of the 16th International Symposium on Experimental Algorithms (SEA'17)},
-             PUBLISHER = {Schloss Dagstuhl - Leibniz-Zentrum fuer Informatik},
-             VOLUME = {75},
+             JOURNAL = {ACM Journal of Experimental Algorithmics},
+             VOLUME = {25},
+             PAGES = {1--37},
+             YEAR = {2020},
+             DOI = {10.1145/3409667}
+}
+```
+
+If you use global multisection mapping please also cite the following paper:
+
+```
+@inproceedings{fonsecafaraj2020mapping,
+             AUTHOR = {Fonseca Faraj, Marcelo and van der Grinten, Alexander and Meyerhenke, Henning and Tr{\"{a}}ff, Jesper Larsson and Schulz, Christian},
+             TITLE = {{High-Quality Hierarchical Process Mapping}},
+             BOOKTITLE = {Proceedings of the 18th International Symposium on Experimental Algorithms (SEA'20)},
              SERIES = {LIPIcs},
+             VOLUME = {160},
              PAGES = {4:1--4:15},
-             YEAR = {2017}
+             YEAR = {2020},
+             DOI = {10.4230/LIPIcs.SEA.2020.4}
+}
+```
+
+If you use shared-memory parallel partitioning (mt-KaHIP) please also cite the following paper:
+
+```
+@article{akhremtsevsandersschulz2020,
+             AUTHOR = {Akhremtsev, Yaroslav and Sanders, Peter and Schulz, Christian},
+             TITLE = {{High-Quality Shared-Memory Graph Partitioning}},
+             JOURNAL = {IEEE Transactions on Parallel and Distributed Systems},
+             VOLUME = {31},
+             NUMBER = {11},
+             PAGES = {2710--2722},
+             YEAR = {2020},
+             DOI = {10.1109/TPDS.2020.3001645}
 }
 ```
 
@@ -444,20 +651,14 @@ If you use edge partitioning algorithms please also cite the following paper:
 If you use node ordering algorithms please also cite the following paper:
 
 ```
-@article{DBLP:journals/corr/abs-2004-11315,
-  author    = {Wolfgang Ost and
-               Christian Schulz and
-               Darren Strash},
+@inproceedings{ostschulzstrash2021,
+  author    = {Wolfgang Ost and Christian Schulz and Darren Strash},
   title     = {Engineering Data Reduction for Nested Dissection},
-  journal   = {CoRR},
-  volume    = {abs/2004.11315},
-  year      = {2020},
-  url       = {https://arxiv.org/abs/2004.11315},
-  archivePrefix = {arXiv},
-  eprint    = {2004.11315},
-  timestamp = {Tue, 28 Apr 2020 16:10:02 +0200},
-  biburl    = {https://dblp.org/rec/journals/corr/abs-2004-11315.bib},
-  bibsource = {dblp computer science bibliography, https://dblp.org}
+  booktitle = {Proceedings of the 19th Workshop on Algorithm Engineering and Experimentation (ALENEX'21)},
+  pages     = {113--126},
+  publisher = {SIAM},
+  year      = {2021},
+  doi       = {10.1137/1.9781611976472.9}
 }
 ```
 
@@ -465,19 +666,14 @@ If you use node ordering algorithms please also cite the following paper:
 If you use ILP algorithms to improve a partition please also cite the following paper:
 
 ```
-@inproceedings{DBLP:conf/wea/HenzingerN018,
-  author    = {Alexandra Henzinger and
-               Alexander Noe and
-               Christian Schulz},
+@article{henzingernoeschulz2020,
+  author    = {Alexandra Henzinger and Alexander Noe and Christian Schulz},
   title     = {ILP-based Local Search for Graph Partitioning},
-  booktitle = {17th International Symposium on Experimental Algorithms, {SEA} 2018},
-  pages     = {4:1--4:15},
-  year      = {2018},
-  url       = {https://doi.org/10.4230/LIPIcs.SEA.2018.4},
-  doi       = {10.4230/LIPIcs.SEA.2018.4},
-  series    = {LIPIcs},
-  volume    = {103},
-  publisher = {Schloss Dagstuhl - Leibniz-Zentrum f{\"{u}}r Informatik}
+  journal   = {ACM Journal of Experimental Algorithmics},
+  volume    = {25},
+  pages     = {1--26},
+  year      = {2020},
+  doi       = {10.1145/3398634}
 }
 ```
 

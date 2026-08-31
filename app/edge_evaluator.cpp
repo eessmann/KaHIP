@@ -6,7 +6,9 @@
  *****************************************************************************/
 
 #include <argtable3.h>
+#ifndef _WIN32
 #include <regex.h>
+#endif
 #include <string.h>
 
 #include "data_structure/graph_access.h"
@@ -35,7 +37,7 @@ int main(int argn, char **argv) {
     graph_io::readGraphWeighted(G, graph_filename);
     G.set_partition_count(partition_config.k);
 
-    std::vector<EdgeID> edge_partition(G.number_of_edges());
+    std::vector<PartitionID> edge_partition(G.number_of_edges());
 
     std::vector<PartitionID> input_partition;
     if (partition_config.input_partition != "") {

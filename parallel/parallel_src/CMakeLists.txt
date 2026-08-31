@@ -173,7 +173,7 @@ target_link_libraries(edge_list_to_metis_graph PRIVATE kahip_options kahip_warni
 install(TARGETS edge_list_to_metis_graph DESTINATION bin)
 
 #add_executable(friendster_list_to_metis_graph app/friendster_list_to_metis_graph.cpp $<TARGET_OBJECTS:libedgelist>)
-#target_compile_definitions(friendster_list_to_metis_graph PRIVATE "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DKRONECKER_GENERATOR_PROGRAM")
+#target_compile_definitions(friendster_list_to_metis_graph PRIVATE "-DGRAPH_GENERATOR_MPI" "-DGRAPHGEN_DISTRIBUTED_MEMORY" "-DKRONECKER_GENERATOR_PROGRAM")
 #target_link_libraries(edge_list_to_metis_graph PRIVATE libmodified_kahip_interface)
 #install(TARGETS friendster_list_to_metis_graph DESTINATION bin)
 
@@ -208,6 +208,30 @@ install(
     TARGETS parhip_interface
     LIBRARY DESTINATION lib
     PUBLIC_HEADER DESTINATION include
+)
+
+# pkg-config
+# Collect MPI flags for the .pc file
+string(REPLACE ";" " -I" PARHIP_MPI_CFLAGS "-I${MPI_CXX_INCLUDE_DIRS}")
+set(PARHIP_MPI_LIBS "")
+foreach(_lib ${MPI_CXX_LIBRARIES})
+    if(IS_ABSOLUTE "${_lib}")
+        get_filename_component(_dir "${_lib}" DIRECTORY)
+        get_filename_component(_name "${_lib}" NAME_WE)
+        string(REGEX REPLACE "^lib" "" _name "${_name}")
+        string(APPEND PARHIP_MPI_LIBS " -L${_dir} -l${_name}")
+    else()
+        string(APPEND PARHIP_MPI_LIBS " ${_lib}")
+    endif()
+endforeach()
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/parhip_interface.pc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/parhip_interface.pc"
+    @ONLY
+)
+install(
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/parhip_interface.pc"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
 
 add_library(parhip_interface_static interface/parhip_interface.cpp)

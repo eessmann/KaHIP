@@ -8,7 +8,9 @@
 #include <argtable3.h>
 #include <iostream>
 #include <math.h>
+#ifndef _WIN32
 #include <regex.h>
+#endif
 #include <sstream>
 #include <stdio.h>
 #include <string.h> 
@@ -48,7 +50,11 @@ int main(int argn, char **argv) {
 
         std::streambuf* backup = std::cout.rdbuf();
         std::ofstream ofs;
+#ifdef _WIN32
+        ofs.open("NUL");
+#else
         ofs.open("/dev/null");
+#endif
         if(suppress_output) {
                 std::cout.rdbuf(ofs.rdbuf()); 
         }

@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.26..28)
 include(CheckCXXCompilerFlag)
-project(KaHIP LANGUAGES C CXX)
+project(KaHIP VERSION 3.24 LANGUAGES C CXX)
+include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(KaHIPSettings)
@@ -36,10 +37,19 @@ if(metis_FOUND)
     endif()
 endif()
 
+# Windows compatibility
+if(WIN32)
+  add_definitions(-DNOMINMAX)
+  # MSVC: use /W3 instead of /Wall (which is extremely pedantic)
+  string(REGEX REPLACE "/W[0-4]" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  add_compile_options(/W3)
+endif()
+
 # 64 Bit option
 option(64BITMODE "64 bit mode" OFF)
 if(64BITMODE)
     add_definitions("-DMODE64BITEDGES")
+    add_definitions("-DKAHIP_64BIT")
     add_definitions("-DPOINTER64=1")
 endif()
 
@@ -269,7 +279,7 @@ add_executable(global_multisection app/global_multisection.cpp)
 target_link_libraries(global_multisection PRIVATE libkaffpa libmapping)
 target_compile_definitions(
     global_multisection
-    PRIVATE "-DMODE_KAFFPA -DMODE_GLOBALMS"
+    PRIVATE "-DMODE_KAFFPA" "-DMODE_GLOBALMS"
 )
 target_link_libraries(global_multisection PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
@@ -410,7 +420,7 @@ add_executable(node_ordering app/node_ordering.cpp)
 target_link_libraries(node_ordering PRIVATE libkaffpa libnodeordering)
 target_compile_definitions(
     node_ordering
-    PRIVATE "-DMODE_NODESEP -DMODE_NODEORDERING"
+    PRIVATE "-DMODE_NODESEP" "-DMODE_NODEORDERING"
 )
 target_link_libraries(node_ordering PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(
@@ -427,7 +437,7 @@ if(metis_FOUND)
     )
     target_compile_definitions(
         fast_node_ordering
-        PRIVATE "-DMODE_NODESEP -DMODE_NODEORDERING -DFASTORDERING"
+        PRIVATE "-DMODE_NODESEP" "-DMODE_NODEORDERING" "-DFASTORDERING"
     )
     target_link_libraries(
         fast_node_ordering
@@ -457,6 +467,11 @@ if(metis_FOUND)
     target_link_libraries(kahip PRIVATE metis GKlib)
 endif()
 install(TARGETS kahip DESTINATION lib)
+
+# pkg-config
+configure_file("lib/kahip.pc.in" "${CMAKE_CURRENT_BINARY_DIR}/kahip.pc" @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/kahip.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+
 
 # Static interface library
 add_library(kahip_static interface/kaHIP_interface.cpp)
@@ -512,7 +527,7 @@ if(USE_ILP)
     target_include_directories(ilp_exact PUBLIC ${GUROBI_INCLUDE_DIR})
     target_compile_definitions(
         ilp_exact
-        PRIVATE "-DMODE_ILPIMPROVE -DMODE_ILPEXACT"
+        PRIVATE "-DMODE_ILPIMPROVE" "-DMODE_ILPEXACT"
     )
     target_link_libraries(
         ilp_exact

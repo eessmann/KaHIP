@@ -8,7 +8,9 @@
 #include <argtable3.h>
 #include <iostream>
 #include <math.h>
+#ifndef _WIN32
 #include <regex.h>
+#endif
 #include <sstream>
 #include <stdio.h>
 #include <string.h> 
@@ -18,7 +20,9 @@
 #include "data_structure/matrix/normal_matrix.h"
 #include "data_structure/matrix/online_distance_matrix.h"
 #include "graph_io.h"
+#ifndef _WIN32
 #include "mmap_graph_io.h"
+#endif
 #include "macros_assertions.h"
 #include "parse_parameters.h"
 #include "partition/graph_partitioner.h"
@@ -50,7 +54,11 @@ int main(int argn, char **argv) {
 
         std::streambuf* backup = std::cout.rdbuf();
         std::ofstream ofs;
+#ifdef _WIN32
+        ofs.open("NUL");
+#else
         ofs.open("/dev/null");
+#endif
         if(suppress_output) {
                 std::cout.rdbuf(ofs.rdbuf()); 
         }
@@ -59,9 +67,12 @@ int main(int argn, char **argv) {
         graph_access G;     
 
         timer t;
+#ifndef _WIN32
         if (partition_config.use_mmap_io) {
                 kahip::mmap_io::graph_from_metis_file(G, graph_filename);
-        } else {
+        } else
+#endif
+        {
                 graph_io::readGraphWeighted(G, graph_filename);
         }
         std::cout << "io time: " << t.elapsed()  << std::endl;

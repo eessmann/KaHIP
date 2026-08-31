@@ -11,7 +11,9 @@
 #include <string.h> 
 
 #include <argtable3.h>
+#ifndef _WIN32
 #include <regex.h>
+#endif
 
 #include "balance_configuration.h"
 #include "data_structure/graph_access.h"
@@ -48,7 +50,11 @@ int main(int argn, char **argv) {
 
         streambuf* backup = cout.rdbuf();
         ofstream ofs;
+#ifdef _WIN32
+        ofs.open("NUL");
+#else
         ofs.open("/dev/null");
+#endif
 
         if(suppress_output) {
                cout.rdbuf(ofs.rdbuf()); 
