@@ -39,6 +39,7 @@ public:
                 hmap_wrapper< T > hash_map(config);
                 hash_map.init( G.get_max_degree() );
                 for( ULONG i = 0; i < config.label_iterations; i++) {
+                        KAHIP_MPI_TRACE_SET_ITERATION(i);
                         NodeID prev_node = 0;
                         forall_local_nodes(G, rnode) {
                                 NodeID node = permutation[rnode]; // use the current random node

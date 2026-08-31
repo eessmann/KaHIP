@@ -4,9 +4,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
+#include <optional>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -20,7 +24,7 @@
 #endif
 
 namespace parhip::mpi::trace {
-inline constexpr std::string_view format_version = "kahip-mpi-trace-v2";
+inline constexpr std::string_view format_version = "kahip-mpi-trace-v3";
 inline constexpr std::string_view upstream_revision =
     "5935f349f65f1788a9b68fcf6d853e698d86956d";
 
@@ -51,6 +55,7 @@ struct hierarchy_position {
   std::uint32_t cycle;
   std::uint32_t level;
   epoch epoch_id;
+  std::uint32_t iteration;
   std::uint32_t round;
 
   auto operator==(hierarchy_position const&) const -> bool = default;
@@ -278,6 +283,7 @@ struct record {
                     value.hierarchy.cycle,
                     value.hierarchy.level,
                     value.hierarchy.epoch_id,
+                    value.hierarchy.iteration,
                     value.hierarchy.round,
                     value.global_id,
                     value.actors.owner,
@@ -294,6 +300,7 @@ struct record {
               " cycle=" + std::to_string(value.hierarchy.cycle) +
               " level=" + std::to_string(value.hierarchy.level) +
               " epoch=" + std::string{epoch_name(value.hierarchy.epoch_id)} +
+              " iteration=" + std::to_string(value.hierarchy.iteration) +
               " round=" + std::to_string(value.hierarchy.round) +
               " global=" + std::to_string(value.global_id) +
               " owner=" + rank_name(value.actors.owner) +
@@ -328,14 +335,45 @@ struct record {
   return result;
 }
 
+[[nodiscard]] inline auto stable_run_id_hash(std::string_view run_id)
+    -> std::uint64_t {
+  constexpr std::uint64_t offset_basis = 14695981039346656037ULL;
+  constexpr std::uint64_t prime = 1099511628211ULL;
+  auto hash = offset_basis;
+  for (auto const character : run_id) {
+    hash ^= static_cast<unsigned char>(character);
+    hash *= prime;
+  }
+  return hash;
+}
+
+[[nodiscard]] inline auto hexadecimal(std::uint64_t value) -> std::string {
+  constexpr auto digits = std::string_view{"0123456789abcdef"};
+  auto result = std::string(16, '0');
+  for (auto index = result.size(); index > 0; --index) {
+    auto const digit = static_cast<unsigned>(value & 0xfU);
+    result[index - 1] = digits[digit];
+    value >>= 4U;
+  }
+  return result;
+}
+
+[[nodiscard]] inline auto run_id_filename_component(std::string_view run_id)
+    -> std::string {
+  return sanitize_run_id(run_id) + "-" +
+         hexadecimal(stable_run_id_hash(run_id));
+}
+
 [[nodiscard]] inline auto rank_file_path(std::string_view base_path,
                                          std::string_view run_id,
                                          int rank) -> std::string {
-  auto path = std::string{base_path};
-  if (!run_id.empty()) {
-    path += ".run-" + sanitize_run_id(run_id);
+  if (run_id.empty()) {
+    throw std::invalid_argument{
+        "MPI trace filename requires a collectively resolved run ID"};
   }
-  return path + ".rank" + std::to_string(rank) + ".trace";
+  return std::string{base_path} + ".run-" +
+         run_id_filename_component(run_id) + ".rank" +
+         std::to_string(rank) + ".trace";
 }
 
 #if KAHIP_ENABLE_MPI_TRACE
@@ -343,10 +381,54 @@ namespace detail {
 inline std::vector<record> records;
 inline bool active = std::getenv("KAHIP_MPI_TRACE_PATH") != nullptr;
 inline hierarchy_position hierarchy{
-    .cycle = 0, .level = 0, .epoch_id = epoch::input, .round = 0};
+    .cycle = 0,
+    .level = 0,
+    .epoch_id = epoch::input,
+    .iteration = 0,
+    .round = 0};
+
+[[nodiscard]] inline auto automatic_run_id() -> std::string {
+  auto entropy = std::random_device{};
+  auto first = (static_cast<std::uint64_t>(entropy()) << 32U) |
+               static_cast<std::uint64_t>(entropy());
+  auto second = (static_cast<std::uint64_t>(entropy()) << 32U) |
+                static_cast<std::uint64_t>(entropy());
+  first ^= static_cast<std::uint64_t>(
+      std::chrono::system_clock::now().time_since_epoch().count());
+  second ^= static_cast<std::uint64_t>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  return "auto-" + hexadecimal(first) + hexadecimal(second);
+}
+
+[[nodiscard]] inline auto broadcast_string(MPI_Comm communicator,
+                                           int rank,
+                                           std::string root_value)
+    -> std::string {
+  auto length = rank == 0
+                    ? static_cast<unsigned long long>(root_value.size())
+                    : 0ULL;
+  if (MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, communicator) !=
+      MPI_SUCCESS) {
+    throw std::runtime_error{"MPI trace run-ID length broadcast failed"};
+  }
+  if (length >
+      static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error{"MPI trace run ID is too long"};
+  }
+
+  auto bytes = std::vector<char>(static_cast<std::size_t>(length));
+  if (rank == 0) {
+    std::ranges::copy(root_value, bytes.begin());
+  }
+  if (MPI_Bcast(bytes.data(), static_cast<int>(length), MPI_CHAR, 0,
+                communicator) != MPI_SUCCESS) {
+    throw std::runtime_error{"MPI trace run-ID payload broadcast failed"};
+  }
+  return {bytes.begin(), bytes.end()};
+}
 }  // namespace detail
 
-[[nodiscard]] inline auto requested_run_id() -> std::string {
+[[nodiscard]] inline auto requested_run_id() -> std::optional<std::string> {
   constexpr auto variables = std::array{
       "KAHIP_MPI_TRACE_RUN_ID",
       "SLURM_JOB_ID",
@@ -357,15 +439,52 @@ inline hierarchy_position hierarchy{
   for (auto const* variable : variables) {
     auto const* value = std::getenv(variable);
     if (value != nullptr && *value != '\0') {
-      return value;
+      return std::string{value};
     }
   }
-  return {};
+  return std::nullopt;
+}
+
+[[nodiscard]] inline auto resolve_run_id_collectively(
+    MPI_Comm communicator,
+    std::optional<std::string> local_run_id) -> std::string {
+  if (local_run_id && local_run_id->empty()) {
+    local_run_id.reset();
+  }
+
+  int rank = 0;
+  if (MPI_Comm_rank(communicator, &rank) != MPI_SUCCESS) {
+    throw std::runtime_error{"MPI trace could not query rank"};
+  }
+  auto root_run_id = detail::broadcast_string(
+      communicator, rank,
+      rank == 0 ? local_run_id.value_or(std::string{}) : std::string{});
+  auto const local_mismatch =
+      local_run_id ? *local_run_id != root_run_id : !root_run_id.empty();
+  auto mismatch = local_mismatch ? 1 : 0;
+  auto any_mismatch = 0;
+  if (MPI_Allreduce(&mismatch, &any_mismatch, 1, MPI_INT, MPI_MAX,
+                    communicator) != MPI_SUCCESS) {
+    throw std::runtime_error{"MPI trace run-ID validation failed"};
+  }
+  if (any_mismatch != 0) {
+    throw std::runtime_error{
+        "MPI trace run ID differs across communicator ranks"};
+  }
+  if (!root_run_id.empty()) {
+    return root_run_id;
+  }
+
+  return detail::broadcast_string(
+      communicator, rank, rank == 0 ? detail::automatic_run_id() : "");
 }
 
 inline void set_active(bool active) { detail::active = active; }
 inline void set_hierarchy(hierarchy_position hierarchy) {
   detail::hierarchy = hierarchy;
+}
+inline void set_iteration(std::uint32_t iteration) {
+  detail::hierarchy.iteration = iteration;
 }
 [[nodiscard]] inline auto current_hierarchy() -> hierarchy_position {
   return detail::hierarchy;
@@ -394,7 +513,9 @@ inline void write_rank_file_if_requested(MPI_Comm communicator) {
   if (MPI_Comm_rank(communicator, &rank) != MPI_SUCCESS) {
     throw std::runtime_error{"MPI trace could not query rank"};
   }
-  auto const path = rank_file_path(base_path, requested_run_id(), rank);
+  auto const run_id =
+      resolve_run_id_collectively(communicator, requested_run_id());
+  auto const path = rank_file_path(base_path, run_id, rank);
   auto output = std::ofstream{path, std::ios::binary | std::ios::trunc};
   if (!output) {
     throw std::runtime_error{"MPI trace could not open " + path};
@@ -424,13 +545,22 @@ inline void write_rank_file_if_requested(MPI_Comm) noexcept {}
         {.cycle = static_cast<std::uint32_t>(cycle_value),                    \
          .level = static_cast<std::uint32_t>(level_value),                    \
          .epoch_id = (epoch_value),                                           \
+         .iteration = 0,                                                      \
          .round = 0});                                                        \
+  } while (false)
+#define KAHIP_MPI_TRACE_SET_ITERATION(iteration_value)                        \
+  do {                                                                        \
+    ::parhip::mpi::trace::set_iteration(                                      \
+        static_cast<std::uint32_t>(iteration_value));                         \
   } while (false)
 #else
 #define KAHIP_MPI_TRACE(record_expression)                                    \
   do {                                                                        \
   } while (false)
 #define KAHIP_MPI_TRACE_SET_HIERARCHY(cycle_value, level_value, epoch_value)   \
+  do {                                                                        \
+  } while (false)
+#define KAHIP_MPI_TRACE_SET_ITERATION(iteration_value)                        \
   do {                                                                        \
   } while (false)
 #endif

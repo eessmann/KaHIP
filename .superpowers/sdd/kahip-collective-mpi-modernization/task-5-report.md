@@ -400,3 +400,116 @@ parity remains later-task coverage.
 
 This remains scoped evidence for the recorded tuple and focused fixtures, not
 a claim of all-configuration parity or algorithmic vcycle block-path parity.
+
+## Fix round 2: ghost exchange identity and collective run IDs
+
+This round is based on Task 5 fix-round-1 commit
+`de1752f0af568bd8ac9d6af752397b8e42c46563`. It changes only the Task 5
+trace schema, trace filenames, focused regressions, and their pinned-upstream
+provenance artifact. No Task 6 dense-path migration was performed.
+
+### Real ghost reset-path RED/GREEN
+
+The new two-rank regression constructs one owned node and one cross-rank edge
+per rank, then runs the real `parallel_label_compress` loop for four label
+iterations. Before the fix, `update_ghost_node_data_finish()` reset
+`m_recv_iteration` every outer iteration, so the globally canonical trace
+contained the same record twice. Rank 0's exact duplicate was:
+
+```text
+ghost-update cycle=5 level=2 epoch=coarsening round=1 global=1 owner=1 requester=- receiver=0 key=label label=1
+```
+
+Rank 1 had the symmetric duplicate for global node 0. The focused RED failed
+because neither `iteration=1` nor `iteration=3` existed (18 of 19 assertions
+passed on each rank). The v3 schema adds `iteration` before the existing
+exchange-local `round`; the real outer loop sets it from its deterministic
+label-iteration index. `KAHIP_MPI_TRACE_SET_HIERARCHY` resets it to zero when
+the semantic stage changes, while the compile-time-OFF iteration macro does
+not evaluate its argument. The focused GREEN contains otherwise-identical
+ghost updates at `iteration=1 round=1` and `iteration=3 round=1`. The trace
+schema/canonical, real projection/ghost, and vcycle block-hook focused set
+passed 5 of 5.
+
+### Collective, collision-resistant trace run ID RED/GREEN
+
+The filename regression first demonstrated the sanitizer collision exactly:
+both `job/42` and `job?42` produced
+`trace/output.run-job_42.rank3.trace`. The MPI regression initially failed to
+compile because `resolve_run_id_collectively` did not exist. GREEN resolves
+one run ID per communicator:
+
+- a root ID is broadcast and every rank contributes to a mismatch
+  `MPI_Allreduce`; all ranks throw if any local explicit or scheduler-derived
+  ID differs;
+- with no ID, only rank 0 creates a non-security nonce from `random_device`
+  plus system and steady clock state, then broadcasts it;
+- explicit IDs remain deterministic; filenames include a fixed 64-bit FNV-1a
+  hexadecimal suffix of the original unsanitized ID, so sanitizer collisions
+  do not alias.
+
+The focused CTest command selected the collision unit test and the two-rank
+MPI executable. Both tests passed. The MPI executable verifies the rank-zero
+versus rank-one mismatch fails on every rank, independently re-broadcasts and
+compares the no-ID fallback, and verifies exact `oracle-fixture` agreement.
+No lifecycle failure or deadlock occurred. All resolver and nonce operations
+are inside `#if KAHIP_ENABLE_MPI_TRACE`; the default-OFF build introduces no
+run-ID MPI work. The integration smoke first went RED looking for the old
+`.run-smoke.rank0.trace`; GREEN discovers the stable-hash filename, requires
+exactly one file per rank, and verifies both ranks share the same run stem.
+
+### Regenerated v3 pinned-upstream provenance
+
+The disposable upstream worktree remains at exact revision
+`5935f349f65f1788a9b68fcf6d853e698d86956d`. Its trace-only schema and real
+label-compression hook were updated to v3, and its collective filename logic
+matches the candidate. The checked-in `task-5-upstream-trace.patch` is
+byte-identical to the disposable worktree's
+`git diff --binary --no-ext-diff HEAD` and has SHA-256:
+
+```text
+8266c743ba828a6bd08c87def268940dfbda41910140e7dff29cc327da985cdc
+```
+
+`git apply --check` against the pristine pinned worktree returned zero. The
+trace-OFF expression-evaluation probe was rebuilt under C++11 and returned
+zero. The full trace-OFF upstream binary was also rebuilt, run with both trace
+environment variables set, and wrote no trace file. Its fixed partition
+remained:
+
+```text
+a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0
+```
+
+For exactly `examples/rgg_n_2_15_s0.graph`, ranks 2, k 2,
+`ultrafastmesh`, seed 0, the trace-ON upstream and candidate partitions were
+byte-identical and both had that same partition SHA-256. After removing each
+rank-local header and globally sorting all complete canonical v3 records,
+both 436,721-record aggregates compared byte-for-byte equal and had SHA-256:
+
+```text
+a179bb30213dbb26638657a1d611e951a8bf900b817647fc03d4c700a83f0a18
+```
+
+The new rank-local hashes and unchanged per-stage counts are recorded in
+`task-5-oracle-golden.txt`. This remains exact evidence for that tuple; the
+fixture still does not execute the algorithmic vcycle block path.
+
+### Fix-round-2 verification
+
+- Trace-ON debug full build completed at `-j2`; full CTest passed 44 of 44.
+- Default-OFF release full build completed at `-j2`; full CTest passed 43 of
+  43. Ninja reported a recoverable pre-existing build-log truncation warning,
+  rebuilt the graph, and exited successfully.
+- All five pinned RNG regressions, projection regression, real ghost reset
+  regression, schema/canonical/run-ID tests, vcycle hook test, integration
+  smoke, and adapter ranks 1 through 5 are included in those suites.
+- Debug and release capability headers both retain
+  `KAHIP_HAVE_MPI_ALLTOALLV_C 0`; the MPI-3 PMPI path was exercised and the
+  guarded MPI-4 path was not faked.
+- Production Cista and superseded projection
+  `MPI_Isend`/`MPI_Probe`/`MPI_Recv`/request-member searches returned no
+  matches.
+- The regenerated patch live-diff comparison, pristine apply-check, OFF
+  evaluation probe, OFF no-file check, fixed partition comparison, exact v3
+  aggregate comparison, and `git diff --check` all passed.

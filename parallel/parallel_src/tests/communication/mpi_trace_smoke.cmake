@@ -5,8 +5,10 @@ if(NOT DEFINED PARHIP_EXECUTABLE OR NOT DEFINED MPIEXEC_EXECUTABLE OR
 endif()
 
 set(trace_run_id "smoke")
-set(trace_run_base "${TRACE_BASE}.run-${trace_run_id}")
-file(REMOVE "${trace_run_base}.rank0.trace" "${trace_run_base}.rank1.trace")
+file(GLOB stale_trace_files
+    "${TRACE_BASE}.run-${trace_run_id}-*.rank*.trace"
+)
+file(REMOVE ${stale_trace_files})
 execute_process(
     COMMAND
         "${CMAKE_COMMAND}" -E env
@@ -26,10 +28,25 @@ if(NOT run_result EQUAL 0)
 endif()
 
 set(combined_trace "")
+set(common_trace_stem "")
 foreach(rank RANGE 0 1)
-    set(trace_file "${trace_run_base}.rank${rank}.trace")
-    if(NOT EXISTS "${trace_file}")
-        message(FATAL_ERROR "trace file was not written: ${trace_file}")
+    file(GLOB rank_trace_files
+        "${TRACE_BASE}.run-${trace_run_id}-*.rank${rank}.trace"
+    )
+    list(LENGTH rank_trace_files rank_trace_file_count)
+    if(NOT rank_trace_file_count EQUAL 1)
+        message(FATAL_ERROR
+            "expected one trace file for rank ${rank}, found ${rank_trace_file_count}: ${rank_trace_files}"
+        )
+    endif()
+    list(GET rank_trace_files 0 trace_file)
+    string(REGEX REPLACE "\\.rank[0-9]+\\.trace$" "" trace_stem "${trace_file}")
+    if(common_trace_stem STREQUAL "")
+        set(common_trace_stem "${trace_stem}")
+    elseif(NOT trace_stem STREQUAL common_trace_stem)
+        message(FATAL_ERROR
+            "trace ranks did not resolve a common run ID: ${common_trace_stem};${trace_stem}"
+        )
     endif()
     file(READ "${trace_file}" rank_trace)
     string(APPEND combined_trace "${rank_trace}")
@@ -46,7 +63,7 @@ foreach(required_stage
         ghost-update
         final-partition)
     if(NOT combined_trace MATCHES
-       "${required_stage} cycle=[0-9]+ level=[0-9]+ epoch=[a-z-]+ round=[0-9]+ global=")
+       "${required_stage} cycle=[0-9]+ level=[0-9]+ epoch=[a-z-]+ iteration=[0-9]+ round=[0-9]+ global=")
         message(FATAL_ERROR
             "trace smoke is missing stage ${required_stage}"
         )
