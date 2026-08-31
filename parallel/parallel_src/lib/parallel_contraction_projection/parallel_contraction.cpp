@@ -7,6 +7,7 @@
 
 #include "parallel_contraction.h"
 #include "data_structure/hashed_graph.h"
+#include "communication/mpi_trace.h"
 #include "tools/helpers.h"
 namespace parhip {
 void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config,
@@ -25,6 +26,8 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
   G.allocate_node_to_cnode();
   forall_local_nodes(G, node) {
     G.setCNode( node, label_mapping[ G.getNodeLabel( node )]);
+    KAHIP_MPI_TRACE(mpi::trace::contraction_label(
+        G.getGlobalID(node), G.getNodeLabel(node), G.getCNode(node)));
   } endfor
 
   get_nodes_to_cnodes_ghost_nodes( communicator, G );
@@ -43,6 +46,15 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
 
   redistribute_hased_graph_and_build_graph_locally( communicator, hG, node_weights, number_of_distinct_labels, Q );
   update_ghost_nodes_weights( communicator, Q );
+  forall_local_nodes(Q, node) {
+    KAHIP_MPI_TRACE(mpi::trace::quotient_node_weight(
+        Q.getGlobalID(node), Q.getNodeWeight(node)));
+    forall_out_edges(Q, edge, node) {
+      auto const target = Q.getEdgeTarget(edge);
+      KAHIP_MPI_TRACE(mpi::trace::quotient_edge(
+          Q.getGlobalID(node), Q.getGlobalID(target), Q.getEdgeWeight(edge)));
+    } endfor
+  } endfor
 }
 
 // MPI AlltoAll based implementation

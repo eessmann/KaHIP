@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "data_structure/balance_management.h"
+#include "communication/mpi_trace.h"
 #include "definitions.h"
 #include "partition_config.h"
 #include "tools/timer.h"
@@ -913,6 +914,8 @@ void ghost_node_communication::receive_messages_of_neighbors() {
                         NodeID local_id = m_G->m_global_to_local_id[global_id];
                         m_G->update_non_contained_block_balance(m_G->getNodeLabel(local_id), label, m_G->getNodeWeight(local_id));
                         m_G->setNodeLabel(local_id, label);
+                        KAHIP_MPI_TRACE(mpi::trace::ghost_update(
+                            global_id, st.MPI_SOURCE, label));
                 }
         }
 
@@ -1022,6 +1025,8 @@ inline void ghost_node_communication::update_ghost_node_data_global() {
                         NodeID label     = message[i+1];
 
                         m_G->setNodeLabel( m_G->m_global_to_local_id[global_id], label);
+                        KAHIP_MPI_TRACE(mpi::trace::ghost_update(
+                            global_id, st.MPI_SOURCE, label));
                 }
         }
 

@@ -11,11 +11,12 @@
 #include <random>
 #include <vector>
 
+#include "../../../shared/random_state.h"
 #include "definitions.h"
 #include "partition_config.h"
 namespace parhip {
 
-using MersenneTwister = std::mt19937;
+using MersenneTwister = kahip::random_compat::engine_type;
 
 class random_functions {
 public:
@@ -128,8 +129,8 @@ public:
         }
 
         static bool nextBool() {
-                std::bernoulli_distribution bernoulli(0.5);
-                return bernoulli(m_mt);
+                std::uniform_int_distribution<short> A(0,1);
+                return static_cast<bool>(A(m_mt));
         }
 
         //including lb and rb
@@ -141,20 +142,23 @@ public:
 
 
         static double nextDouble(double lb, double rb) {
-                std::uniform_real_distribution<double> A(lb,rb);
-                return A(m_mt);
+                double rnbr   = static_cast<double>(rand()) / static_cast<double>(RAND_MAX);
+                double length = rb - lb;
+                rnbr         *= length;
+                rnbr         += lb;
+
+                return rnbr;
         }
 
         static void setSeed(int seed) {
                 m_seed = seed;
                 srand(seed);
-                std::seed_seq mt_seed{seed};
-                m_mt.seed(mt_seed);
+                m_mt.seed(m_seed);
         }
 
 private:
-        inline static int m_seed = 0;
-        inline static MersenneTwister m_mt;
+        inline static int& m_seed = kahip::random_compat::seed;
+        inline static MersenneTwister& m_mt = kahip::random_compat::engine;
 };
 }
 #endif /* end of include guard: RANDOM_FUNCTIONS_RMEPKWYT */

@@ -66,6 +66,7 @@ option(NOMPI "disable all targets that depend on MPI (kaffpaE, ParHIP)" OFF)
 # ParHIP
 option(PARHIP "build ParHIP" ON)
 option(DETERMINISTIC_PARHIP "enforce deterministic computations in ParHIP" OFF)
+option(KAHIP_ENABLE_MPI_TRACE "enable canonical ParHIP MPI stage tracing" OFF)
 
 # Look for MPI (needed for ParHIP and kaffpaE)
 # Report which MPI we actually found,

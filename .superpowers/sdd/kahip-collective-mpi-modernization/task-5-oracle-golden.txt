@@ -1,0 +1,33 @@
+KaHIP Task 5 oracle provenance
+upstream_revision=5935f349f65f1788a9b68fcf6d853e698d86956d
+instrumentation_patch=task-5-upstream-trace.patch
+instrumentation_patch_sha256=097676e8bebe7c411ddb6af703f394550ff41e20a4b628451ca6786c361560b0
+
+tuple.graph=examples/rgg_n_2_15_s0.graph
+tuple.ranks=2
+tuple.k=2
+tuple.preconfiguration=ultrafastmesh
+tuple.seed=0
+
+partition_sha256=a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0
+canonical_rank_aggregate_sha256=eb5a236718b3818f68425598777d5fb49a05c59712760b71de243b38dbf61fc7
+upstream_rank0_sha256=09187103dd37d640b4e66ecb72ced436f167d3a267c822a5edc2cd76ba277571
+upstream_rank1_sha256=bc93a859d35e3e354c6924bac67a807517084863e32b88adfc744f09900d7624
+candidate_rank0_sha256=161064e1d11a43f4e74b1c7e1b40a3d57de8e159599bf9e295a704a2733e97e6
+candidate_rank1_sha256=131956602ca1266256310e66780701d2abaa441fe22921d07b94a1257651b9de
+
+stage.graph-distribution-node=32768
+stage.graph-distribution-edge=320480
+stage.contraction-label=32768
+stage.quotient-node-weight=2898
+stage.quotient-edge=13602
+stage.projection-request=62
+stage.projection-reply=62
+stage.ghost-update=1313
+stage.final-partition=32768
+
+# The configured parhip executable excludes --num_vcycles under
+# PARALLEL_LABEL_COMPRESSION, so this fixed tuple does not execute the
+# vcycle-only block-propagation path. Its exact record schema and hook source
+# are covered by the focused trace test; algorithmic block-path parity remains
+# outside this Task 5 tuple.

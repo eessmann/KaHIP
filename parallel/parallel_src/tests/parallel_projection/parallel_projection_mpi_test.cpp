@@ -1,0 +1,213 @@
+#include <mpi.h>
+
+#include <array>
+#include <vector>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include "data_structure/parallel_graph_access.h"
+#include "communication/mpi_trace.h"
+#include "parallel_contraction_projection/parallel_block_down_propagation.h"
+#include "parallel_contraction_projection/parallel_projection.h"
+
+namespace protocol_probe {
+inline bool active = false;
+inline int all_to_all_v_calls = 0;
+inline int isend_calls = 0;
+inline int probe_calls = 0;
+}  // namespace protocol_probe
+
+extern "C" int MPI_Alltoallv(const void* send_buffer,
+                             const int send_counts[],
+                             const int send_displacements[],
+                             MPI_Datatype send_datatype,
+                             void* receive_buffer,
+                             const int receive_counts[],
+                             const int receive_displacements[],
+                             MPI_Datatype receive_datatype,
+                             MPI_Comm communicator) {
+  if (protocol_probe::active) {
+    ++protocol_probe::all_to_all_v_calls;
+  }
+  return PMPI_Alltoallv(send_buffer,
+                        send_counts,
+                        send_displacements,
+                        send_datatype,
+                        receive_buffer,
+                        receive_counts,
+                        receive_displacements,
+                        receive_datatype,
+                        communicator);
+}
+
+extern "C" int MPI_Isend(const void* buffer,
+                         int count,
+                         MPI_Datatype datatype,
+                         int destination,
+                         int tag,
+                         MPI_Comm communicator,
+                         MPI_Request* request) {
+  if (protocol_probe::active) {
+    ++protocol_probe::isend_calls;
+  }
+  return PMPI_Isend(
+      buffer, count, datatype, destination, tag, communicator, request);
+}
+
+extern "C" int MPI_Probe(int source,
+                         int tag,
+                         MPI_Comm communicator,
+                         MPI_Status* status) {
+  if (protocol_probe::active) {
+    ++protocol_probe::probe_calls;
+  }
+  return PMPI_Probe(source, tag, communicator, status);
+}
+
+namespace {
+void build_edgeless_graph(parhip::parallel_graph_access& graph,
+                          int rank,
+                          std::array<parhip::NodeID, 2> labels) {
+  constexpr parhip::NodeID global_nodes = 4;
+  auto const first = static_cast<parhip::NodeID>(rank) * 2;
+  graph.start_construction(2, 0, global_nodes, 0, false);
+  graph.set_range(first, first + 1);
+  auto ranges = std::vector<parhip::NodeID>{0, 2, 4};
+  graph.set_range_array(ranges);
+  for (parhip::NodeID index = 0; index < 2; ++index) {
+    auto const node = graph.new_node();
+    graph.setNodeWeight(node, 1);
+    graph.setNodeLabel(node, labels[static_cast<std::size_t>(index)]);
+    graph.setSecondPartitionIndex(node, 0);
+  }
+  graph.finish_construction();
+}
+}  // namespace
+
+TEST_CASE("projection uses two dense exchanges and correlates stable request IDs",
+          "[mpi][projection]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size == 2);
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  auto const coarse_labels = rank == 0
+                                 ? std::array<parhip::NodeID, 2>{100, 101}
+                                 : std::array<parhip::NodeID, 2>{202, 203};
+  build_edgeless_graph(finer, rank, {0, 0});
+  build_edgeless_graph(coarser, rank, coarse_labels);
+
+  finer.allocate_node_to_cnode();
+  if (rank == 0) {
+    // Fine-node order and coarse-node order disagree.  A reply sorted by its
+    // stable request ID therefore cannot be applied by arrival position.
+    finer.setCNode(0, 3);
+    finer.setCNode(1, 2);
+  } else {
+    finer.setCNode(0, 1);
+    finer.setCNode(1, 0);
+  }
+
+  protocol_probe::all_to_all_v_calls = 0;
+  protocol_probe::isend_calls = 0;
+  protocol_probe::probe_calls = 0;
+  parhip::mpi::trace::reset();
+  parhip::mpi::trace::set_active(true);
+  protocol_probe::active = true;
+  parhip::parallel_projection{}.parallel_project(
+      MPI_COMM_WORLD, finer, coarser);
+  protocol_probe::active = false;
+
+  auto const expected = rank == 0
+                            ? std::array<parhip::NodeID, 2>{203, 202}
+                            : std::array<parhip::NodeID, 2>{101, 100};
+  REQUIRE(finer.getNodeLabel(0) == expected[0]);
+  REQUIRE(finer.getNodeLabel(1) == expected[1]);
+  CAPTURE(protocol_probe::all_to_all_v_calls,
+          protocol_probe::isend_calls,
+          protocol_probe::probe_calls);
+  REQUIRE(protocol_probe::all_to_all_v_calls == 2);
+  REQUIRE(protocol_probe::isend_calls == 0);
+  REQUIRE(protocol_probe::probe_calls == 0);
+
+#if KAHIP_ENABLE_MPI_TRACE
+  auto const expected_trace = rank == 0
+      ? std::string{
+            "kahip-mpi-trace-v1 upstream="
+            "5935f349f65f1788a9b68fcf6d853e698d86956d\n"
+            "projection-request global=2 key=request:1 source=0 destination=1\n"
+            "projection-request global=3 key=request:0 source=0 destination=1\n"
+            "projection-reply global=0 key=request:3 source=0 destination=1 "
+            "label=100\n"
+            "projection-reply global=1 key=request:2 source=0 destination=1 "
+            "label=101\n"}
+      : std::string{
+            "kahip-mpi-trace-v1 upstream="
+            "5935f349f65f1788a9b68fcf6d853e698d86956d\n"
+            "projection-request global=0 key=request:3 source=1 destination=0\n"
+            "projection-request global=1 key=request:2 source=1 destination=0\n"
+            "projection-reply global=2 key=request:1 source=1 destination=0 "
+            "label=202\n"
+            "projection-reply global=3 key=request:0 source=1 destination=0 "
+            "label=203\n"};
+  REQUIRE(parhip::mpi::trace::canonical_text(
+              parhip::mpi::trace::snapshot()) == expected_trace);
+#else
+  REQUIRE(parhip::mpi::trace::snapshot().empty());
+#endif
+}
+
+TEST_CASE("vcycle block-down hook emits canonical records",
+          "[mpi][trace][block-propagation]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size == 2);
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_edgeless_graph(finer, rank, {0, 0});
+  build_edgeless_graph(coarser, rank, {0, 0});
+  finer.allocate_node_to_cnode();
+  if (rank == 0) {
+    finer.setCNode(0, 0);
+    finer.setSecondPartitionIndex(0, 10);
+    finer.setCNode(1, 2);
+    finer.setSecondPartitionIndex(1, 12);
+  } else {
+    finer.setCNode(0, 1);
+    finer.setSecondPartitionIndex(0, 11);
+    finer.setCNode(1, 3);
+    finer.setSecondPartitionIndex(1, 13);
+  }
+
+  parhip::PPartitionConfig config{};
+  parhip::mpi::trace::reset();
+  parhip::mpi::trace::set_active(true);
+  parhip::parallel_block_down_propagation{}.propagate_block_down(
+      MPI_COMM_WORLD, config, finer, coarser);
+
+  auto const expected_blocks = rank == 0
+                                   ? std::array<parhip::NodeID, 2>{10, 11}
+                                   : std::array<parhip::NodeID, 2>{12, 13};
+  REQUIRE(coarser.getSecondPartitionIndex(0) == expected_blocks[0]);
+  REQUIRE(coarser.getSecondPartitionIndex(1) == expected_blocks[1]);
+#if KAHIP_ENABLE_MPI_TRACE
+  auto const first_global = static_cast<parhip::NodeID>(rank) * 2;
+  auto const expected_trace =
+      std::string{"kahip-mpi-trace-v1 upstream="
+                  "5935f349f65f1788a9b68fcf6d853e698d86956d\n"} +
+      "block-propagation global=" + std::to_string(first_global) +
+      " key=block block=" + std::to_string(expected_blocks[0]) + "\n" +
+      "block-propagation global=" + std::to_string(first_global + 1) +
+      " key=block block=" + std::to_string(expected_blocks[1]) + "\n";
+  REQUIRE(parhip::mpi::trace::canonical_text(
+              parhip::mpi::trace::snapshot()) == expected_trace);
+#else
+  REQUIRE(parhip::mpi::trace::snapshot().empty());
+#endif
+}

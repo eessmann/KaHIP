@@ -6,6 +6,7 @@
  *****************************************************************************/
 
 #include "parallel_block_down_propagation.h"
+#include "communication/mpi_trace.h"
 namespace parhip {
 parallel_block_down_propagation::parallel_block_down_propagation() {
                 
@@ -95,6 +96,11 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
     }
   }
 
+  forall_local_nodes(Q, node) {
+    KAHIP_MPI_TRACE(mpi::trace::block_propagation(
+        Q.getGlobalID(node), Q.getSecondPartitionIndex(node)));
+  } endfor
+
   update_ghost_nodes_blocks( communicator, Q );
 }
 
@@ -164,6 +170,7 @@ for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
       NodeWeight  block  = message[i+1];
 
       G.setSecondPartitionIndex( G.getLocalID(global_id), block );
+      KAHIP_MPI_TRACE(mpi::trace::block_propagation(global_id, block));
     }
   }
 

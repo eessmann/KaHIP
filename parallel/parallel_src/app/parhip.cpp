@@ -20,6 +20,7 @@
 
 #include "communication/mpi_tools.h"
 #include "communication/mpi_failure.h"
+#include "communication/mpi_trace.h"
 #include "communication/dummy_operations.h"
 #include "data_structure/parallel_graph_access.h"
 #include "distributed_partitioning/distributed_partitioner.h"
@@ -91,6 +92,17 @@ int main(int argn, char **argv) {
 
                 parallel_graph_access G(communicator);
                 parallel_graph_io::readGraphWeighted(partition_config, G, graph_filename, rank, size, communicator);
+                forall_local_nodes(G, node) {
+                        KAHIP_MPI_TRACE(mpi::trace::graph_distribution_node(
+                            G.getGlobalID(node), rank, G.getNodeWeight(node)));
+                        forall_out_edges(G, e, node) {
+                                NodeID target = G.getEdgeTarget(e);
+                                KAHIP_MPI_TRACE(mpi::trace::graph_distribution_edge(
+                                    G.getGlobalID(node),
+                                    G.getGlobalID(target),
+                                    G.getEdgeWeight(e)));
+                        } endfor
+                } endfor
                 //parallel_graph_io::readGraphWeightedFlexible(G, graph_filename, rank, size, communicator);
                 if( rank == ROOT ) std::cout <<  "took " <<  t.elapsed()  << std::endl;
                 if( rank == ROOT ) std::cout <<  "n:" <<  G.number_of_global_nodes() << " m: " <<  G.number_of_global_edges()  << std::endl;
@@ -154,6 +166,11 @@ int main(int argn, char **argv) {
                 dpart.perform_partitioning( communicator, partition_config, G);
 
                 MPI_Barrier(communicator);
+                forall_local_nodes(G, node) {
+                        KAHIP_MPI_TRACE(mpi::trace::final_partition(
+                            G.getGlobalID(node), G.getNodeLabel(node)));
+                } endfor
+                mpi::trace::write_rank_file_if_requested(communicator);
 
                 double running_time = t.elapsed();
                 distributed_quality_metrics qm;

@@ -107,6 +107,10 @@ kahip_add_private_header_set(
     ${PARHIP_CORE_HEADERS}
 )
 kahip_configure_parhip_object(parhip_core_obj)
+target_compile_definitions(
+    parhip_core_obj
+    PRIVATE KAHIP_ENABLE_MPI_TRACE=$<BOOL:${KAHIP_ENABLE_MPI_TRACE}>
+)
 target_link_libraries(
     parhip_core_obj
     PRIVATE
@@ -129,6 +133,10 @@ target_include_directories(
 target_link_libraries(
     parallel
     PRIVATE parhip_core_obj kahip_options kahip_warnings
+)
+target_compile_definitions(
+    parallel
+    PUBLIC KAHIP_ENABLE_MPI_TRACE=$<BOOL:${KAHIP_ENABLE_MPI_TRACE}>
 )
 target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC argtable3)

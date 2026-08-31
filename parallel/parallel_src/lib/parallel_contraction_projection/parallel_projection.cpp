@@ -7,7 +7,15 @@
 
 #include "parallel_projection.h"
 
-#include "communication/mpi_tools.h"
+#include <algorithm>
+#include <map>
+#include <stdexcept>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
+
+#include "communication/mpi_adapter.h"
+#include "communication/mpi_trace.h"
 namespace parhip {
 parallel_projection::parallel_projection() {
                 
@@ -17,126 +25,106 @@ parallel_projection::~parallel_projection() {
                 
 }
 
-//issue recv before send
 void parallel_projection::parallel_project( MPI_Comm communicator, parallel_graph_access & finer, parallel_graph_access & coarser ) {
   PEID rank, size;
-  MPI_Comm_rank( communicator, &rank);
-  MPI_Comm_size( communicator, &size);
+  MPI_Comm_rank(communicator, &rank);
+  MPI_Comm_size(communicator, &size);
 
-  NodeID divisor = ceil(coarser.number_of_global_nodes() / (double)size);
+  auto const divisor = static_cast<NodeID>(
+      ceil(coarser.number_of_global_nodes() / static_cast<double>(size)));
+  auto requests_by_destination =
+      std::vector<std::vector<projection::request>>(
+          static_cast<std::size_t>(size));
+  std::map<NodeID, projection::request> request_by_coarse_node;
+  std::unordered_map<NodeID, std::vector<NodeID>> nodes_by_request;
+  std::unordered_map<NodeID, NodeID> coarse_node_by_request;
 
-  m_messages.resize(size);
-
-  std::unordered_map< NodeID, std::vector< NodeID > > cnode_to_nodes;
   forall_local_nodes(finer, node) {
-    NodeID cnode = finer.getCNode(node);
-    //std::cout <<  "cnode " <<  cnode  << std::endl;
+    auto const cnode = finer.getCNode(node);
     if( coarser.is_local_node_from_global_id(cnode) ) {
-      NodeID new_label = coarser.getNodeLabel(coarser.getLocalID(cnode));
+      auto const new_label = coarser.getNodeLabel(coarser.getLocalID(cnode));
       finer.setNodeLabel(node, new_label);
     } else {
-      //we have to request it from another PE
-      PEID peID = cnode / divisor; // cnode is
-
-      if( cnode_to_nodes.find( cnode ) == cnode_to_nodes.end()) {
-        m_messages[peID].push_back(cnode); // we are requesting the label of this node
+      auto [position, inserted] = request_by_coarse_node.try_emplace(
+          cnode,
+          projection::request{finer.getGlobalID(node), cnode});
+      auto const request_id = position->second.request_id;
+      if (inserted) {
+        auto const destination = static_cast<std::size_t>(cnode / divisor);
+        requests_by_destination.at(destination).push_back(position->second);
+        coarse_node_by_request.emplace(request_id, cnode);
       }
-
-      cnode_to_nodes[cnode].push_back(node);
+      nodes_by_request[request_id].push_back(node);
     }
   } endfor
 
-  for( PEID peID = 0; peID < size; peID++) {
-    if( peID != rank ) {
-      if( m_messages[peID].size() == 0 ){
-        m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
+  for (std::size_t destination = 0;
+       destination < requests_by_destination.size();
+       ++destination) {
+    auto& destination_requests = requests_by_destination[destination];
+    std::ranges::stable_sort(destination_requests, {}, [](auto const& request) {
+      return std::tie(request.coarse_global_id, request.request_id);
+    });
+    for (auto const& request : destination_requests) {
+      KAHIP_MPI_TRACE(mpi::trace::projection_request(
+          request.request_id,
+          rank,
+          static_cast<int>(destination),
+          request.coarse_global_id));
+    }
+  }
+
+  auto incoming_requests = mpi::all_to_all_v(
+      mpi::segmented_buffer<projection::request>::from_segments(
+          requests_by_destination),
+      mpi::communicator_view{communicator});
+  auto replies_by_destination = std::vector<std::vector<projection::reply>>(
+      static_cast<std::size_t>(size));
+  for (std::size_t source = 0; source < incoming_requests.segment_count();
+       ++source) {
+    auto& replies = replies_by_destination[source];
+    for (auto const& request : incoming_requests.segment(source)) {
+      if (!coarser.is_local_node_from_global_id(request.coarse_global_id)) {
+        throw std::logic_error{"projection request reached the wrong owner"};
       }
-
-      MPI_Request rq;
-      MPI_Isend( &m_messages[peID][0],
-                              m_messages[peID].size(),
-                              MPI_UNSIGNED_LONG_LONG,
-                              peID, peID+size, communicator, &rq);
+      replies.push_back(projection::reply{
+          request.request_id,
+          request.coarse_global_id,
+          coarser.getNodeLabel(
+              coarser.getLocalID(request.coarse_global_id))});
+    }
+    std::ranges::stable_sort(replies, {}, [](auto const& reply) {
+      return std::tie(reply.request_id, reply.coarse_global_id);
+    });
+    for (auto const& reply : replies) {
+      KAHIP_MPI_TRACE(mpi::trace::projection_reply(
+          reply.request_id,
+          rank,
+          static_cast<int>(source),
+          reply.coarse_global_id,
+          reply.label));
     }
   }
 
-  std::vector< std::vector< NodeID > > out_messages(size);
-  auto const inc_mess_byPE = mpi::all_to_all( m_messages, communicator);
-
-  for(auto const& incmessage : inc_mess_byPE) {
-
+  auto incoming_replies = mpi::all_to_all_v(
+      mpi::segmented_buffer<projection::reply>::from_segments(
+          replies_by_destination),
+      mpi::communicator_view{communicator});
+  for (auto const& reply : incoming_replies.storage()) {
+    auto const coarse_node = coarse_node_by_request.find(reply.request_id);
+    auto const projected_nodes = nodes_by_request.find(reply.request_id);
+    if (coarse_node == coarse_node_by_request.end() ||
+        projected_nodes == nodes_by_request.end() ||
+        coarse_node->second != reply.coarse_global_id) {
+      throw std::logic_error{"projection reply has an unknown request ID"};
+    }
+    for (auto const node : projected_nodes->second) {
+      finer.setNodeLabel(node, reply.label);
+    }
+    nodes_by_request.erase(projected_nodes);
   }
-
-  PEID counter = 0;
-  while( counter < size - 1) {
-    // wait for incomming message of an adjacent processor
-    MPI_Status st;
-    MPI_Probe(MPI_ANY_SOURCE, rank+size, communicator, &st);
-
-    int message_length;
-    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-    std::vector<NodeID> incmessage; incmessage.resize(message_length);
-
-    MPI_Status rst;
-    MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+size, communicator, &rst);
-    counter++;
-    //----- size of messeges
-    PEID peID = st.MPI_SOURCE;
-    // now integrate the changes
-    if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
-      out_messages[peID].push_back(std::numeric_limits< NodeID >::max());
-      MPI_Request rq;
-      MPI_Isend( &out_messages[peID][0],
-                      out_messages[peID].size(),
-                      MPI_UNSIGNED_LONG_LONG,
-                      peID, peID+2*size, communicator, &rq);
-
-      continue; // nothing to do
-    }
-
-
-
-    for( int i = 0; i < message_length; i++) {
-      NodeID cnode = coarser.getLocalID(incmessage[i]);
-      out_messages[peID].push_back(coarser.getNodeLabel(cnode));
-    }
-    // -- Handling messages and building response
-    MPI_Request rq;
-    MPI_Isend( &out_messages[peID][0],
-                    out_messages[peID].size(),
-                    MPI_UNSIGNED_LONG_LONG,
-                    peID, peID+2*size, communicator, &rq);
-    // -- Sending responses
-  }
-
-  counter = 0;
-  while( counter < size - 1) {
-    // wait for incomming message of an adjacent processor
-    MPI_Status st; ULONG tag = rank+2*size;
-    MPI_Probe(MPI_ANY_SOURCE, tag, communicator, &st);
-
-    int message_length;
-    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-    std::vector<NodeID> incmessage; incmessage.resize(message_length);
-
-    MPI_Status rst;
-    MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, communicator, &rst);
-    counter++;
-    // -- get sizes and revcs
-    // now integrate the changes
-    if( incmessage[0] == std::numeric_limits< NodeID >::max()) {
-      continue; // nothing to do
-    }
-
-    PEID peID = st.MPI_SOURCE;
-    for( ULONG i = 0; i < (ULONG)incmessage.size(); i++) {
-      std::vector< NodeID > & proj = cnode_to_nodes[m_messages[peID][i]];
-      NodeID label = incmessage[i];
-
-      for( ULONG j = 0; j < proj.size(); j++) {
-        finer.setNodeLabel(proj[j], label);
-      }
-    }
+  if (!nodes_by_request.empty()) {
+    throw std::logic_error{"projection reply is missing"};
   }
 
   finer.update_ghost_node_data_global(); // blocking
