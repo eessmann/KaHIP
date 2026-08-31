@@ -546,7 +546,7 @@ endif()
 install(
     TARGETS kahip
     DESTINATION lib
-    FILE_SET public_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    FILE_SET public_headers DESTINATION include
 )
 
 # pkg-config

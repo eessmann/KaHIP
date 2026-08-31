@@ -280,8 +280,8 @@ target_link_libraries(parhip_interface PRIVATE parallel)
 target_link_libraries(parhip_interface PRIVATE kahip_options kahip_warnings)
 install(
     TARGETS parhip_interface
-    DESTINATION lib
-    FILE_SET public_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    LIBRARY DESTINATION lib
+    FILE_SET public_headers DESTINATION include
 )
 
 # pkg-config

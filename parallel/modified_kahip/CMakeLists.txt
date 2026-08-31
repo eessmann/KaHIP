@@ -96,8 +96,6 @@ set(LIBMODIFIED_KAFFPA_SOURCE_FILES
     lib/partition/uncoarsening/refinement/kway_graph_refinement/multitry_kway_fm.cpp
     lib/algorithms/cycle_search.cpp
     lib/partition/uncoarsening/refinement/cycle_improvements/cycle_refinement.cpp
-    lib/parallel_mh/galinier_combine/gal_combine.cpp
-    lib/parallel_mh/galinier_combine/construct_partition.cpp
     lib/partition/uncoarsening/refinement/tabu_search/tabu_search.cpp
 )
 add_library(
@@ -115,6 +113,8 @@ kahip_configure_modified_object(modified_kahip_core_obj)
 set(LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES
     lib/parallel_mh/parallel_mh_async.cpp
     lib/parallel_mh/population.cpp
+    lib/parallel_mh/galinier_combine/gal_combine.cpp
+    lib/parallel_mh/galinier_combine/construct_partition.cpp
     lib/parallel_mh/exchange/exchanger.cpp
     lib/tools/graph_communication.cpp
 )
