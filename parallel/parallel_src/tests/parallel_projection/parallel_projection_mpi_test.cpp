@@ -1,6 +1,8 @@
 #include <mpi.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -20,9 +22,44 @@ inline int all_to_all_v_calls = 0;
 inline int all_to_all_v_c_calls = 0;
 inline int isend_calls = 0;
 inline int probe_calls = 0;
+inline int recv_calls = 0;
+inline std::vector<MPI_Aint> payload_extents;
+inline std::vector<int> isend_tags;
+inline std::vector<int> probe_tags;
+inline std::vector<int> recv_tags;
+
+void reset() {
+  all_to_all_v_calls = 0;
+  all_to_all_v_c_calls = 0;
+  isend_calls = 0;
+  probe_calls = 0;
+  recv_calls = 0;
+  payload_extents.clear();
+  isend_tags.clear();
+  probe_tags.clear();
+  recv_tags.clear();
+}
 
 [[nodiscard]] auto dense_payload_collective_calls() -> int {
   return all_to_all_v_calls + all_to_all_v_c_calls;
+}
+
+void record_payload_extent(MPI_Datatype datatype) {
+  MPI_Aint lower_bound = 0;
+  MPI_Aint extent = 0;
+  REQUIRE(PMPI_Type_get_extent(datatype, &lower_bound, &extent) == MPI_SUCCESS);
+  REQUIRE(lower_bound == 0);
+  payload_extents.push_back(extent);
+}
+
+[[nodiscard]] auto calls_in_tag_phase(std::vector<int> const& tags,
+                                      int phase,
+                                      int size) -> std::size_t {
+  auto const first = phase * size;
+  auto const last = (phase + 1) * size;
+  return static_cast<std::size_t>(std::ranges::count_if(tags, [&](int tag) {
+    return first <= tag && tag < last;
+  }));
 }
 }  // namespace protocol_probe
 
@@ -37,6 +74,7 @@ extern "C" int MPI_Alltoallv(const void* send_buffer,
                              MPI_Comm communicator) {
   if (protocol_probe::active) {
     ++protocol_probe::all_to_all_v_calls;
+    protocol_probe::record_payload_extent(send_datatype);
   }
   return PMPI_Alltoallv(send_buffer,
                         send_counts,
@@ -61,6 +99,7 @@ extern "C" int MPI_Alltoallv_c(const void* send_buffer,
                                MPI_Comm communicator) {
   if (protocol_probe::active) {
     ++protocol_probe::all_to_all_v_c_calls;
+    protocol_probe::record_payload_extent(send_datatype);
   }
   return PMPI_Alltoallv_c(send_buffer,
                           send_counts,
@@ -83,6 +122,7 @@ extern "C" int MPI_Isend(const void* buffer,
                          MPI_Request* request) {
   if (protocol_probe::active) {
     ++protocol_probe::isend_calls;
+    protocol_probe::isend_tags.push_back(tag);
   }
   return PMPI_Isend(
       buffer, count, datatype, destination, tag, communicator, request);
@@ -94,8 +134,24 @@ extern "C" int MPI_Probe(int source,
                          MPI_Status* status) {
   if (protocol_probe::active) {
     ++protocol_probe::probe_calls;
+    protocol_probe::probe_tags.push_back(tag);
   }
   return PMPI_Probe(source, tag, communicator, status);
+}
+
+extern "C" int MPI_Recv(void* buffer,
+                        int count,
+                        MPI_Datatype datatype,
+                        int source,
+                        int tag,
+                        MPI_Comm communicator,
+                        MPI_Status* status) {
+  if (protocol_probe::active) {
+    ++protocol_probe::recv_calls;
+    protocol_probe::recv_tags.push_back(tag);
+  }
+  return PMPI_Recv(
+      buffer, count, datatype, source, tag, communicator, status);
 }
 
 namespace {
@@ -134,6 +190,56 @@ void build_two_rank_cross_edge(parhip::parallel_graph_access& graph,
   auto const edge = graph.new_edge(
       node, static_cast<parhip::NodeID>(1 - rank));
   graph.setEdgeWeight(edge, 1);
+  graph.finish_construction();
+}
+
+void build_block_finer(parhip::parallel_graph_access& graph,
+                       int rank,
+                       int size) {
+  auto const global_nodes = static_cast<parhip::NodeID>(2 * size);
+  auto const first = static_cast<parhip::NodeID>(2 * rank);
+  graph.start_construction(2, 0, global_nodes, 0, false);
+  graph.set_range(first, first + 1);
+  auto ranges = std::vector<parhip::NodeID>(
+      static_cast<std::size_t>(size) + 1);
+  for (int pe = 0; pe <= size; ++pe) {
+    ranges[static_cast<std::size_t>(pe)] =
+        static_cast<parhip::NodeID>(2 * pe);
+  }
+  graph.set_range_array(ranges);
+  for (parhip::NodeID index = 0; index < 2; ++index) {
+    auto const node = graph.new_node();
+    graph.setNodeWeight(node, 1);
+    graph.setNodeLabel(node, 0);
+    graph.setSecondPartitionIndex(node, 0);
+  }
+  graph.finish_construction();
+}
+
+void build_block_coarser(parhip::parallel_graph_access& graph,
+                         int rank,
+                         int size) {
+  constexpr auto global_nodes = parhip::NodeID{4};
+  auto const divisor = static_cast<parhip::NodeID>(
+      std::ceil(global_nodes / static_cast<double>(size)));
+  auto ranges = std::vector<parhip::NodeID>(
+      static_cast<std::size_t>(size) + 1);
+  for (int pe = 0; pe <= size; ++pe) {
+    ranges[static_cast<std::size_t>(pe)] = std::min(
+        global_nodes, static_cast<parhip::NodeID>(pe) * divisor);
+  }
+  auto const first = ranges[static_cast<std::size_t>(rank)];
+  auto const end = ranges[static_cast<std::size_t>(rank + 1)];
+  auto const local_nodes = end - first;
+  graph.start_construction(local_nodes, 0, global_nodes, 0, false);
+  graph.set_range(first, local_nodes == 0 ? first : end - 1);
+  graph.set_range_array(ranges);
+  for (parhip::NodeID index = 0; index < local_nodes; ++index) {
+    auto const node = graph.new_node();
+    graph.setNodeWeight(node, 1);
+    graph.setNodeLabel(node, 0);
+    graph.setSecondPartitionIndex(node, 0);
+  }
   graph.finish_construction();
 }
 }  // namespace
@@ -268,10 +374,7 @@ TEST_CASE("projection uses two dense exchanges and correlates stable request IDs
     finer.setCNode(1, 0);
   }
 
-  protocol_probe::all_to_all_v_calls = 0;
-  protocol_probe::all_to_all_v_c_calls = 0;
-  protocol_probe::isend_calls = 0;
-  protocol_probe::probe_calls = 0;
+  protocol_probe::reset();
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
   KAHIP_MPI_TRACE_SET_HIERARCHY(
@@ -333,57 +436,80 @@ TEST_CASE("projection uses two dense exchanges and correlates stable request IDs
 #endif
 }
 
-TEST_CASE("vcycle block-down hook emits canonical records",
-          "[mpi][trace][block-propagation]") {
+TEST_CASE("block-down dense owner phase uses keyed collective and exact updates",
+          "[mpi][trace][block-propagation][owner]") {
   int rank = 0;
   int size = 0;
   REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
   REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
-  REQUIRE(size == 2);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
 
   parhip::parallel_graph_access finer{MPI_COMM_WORLD};
   parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
-  build_edgeless_graph(finer, rank, {0, 0});
-  build_edgeless_graph(coarser, rank, {0, 0});
+  build_block_finer(finer, rank, size);
+  build_block_coarser(coarser, rank, size);
   finer.allocate_node_to_cnode();
-  if (rank == 0) {
-    finer.setCNode(0, 0);
-    finer.setSecondPartitionIndex(0, 10);
-    finer.setCNode(1, 2);
-    finer.setSecondPartitionIndex(1, 12);
-  } else {
-    finer.setCNode(0, 1);
-    finer.setSecondPartitionIndex(0, 11);
-    finer.setCNode(1, 3);
-    finer.setSecondPartitionIndex(1, 13);
-  }
+  finer.setCNode(0, 0);
+  finer.setSecondPartitionIndex(0, 10);
+  auto const second_cnode = static_cast<parhip::NodeID>(rank % 3 + 1);
+  finer.setCNode(1, second_cnode);
+  finer.setSecondPartitionIndex(1, 10 + second_cnode);
 
   parhip::PPartitionConfig config{};
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
   KAHIP_MPI_TRACE_SET_HIERARCHY(
       2, 4, parhip::mpi::trace::epoch::contraction);
+  protocol_probe::reset();
+  protocol_probe::active = true;
   parhip::parallel_block_down_propagation{}.propagate_block_down(
       MPI_COMM_WORLD, config, finer, coarser);
+  protocol_probe::active = false;
 
-  auto const expected_blocks = rank == 0
-                                   ? std::array<parhip::NodeID, 2>{10, 11}
-                                   : std::array<parhip::NodeID, 2>{12, 13};
-  REQUIRE(coarser.getSecondPartitionIndex(0) == expected_blocks[0]);
-  REQUIRE(coarser.getSecondPartitionIndex(1) == expected_blocks[1]);
+  auto expected_block = [&](parhip::NodeID global) {
+    if (global == 0) {
+      return parhip::NodeID{10};
+    }
+    auto const contributor_rank = static_cast<int>(global - 1);
+    return contributor_rank < size ? parhip::NodeID{10} + global
+                                   : parhip::NodeID{0};
+  };
+  for (parhip::NodeID node = 0; node < coarser.number_of_local_nodes();
+       ++node) {
+    auto const global = coarser.getGlobalID(node);
+    REQUIRE(coarser.getSecondPartitionIndex(node) == expected_block(global));
+  }
+
+  CAPTURE(protocol_probe::all_to_all_v_calls,
+          protocol_probe::all_to_all_v_c_calls,
+          protocol_probe::isend_tags,
+          protocol_probe::probe_tags,
+          protocol_probe::recv_tags,
+          protocol_probe::payload_extents);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 1);
+  REQUIRE(protocol_probe::payload_extents ==
+          std::vector<MPI_Aint>{
+              static_cast<MPI_Aint>(2 * sizeof(parhip::NodeID))});
+  REQUIRE(protocol_probe::calls_in_tag_phase(
+              protocol_probe::isend_tags, 10, size) == 0);
+  REQUIRE(protocol_probe::calls_in_tag_phase(
+              protocol_probe::probe_tags, 10, size) == 0);
+  REQUIRE(protocol_probe::calls_in_tag_phase(
+              protocol_probe::recv_tags, 10, size) == 0);
 #if KAHIP_ENABLE_MPI_TRACE
-  auto const first_global = static_cast<parhip::NodeID>(rank) * 2;
-  auto const expected_trace =
+  auto expected_trace =
       std::string{"kahip-mpi-trace-v3 upstream="
-                  "5935f349f65f1788a9b68fcf6d853e698d86956d\n"} +
-      "block-propagation cycle=2 level=4 epoch=contraction iteration=0 round=0 global=" +
-      std::to_string(first_global) + " owner=" + std::to_string(rank) +
-      " requester=- receiver=" + std::to_string(rank) +
-      " key=block block=" + std::to_string(expected_blocks[0]) + "\n" +
-      "block-propagation cycle=2 level=4 epoch=contraction iteration=0 round=0 global=" +
-      std::to_string(first_global + 1) + " owner=" + std::to_string(rank) +
-      " requester=- receiver=" + std::to_string(rank) +
-      " key=block block=" + std::to_string(expected_blocks[1]) + "\n";
+                  "5935f349f65f1788a9b68fcf6d853e698d86956d\n"};
+  for (parhip::NodeID node = 0; node < coarser.number_of_local_nodes();
+       ++node) {
+    auto const global = coarser.getGlobalID(node);
+    expected_trace +=
+        "block-propagation cycle=2 level=4 epoch=contraction iteration=0 round=0 global=" +
+        std::to_string(global) + " owner=" + std::to_string(rank) +
+        " requester=- receiver=" + std::to_string(rank) +
+        " key=block block=" + std::to_string(expected_block(global)) + "\n";
+  }
   REQUIRE(parhip::mpi::trace::canonical_text(
               parhip::mpi::trace::snapshot()) == expected_trace);
 #else

@@ -51,14 +51,23 @@ target_link_libraries(
     PRIVATE libmodified_kahip_interface fmt::fmt
 )
 
-add_test(
-    NAME unit-parallel-contraction-mpi
-    COMMAND
-        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 5
-        ${MPIEXEC_PREFLAGS}
-        $<TARGET_FILE:parallel_contraction_mpi_test>
-        ${MPIEXEC_POSTFLAGS}
-)
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-parallel-contraction-mpi-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_contraction_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-parallel-contraction-mpi-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 10
+    )
+endforeach()
 
 add_executable(
     parallel_projection_mpi_test
@@ -83,6 +92,25 @@ set_tests_properties(
         RUN_SERIAL TRUE
         TIMEOUT 10
 )
+
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-parallel-block-owner-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_projection_mpi_test>
+            "block-down dense owner phase uses keyed collective and exact updates"
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-parallel-block-owner-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 10
+    )
+endforeach()
 
 add_executable(mpi_adapter_test communication/mpi_adapter_test.cpp)
 target_link_libraries(
@@ -194,13 +222,6 @@ if(KAHIP_ENABLE_MPI_TRACE)
             LABELS "integration;mpi;trace"
     )
 endif()
-set_tests_properties(
-    unit-parallel-contraction-mpi
-    PROPERTIES
-        PROCESSORS 5
-        RUN_SERIAL TRUE
-)
-
 target_link_libraries(
     parallel_contraction_test
     PRIVATE kahip_options kahip_warnings

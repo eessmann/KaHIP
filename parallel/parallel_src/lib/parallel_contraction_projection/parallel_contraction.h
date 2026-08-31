@@ -8,11 +8,15 @@
 #ifndef PARALLEL_CONTRACTION_64O127GD
 #define PARALLEL_CONTRACTION_64O127GD
 
+#include <type_traits>
+
 #include "communication/mpi_tools.h"
 #include "data_structure/hashed_graph.h"
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
 namespace parhip {
+struct parallel_contraction_test_access;
+
 class parallel_contraction {
 public:
   void contract_to_distributed_quotient(MPI_Comm communicator,
@@ -21,6 +25,8 @@ public:
                                         parallel_graph_access& Q);
 
 private:
+  friend struct parallel_contraction_test_access;
+
   // compute mapping of labels id into contiguous intervall [0,...,num_lables)
   void compute_label_mapping(MPI_Comm communicator,
                              parallel_graph_access& G,
@@ -47,38 +53,72 @@ private:
                                   parallel_graph_access& G);
 
   // some send buffers
-  std::vector<std::vector<NodeID>> m_messages;
-  std::vector<std::vector<NodeID>> m_out_messages;
   std::vector<std::vector<NodeID>> m_send_buffers;  // buffers to send messages
 };
 
 // Comm types
 namespace contraction {
+struct label_request {
+  NodeID old_label;
+};
+
+struct label_reply {
+  NodeID old_label;
+  NodeID coarse_global_id;
+};
+
 struct bundled_edge {
   NodeID source;
   NodeID target;
   NodeWeight weight;
+  NodeID sender_sequence;
 };
 
-struct bundled_node_weight {
-  NodeID node;
+struct node_weight_contribution {
+  NodeID coarse_global_id;
   NodeWeight weight;
 };
 }  // namespace contraction
+
+static_assert(std::is_standard_layout_v<contraction::label_request>);
+static_assert(std::is_trivially_copyable_v<contraction::label_request>);
+static_assert(std::is_standard_layout_v<contraction::label_reply>);
+static_assert(std::is_trivially_copyable_v<contraction::label_reply>);
+static_assert(std::is_standard_layout_v<contraction::bundled_edge>);
+static_assert(std::is_trivially_copyable_v<contraction::bundled_edge>);
+static_assert(
+    std::is_standard_layout_v<contraction::node_weight_contribution>);
+static_assert(
+    std::is_trivially_copyable_v<contraction::node_weight_contribution>);
 }
+
+template <>
+struct parhip::mpi::wire_members<parhip::contraction::label_request> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &parhip::contraction::label_request::old_label);
+};
+
+template <>
+struct parhip::mpi::wire_members<parhip::contraction::label_reply> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &parhip::contraction::label_reply::old_label,
+      &parhip::contraction::label_reply::coarse_global_id);
+};
 
 template <>
 struct parhip::mpi::wire_members<parhip::contraction::bundled_edge> {
   inline static constexpr auto value = boost::hana::make_tuple(
       &parhip::contraction::bundled_edge::source,
       &parhip::contraction::bundled_edge::target,
-      &parhip::contraction::bundled_edge::weight);
+      &parhip::contraction::bundled_edge::weight,
+      &parhip::contraction::bundled_edge::sender_sequence);
 };
 
 template <>
-struct parhip::mpi::wire_members<parhip::contraction::bundled_node_weight> {
+struct parhip::mpi::wire_members<
+    parhip::contraction::node_weight_contribution> {
   inline static constexpr auto value = boost::hana::make_tuple(
-      &parhip::contraction::bundled_node_weight::node,
-      &parhip::contraction::bundled_node_weight::weight);
+      &parhip::contraction::node_weight_contribution::coarse_global_id,
+      &parhip::contraction::node_weight_contribution::weight);
 };
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */

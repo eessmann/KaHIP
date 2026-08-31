@@ -6,6 +6,14 @@
  *****************************************************************************/
 
 #include "parallel_block_down_propagation.h"
+
+#include <algorithm>
+#include <map>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
+
+#include "communication/mpi_adapter.h"
 #include "communication/mpi_trace.h"
 namespace parhip {
 parallel_block_down_propagation::parallel_block_down_propagation() {
@@ -34,66 +42,43 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
 
   NodeID divisor          = ceil( Q.number_of_global_nodes()/(double)size);
 
-  m_messages.resize(size);
-
-  //now distribute the block idw
-  //pack messages
-  for( auto it = coarse_block_ids.begin(); it != coarse_block_ids.end(); it++) {
-    NodeID node       = it->first;
-    NodeID block      = it->second;
-    PEID peID         = node / divisor;
-
-    m_messages[ peID ].push_back( node );
-    m_messages[ peID ].push_back( block );
+  auto updates_by_destination =
+      std::vector<std::vector<block_down::block_update>>(
+          static_cast<std::size_t>(size));
+  for (auto const& [coarse_global_id, block] : coarse_block_ids) {
+    auto const destination =
+        static_cast<std::size_t>(coarse_global_id / divisor);
+    updates_by_destination.at(destination).push_back(
+        {coarse_global_id, block});
+  }
+  for (auto& updates : updates_by_destination) {
+    std::ranges::stable_sort(updates, {}, [](auto const& update) {
+      return std::tie(update.coarse_global_id, update.block);
+    });
   }
 
-  for( PEID peID = 0; peID < size; peID++) {
-    if( peID != rank ) {
-      if( m_messages[peID].size() == 0 ){
-        m_messages[peID].push_back(std::numeric_limits<NodeID>::max());
+  auto incoming_updates = mpi::all_to_all_v(
+      mpi::segmented_buffer<block_down::block_update>::from_segments(
+          updates_by_destination),
+      mpi::communicator_view{communicator});
+  std::map<NodeID, NodeID> blocks_by_coarse_node;
+  for (std::size_t source = 0;
+       source < incoming_updates.segment_count();
+       ++source) {
+    for (auto const& update : incoming_updates.segment(source)) {
+      if (static_cast<PEID>(update.coarse_global_id / divisor) != rank ||
+          !Q.is_local_node_from_global_id(update.coarse_global_id)) {
+        throw std::logic_error{"block update reached the wrong owner"};
       }
-
-      MPI_Request rq;
-      MPI_Isend( &m_messages[peID][0],
-                 m_messages[peID].size(),
-                 MPI_UNSIGNED_LONG_LONG,
-                 peID, peID+10*size, communicator, &rq );
+      auto const [position, inserted] = blocks_by_coarse_node.try_emplace(
+          update.coarse_global_id, update.block);
+      if (!inserted && position->second != update.block) {
+        throw std::logic_error{"conflicting block updates for coarse node"};
+      }
     }
   }
-
-  if( m_messages[ rank ].size() != 0 ) {
-    for( ULONG i = 0; i < (ULONG)m_messages[rank].size()-1; i+=2) {
-      NodeID globalID   = m_messages[rank][i];
-      NodeID node       = Q.getLocalID(globalID);
-      NodeWeight block  = m_messages[rank][i+1];
-      Q.setSecondPartitionIndex(node , block);
-    }
-  }
-
-  PEID counter = 0;
-  while( counter < size - 1) {
-    // wait for incomming message of an adjacent processor
-    MPI_Status st;
-    MPI_Probe(MPI_ANY_SOURCE, rank+10*size, communicator, &st);
-
-    int message_length;
-    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-
-    std::vector<NodeID> incmessage; incmessage.resize(message_length);
-
-    MPI_Status rst;
-    MPI_Recv( &incmessage[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+10*size, communicator, &rst);
-    counter++;
-
-    // now integrate the changes
-    if( incmessage[0] == std::numeric_limits< NodeID >::max()) continue; // nothing to do
-
-    for( ULONG i = 0; i < incmessage.size()-1; i+=2) {
-      NodeID globalID   = incmessage[i];
-      NodeWeight block  = incmessage[i+1];
-      NodeID node       = Q.getLocalID(globalID);
-      Q.setSecondPartitionIndex( node , block);
-    }
+  for (auto const& [coarse_global_id, block] : blocks_by_coarse_node) {
+    Q.setSecondPartitionIndex(Q.getLocalID(coarse_global_id), block);
   }
 
   forall_local_nodes(Q, node) {
