@@ -1,6 +1,7 @@
-cmake_minimum_required(VERSION 3.26..28)
+cmake_minimum_required(VERSION 4.0)
 include(CheckCXXCompilerFlag)
 project(KaHIP VERSION 3.24 LANGUAGES C CXX)
+include(CTest)
 include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
@@ -506,6 +507,13 @@ install(
 
 # ParHIP
 if(NOT NOMPI AND PARHIP)
+    find_package(fmt CONFIG REQUIRED)
+    find_package(spdlog CONFIG REQUIRED)
+    find_package(Boost CONFIG REQUIRED COMPONENTS hana mp11)
+    if(BUILD_TESTING)
+        find_package(Catch2 3 CONFIG REQUIRED)
+    endif()
+
     add_subdirectory(parallel/modified_kahip)
     add_subdirectory(parallel/parallel_src)
 endif()

@@ -4,3 +4,6 @@ deploy/
 .idea
 **/.DS_Store
 cmake-build-*
+/out/
+/CMakeUserPresets.json
+/vcpkg_installed/

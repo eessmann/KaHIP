@@ -1,0 +1,70 @@
+{
+  "version": 9,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "local-common",
+      "description": "Settings shared by local workstation configurations",
+      "hidden": true,
+      "environment": {
+        "VCPKG_ROOT": "$env{HOME}/Projects/vcpkg"
+      }
+    },
+    {
+      "name": "local-gcc-debug",
+      "displayName": "Local GCC Debug",
+      "description": "Build KaHIP locally with GCC in Debug mode",
+      "inherits": [
+        "local-common",
+        "unix-gcc-debug"
+      ]
+    },
+    {
+      "name": "local-gcc-release",
+      "displayName": "Local GCC Release",
+      "description": "Build KaHIP locally with GCC in Release mode",
+      "inherits": [
+        "local-common",
+        "unix-gcc-release"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-local-common",
+      "description": "Build settings shared by local workstation configurations",
+      "hidden": true,
+      "jobs": 2
+    },
+    {
+      "name": "build-local-gcc-debug",
+      "description": "Build the local GCC Debug configuration",
+      "inherits": "build-local-common",
+      "configurePreset": "local-gcc-debug"
+    },
+    {
+      "name": "build-local-gcc-release",
+      "description": "Build the local GCC Release configuration",
+      "inherits": "build-local-common",
+      "configurePreset": "local-gcc-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-local-gcc-debug",
+      "displayName": "Local GCC Debug tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "local-gcc-debug"
+    },
+    {
+      "name": "test-local-gcc-release",
+      "displayName": "Local GCC Release tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "local-gcc-release"
+    }
+  ]
+}

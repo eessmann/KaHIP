@@ -1,0 +1,160 @@
+{
+  "version": 9,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "conf-common",
+      "description": "General settings that apply to all configurations",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "vcpkg-common",
+      "description": "General settings for using vcpkg",
+      "hidden": true,
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+      "name": "conf-unix-common",
+      "description": "Unix-like settings shared by GCC and Clang",
+      "hidden": true,
+      "inherits": [
+        "conf-common",
+        "vcpkg-common"
+      ],
+      "generator": "Ninja",
+      "condition": {
+        "type": "inList",
+        "string": "${hostSystemName}",
+        "list": [
+          "Linux",
+          "Darwin"
+        ]
+      }
+    },
+    {
+      "name": "gcc-common",
+      "description": "General settings for GCC configurations",
+      "hidden": true,
+      "inherits": "conf-unix-common",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "clang-common",
+      "description": "General settings for Clang configurations",
+      "hidden": true,
+      "inherits": "conf-unix-common",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "unix-gcc-debug",
+      "displayName": "GCC Debug",
+      "description": "Build KaHIP for a Unix-like system with GCC in Debug mode",
+      "inherits": "gcc-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "unix-gcc-release",
+      "displayName": "GCC Release",
+      "description": "Build KaHIP for a Unix-like system with GCC in Release mode",
+      "inherits": "gcc-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "unix-clang-debug",
+      "displayName": "Clang Debug",
+      "description": "Build KaHIP for a Unix-like system with Clang in Debug mode",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "unix-clang-release",
+      "displayName": "Clang Release",
+      "description": "Build KaHIP for a Unix-like system with Clang in Release mode",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-unix-gcc-debug",
+      "description": "Build the GCC Debug configuration",
+      "configurePreset": "unix-gcc-debug"
+    },
+    {
+      "name": "build-unix-gcc-release",
+      "description": "Build the GCC Release configuration",
+      "configurePreset": "unix-gcc-release"
+    },
+    {
+      "name": "build-unix-clang-debug",
+      "description": "Build the Clang Debug configuration",
+      "configurePreset": "unix-clang-debug"
+    },
+    {
+      "name": "build-unix-clang-release",
+      "description": "Build the Clang Release configuration",
+      "configurePreset": "unix-clang-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-common",
+      "description": "Strict CTest settings shared by all configurations",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "test-unix-gcc-debug",
+      "displayName": "GCC Debug tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-gcc-debug"
+    },
+    {
+      "name": "test-unix-gcc-release",
+      "displayName": "GCC Release tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-gcc-release"
+    },
+    {
+      "name": "test-unix-clang-debug",
+      "displayName": "Clang Debug tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-clang-debug"
+    },
+    {
+      "name": "test-unix-clang-release",
+      "displayName": "Clang Release tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-clang-release"
+    }
+  ]
+}

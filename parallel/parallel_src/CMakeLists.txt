@@ -67,6 +67,10 @@ target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC argtable3)
 target_link_libraries(parallel PUBLIC kahip_version)
 target_link_libraries(parallel PUBLIC MPI::MPI_CXX cista::cista)
+target_link_libraries(
+    parallel
+    PRIVATE fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
+)
 
 set(LIBGRAPH2BGF_SOURCE_FILES
     lib/data_structure/parallel_graph_access.cpp
@@ -248,11 +252,7 @@ target_link_libraries(parhip_interface_static PRIVATE parallel)
 target_link_libraries(parhip_interface_static PRIVATE kahip_options kahip_warnings)
 install(TARGETS parhip_interface_static DESTINATION lib)
 
-# Temporary Testing
-set(ENABLE_TESTING OFF)
-if(ENABLE_TESTING)
-    find_package(Catch2 REQUIRED CONFIG)
-    enable_testing()
+if(BUILD_TESTING)
     message("Building Tests")
     add_subdirectory(tests)
 endif()

@@ -1,12 +1,3 @@
-# Automatically enable catch2 to generate ctest targets
-find_package(fmt REQUIRED CONFIG)
-include(ProcessorCount)
-processorcount(N)
-
-set(mpi_runner $<IF:$<EQUAL:${N},0>,"","mpirun;-np;${N}">)
-
-list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
-include(CTest)
 include(Catch)
 
 # MPI Version of Catch Test Runner
@@ -47,14 +38,19 @@ target_link_libraries(
     PRIVATE libmodified_kahip_interface fmt::fmt
 )
 
-catch_discover_tests(
-        parallel_contraction_mpi_test
-        TEST_PREFIX "unit-"
-        PROPERTIES CROSSCOMPILING_EMULATOR "${mpi_runner}"
-        REPORTER xml
-        OUTPUT_DIR .
-        OUTPUT_PREFIX "unit-"
-        OUTPUT_SUFFIX .xml
+add_test(
+    NAME unit-parallel-contraction-mpi
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 5
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-contraction-mpi
+    PROPERTIES
+        PROCESSORS 5
+        RUN_SERIAL TRUE
 )
 
 target_link_libraries(
