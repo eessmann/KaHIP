@@ -19,26 +19,27 @@ distributed_graph::distributed_graph(communicator_view source,
   auto const local_outdegree_is_representable =
       std::in_range<int>(outgoing_destinations.size());
 
-  auto destination_ranks_are_valid = false;
-  auto outdegree_is_representable = false;
   {
     auto validation_communicator = communicator{source};
     auto const collective_communicator = validation_communicator.view();
-    destination_ranks_are_valid = detail::collective_predicate(
+    auto const destination_ranks_are_valid = detail::collective_predicate(
         local_destination_ranks_are_valid, collective_communicator);
-    outdegree_is_representable = detail::collective_predicate(
-        local_outdegree_is_representable, collective_communicator);
-  }
-  // KAHIP_SEMANTIC_EXIT_BEGIN(distributed-graph-rank-domain)
-  if (!destination_ranks_are_valid) {
-    throw_collectively_agreed_semantic_error(
-        source.native_handle(),
-        "distributed graph destination validation failed");
-  }
-  // KAHIP_SEMANTIC_EXIT_END(distributed-graph-rank-domain)
-  if (!outdegree_is_representable) {
-    throw mpi_error{MPI_ERR_ARG,
-                    "distributed graph outdegree exceeds MPI int capacity"};
+    // KAHIP_SEMANTIC_EXIT_BEGIN(distributed-graph-rank-domain)
+    if (!destination_ranks_are_valid) {
+      throw_collectively_agreed_semantic_error(
+          source.native_handle(),
+          "distributed graph destination validation failed");
+    }
+    // KAHIP_SEMANTIC_EXIT_END(distributed-graph-rank-domain)
+
+    auto local_capacity = capacity_result{};
+    if (!local_outdegree_is_representable) {
+      local_capacity = with_fatal_capacity_issue(
+          local_capacity, capacity_issue::topology_degree_not_representable);
+    }
+    static_cast<void>(resolve_capacity_collectively(
+        local_capacity, collective_communicator.native_handle(),
+        source.native_handle(), "distributed graph construction"));
   }
 
   {

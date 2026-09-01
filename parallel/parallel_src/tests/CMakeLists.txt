@@ -671,6 +671,10 @@ function(
     expected_injection
     expected_marker
 )
+    set(mpi_ranks 2)
+    if(ARGC GREATER 6)
+        set(mpi_ranks "${ARGV6}")
+    endif()
     add_test(
         NAME unit-mpi-failure-policy-${test_suffix}
         COMMAND
@@ -679,7 +683,7 @@ function(
             "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
             "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
             "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
-            "-DMPI_RANKS=2"
+            "-DMPI_RANKS=${mpi_ranks}"
             "-DPROBE=$<TARGET_FILE:mpi_failure_policy_probe>"
             "-DMODE=${mode}"
             "-DEXPECT_FAILURE=TRUE"
@@ -692,7 +696,7 @@ function(
     )
     set_tests_properties(
         unit-mpi-failure-policy-${test_suffix}
-        PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 10
+        PROPERTIES PROCESSORS ${mpi_ranks} RUN_SERIAL TRUE TIMEOUT 10
     )
 endfunction()
 
@@ -736,6 +740,7 @@ add_mpi_failure_policy_death_test(
     "injected rank-zero dense receive offset capacity"
     "affected=dense-operation error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=1 dense-payload-attempts=0 dense-datatype-attempts=0"
 )
+
 add_mpi_failure_policy_death_test(
     dense-receive-byte-capacity-failure
     dense-receive-byte-capacity
@@ -744,6 +749,18 @@ add_mpi_failure_policy_death_test(
     "injected rank-zero dense receive byte capacity"
     "affected=dense-operation error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=1 dense-payload-attempts=0 dense-datatype-attempts=0"
 )
+
+foreach(mpi_ranks RANGE 1 5)
+    add_mpi_failure_policy_death_test(
+        distributed-graph-degree-capacity-failure-${mpi_ranks}-rank
+        distributed-graph-degree-capacity
+        "MPI adapter capacity failure:"
+        "distributed graph construction: distributed graph outdegree exceeds MPI int capacity"
+        "injected rank-zero distributed graph degree capacity"
+        "affected=world error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=0 dense-payload-attempts=0 dense-datatype-attempts=0 graph-semantic-validation-attempts=1 graph-create-attempts=0"
+        ${mpi_ranks}
+    )
+endforeach()
 
 add_executable(
     parallel_graph_consistency_mpi_test

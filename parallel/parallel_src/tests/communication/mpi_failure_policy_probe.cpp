@@ -2,6 +2,7 @@
 
 #include <boost/hana/tuple.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -41,6 +42,7 @@ enum class failure_mode {
   capacity_resolver,
   dense_receive_offset_capacity,
   dense_receive_byte_capacity,
+  distributed_graph_degree_capacity,
 };
 
 auto selected_mode = failure_mode::pre_init_error;
@@ -55,6 +57,8 @@ auto capacity_allreduce_attempts = 0;
 auto dense_count_exchange_attempts = 0;
 auto dense_payload_attempts = 0;
 auto dense_datatype_attempts = 0;
+auto graph_semantic_validation_attempts = 0;
+auto graph_create_attempts = 0;
 auto cached_rank = -1;
 auto cached_size = -1;
 
@@ -64,6 +68,10 @@ constexpr auto secondary_formatter_error = 17292;
 [[nodiscard]] auto is_dense_capacity_mode() noexcept -> bool {
   return selected_mode == failure_mode::dense_receive_offset_capacity ||
          selected_mode == failure_mode::dense_receive_byte_capacity;
+}
+
+[[nodiscard]] auto is_graph_capacity_mode() noexcept -> bool {
+  return selected_mode == failure_mode::distributed_graph_degree_capacity;
 }
 
 void record_pre_initialization_mpi_call(char const* operation) noexcept {
@@ -97,6 +105,8 @@ void record_pre_initialization_mpi_call(char const* operation) noexcept {
       case failure_mode::dense_receive_offset_capacity:
       case failure_mode::dense_receive_byte_capacity:
         return "dense-operation";
+      case failure_mode::distributed_graph_degree_capacity:
+        return "graph-validation";
       case failure_mode::pre_init_error:
         break;
     }
@@ -191,11 +201,14 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int error_code) {
                  "error-string-attempts=%d cleanup-attempts=%d "
                  "capacity-allreduce-attempts=%d "
                  "dense-count-exchange-attempts=%d "
-                 "dense-payload-attempts=%d dense-datatype-attempts=%d\n",
+                 "dense-payload-attempts=%d dense-datatype-attempts=%d "
+                 "graph-semantic-validation-attempts=%d "
+                 "graph-create-attempts=%d\n",
                  cached_rank, static_cast<int>(affected.size()),
                  affected.data(), error_string_attempts, cleanup_attempts,
                  capacity_allreduce_attempts, dense_count_exchange_attempts,
-                 dense_payload_attempts, dense_datatype_attempts);
+                 dense_payload_attempts, dense_datatype_attempts,
+                 graph_semantic_validation_attempts, graph_create_attempts);
     std::_Exit(86);
   }
   return PMPI_Abort(communicator, error_code);
@@ -207,6 +220,36 @@ extern "C" int MPI_Allreduce(void const* send_buffer,
                              MPI_Datatype datatype,
                              MPI_Op operation,
                              MPI_Comm communicator) {
+  if (is_graph_capacity_mode() && communicator == tracked_communicator) {
+    if (count == 1 && datatype == MPI_INT && operation == MPI_MIN) {
+      ++graph_semantic_validation_attempts;
+      return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype,
+                            operation, communicator);
+    }
+    if (count != 2 || datatype != MPI_UINT64_T || operation != MPI_BOR ||
+        send_buffer == nullptr || receive_buffer == nullptr) {
+      forbidden_failure_path_call(
+          "MPI_Allreduce(distributed graph capacity shape)");
+    }
+
+    ++capacity_allreduce_attempts;
+    if (capacity_allreduce_attempts != 1) {
+      forbidden_failure_path_call(
+          "MPI_Allreduce(distributed graph capacity count)");
+    }
+    auto injected =
+        std::array{static_cast<std::uint64_t const*>(send_buffer)[0],
+                   static_cast<std::uint64_t const*>(send_buffer)[1]};
+    if (cached_rank == 0) {
+      injected[0] |= parhip::mpi::capacity_issue_mask(
+          parhip::mpi::capacity_issue::topology_degree_not_representable);
+      std::fputs("injected rank-zero distributed graph degree capacity\n",
+                 stderr);
+    }
+    injection_is_armed = true;
+    return PMPI_Allreduce(injected.data(), receive_buffer, count, datatype,
+                          operation, communicator);
+  }
   if (injection_is_armed) {
     if (selected_mode != failure_mode::capacity_resolver &&
         !is_dense_capacity_mode()) {
@@ -221,6 +264,26 @@ extern "C" int MPI_Allreduce(void const* send_buffer,
   }
   return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype, operation,
                         communicator);
+}
+
+extern "C" int MPI_Dist_graph_create(MPI_Comm old_communicator,
+                                     int source_count,
+                                     int const sources[],
+                                     int const degrees[],
+                                     int const destinations[],
+                                     int const weights[],
+                                     MPI_Info info,
+                                     int reorder,
+                                     MPI_Comm* graph_communicator) {
+  if (is_graph_capacity_mode()) {
+    ++graph_create_attempts;
+    if (injection_is_armed) {
+      forbidden_failure_path_call("MPI_Dist_graph_create");
+    }
+  }
+  return PMPI_Dist_graph_create(old_communicator, source_count, sources,
+                                degrees, destinations, weights, info, reorder,
+                                graph_communicator);
 }
 
 extern "C" int MPI_Alltoall(void const* send_buffer,
@@ -365,6 +428,8 @@ extern "C" int MPI_Comm_dup(MPI_Comm communicator,
       std::fputs("captured wrong-topology internal duplicate\n", stderr);
     } else if (is_dense_capacity_mode()) {
       std::fputs("captured dense operation duplicate\n", stderr);
+    } else if (is_graph_capacity_mode()) {
+      std::fputs("captured distributed-graph validation duplicate\n", stderr);
     }
   }
   return result;
@@ -481,6 +546,14 @@ auto run_pre_initialization_control() -> int {
       std::move(sends), parhip::mpi::communicator_view{MPI_COMM_WORLD}));
   returned_from_failure(mode);
 }
+
+[[noreturn]] void run_distributed_graph_degree_capacity_failure() {
+  track_next_duplicate = true;
+  auto graph = parhip::mpi::distributed_graph{
+      parhip::mpi::communicator_view{MPI_COMM_WORLD}, {cached_rank}};
+  static_cast<void>(graph);
+  returned_from_failure("distributed-graph-degree-capacity");
+}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -505,6 +578,8 @@ int main(int argc, char* argv[]) {
     selected_mode = failure_mode::dense_receive_offset_capacity;
   } else if (mode == "dense-receive-byte-capacity") {
     selected_mode = failure_mode::dense_receive_byte_capacity;
+  } else if (mode == "distributed-graph-degree-capacity") {
+    selected_mode = failure_mode::distributed_graph_degree_capacity;
   } else {
     std::fprintf(stderr, "unknown failure-policy mode: %s\n", argv[1]);
     return 64;
@@ -538,6 +613,8 @@ int main(int argc, char* argv[]) {
       run_dense_receive_capacity_failure("dense-receive-offset-capacity");
     case failure_mode::dense_receive_byte_capacity:
       run_dense_receive_capacity_failure("dense-receive-byte-capacity");
+    case failure_mode::distributed_graph_degree_capacity:
+      run_distributed_graph_degree_capacity_failure();
     case failure_mode::pre_init_error:
       break;
   }
