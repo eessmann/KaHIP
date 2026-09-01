@@ -1,7 +1,9 @@
 #include "communication/mpi_failure.h"
 
+#include <array>
 #include <cstdlib>
 #include <exception>
+#include <string>
 
 #include <spdlog/spdlog.h>
 
@@ -65,6 +67,54 @@ void log_failure(std::string_view boundary,
     // Failure reporting must never replace the original termination path.
   }
 }
+
+void log_raw_mpi_failure(int error_code,
+                         std::string_view context,
+                         std::source_location location) noexcept {
+  try {
+    spdlog::critical("MPI backend failure: {} at {}:{} (original raw code {})",
+                     context, location.file_name(), location.line(),
+                     error_code);
+  } catch (...) {
+    // Failure reporting must never replace the original termination path.
+  }
+}
+
+void log_active_mpi_failure(int error_code,
+                            std::string_view context,
+                            std::source_location location) noexcept {
+  auto error_text = std::array<char, MPI_MAX_ERROR_STRING>{};
+  auto error_text_length = 0;
+  auto const formatter_result =
+      MPI_Error_string(error_code, error_text.data(), &error_text_length);
+  try {
+    if (formatter_result != MPI_SUCCESS) {
+      spdlog::critical(
+          "MPI backend failure: {} at {}:{} (original raw code {}, "
+          "MPI_Error_string secondary raw code {})",
+          context, location.file_name(), location.line(), error_code,
+          formatter_result);
+      return;
+    }
+    if (error_text_length < 0 ||
+        static_cast<std::size_t>(error_text_length) > error_text.size()) {
+      spdlog::critical(
+          "MPI backend failure: {} at {}:{} (original raw code {}, "
+          "MPI_Error_string invalid length {})",
+          context, location.file_name(), location.line(), error_code,
+          error_text_length);
+      return;
+    }
+    spdlog::critical(
+        "MPI backend failure: {} at {}:{} (original raw code {}, MPI text: "
+        "{})",
+        context, location.file_name(), location.line(), error_code,
+        std::string_view{error_text.data(),
+                         static_cast<std::size_t>(error_text_length)});
+  } catch (...) {
+    // Failure reporting must never replace the original termination path.
+  }
+}
 }  // namespace
 
 auto runtime_is_active() noexcept -> bool {
@@ -90,35 +140,11 @@ auto runtime_is_active() noexcept -> bool {
     std::source_location location) noexcept {
   auto const mpi_is_active = runtime_is_active();
   if (mpi_is_active) {
-    try {
-      auto const failure = std::make_exception_ptr(
-          mpi_error{error_code, std::string{context}, location});
-      log_failure("MPI backend failure", failure);
-    } catch (...) {
-      try {
-        spdlog::critical(
-            "MPI backend failure: {} at {}:{} (MPI error {})",
-            context,
-            location.file_name(),
-            location.line(),
-            error_code);
-      } catch (...) {
-        // The process must still terminate if diagnostic formatting fails.
-      }
-    }
+    log_active_mpi_failure(error_code, context, location);
   } else {
     // MPI_Error_string is itself an MPI call and is not valid before
     // initialization or after finalization. Retain the raw code instead.
-    try {
-      spdlog::critical(
-          "MPI backend failure: {} at {}:{} (MPI error {})",
-          context,
-          location.file_name(),
-          location.line(),
-          error_code);
-    } catch (...) {
-      // The process must still terminate if diagnostic formatting fails.
-    }
+    log_raw_mpi_failure(error_code, context, location);
   }
 
   if (mpi_is_active) {
@@ -127,6 +153,16 @@ auto runtime_is_active() noexcept -> bool {
     MPI_Abort(affected, EXIT_FAILURE);
   }
   std::abort();
+}
+
+[[noreturn]] void throw_collectively_agreed_semantic_error(
+    MPI_Comm communicator,
+    std::string_view context,
+    std::source_location location) {
+  detail::throw_collectively_agreed_semantic_error_from(
+      communicator, [context, location]() -> mpi_error {
+        return mpi_error{MPI_ERR_ARG, std::string{context}, location};
+      });
 }
 
 [[noreturn]] void abort_on_programming_error(

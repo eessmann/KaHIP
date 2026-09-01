@@ -47,8 +47,9 @@ topology::topology(communicator_view source) : communicator_(source) {
                  communicator_.native_handle(),
                  "MPI_Topo_test");
   if (topology_kind == MPI_UNDEFINED) {
-    throw mpi_error{MPI_ERR_TOPOLOGY,
-                    "topology requires an MPI topology communicator"};
+    abort_on_programming_error(
+        communicator_.native_handle(),
+        "topology requires an MPI topology communicator");
   }
 }
 

@@ -2,13 +2,13 @@
 
 #include <mpi.h>
 
-#include <array>
 #include <source_location>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include <fmt/format.h>
 
 namespace parhip::mpi {
 class mpi_error final : public std::runtime_error {
@@ -34,21 +34,8 @@ private:
   static auto make_message(int error_code,
                            std::string_view context,
                            std::source_location location) -> std::string {
-    std::array<char, MPI_MAX_ERROR_STRING> error_text{};
-    int error_text_length = 0;
-    auto const result =
-        MPI_Error_string(error_code, error_text.data(), &error_text_length);
-
-    std::ostringstream message;
-    message << context << " at " << location.file_name() << ':'
-            << location.line() << " (MPI error " << error_code;
-    if (result == MPI_SUCCESS) {
-      message << ": "
-              << std::string_view{error_text.data(),
-                                  static_cast<std::size_t>(error_text_length)};
-    }
-    message << ')';
-    return message.str();
+    return fmt::format("{} at {}:{} (MPI error {})", context,
+                       location.file_name(), location.line(), error_code);
   }
 
   int error_code_;

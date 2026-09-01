@@ -20,6 +20,7 @@
 
 #include "communication/contiguous_owner_layout.h"
 #include "communication/mpi_adapter.h"
+#include "communication/mpi_failure.h"
 #include "kahip_mpi_capabilities.h"
 #include "parhip_interface.h"
 
@@ -59,6 +60,32 @@ struct parhip::mpi::wire_members<test_support::non_default_wire_entry> {
       boost::hana::make_tuple(&test_support::non_default_wire_entry::id,
                               &test_support::non_default_wire_entry::owner);
 };
+
+namespace semantic_error_protocol_probe {
+inline bool active = false;
+inline int error_string_calls = 0;
+
+class activation final {
+ public:
+  activation() noexcept {
+    error_string_calls = 0;
+    active = true;
+  }
+  ~activation() noexcept { active = false; }
+
+  activation(activation const&) = delete;
+  auto operator=(activation const&) -> activation& = delete;
+};
+}  // namespace semantic_error_protocol_probe
+
+extern "C" int MPI_Error_string(int error_code,
+                                char* error_text,
+                                int* error_text_length) {
+  if (semantic_error_protocol_probe::active) {
+    ++semantic_error_protocol_probe::error_string_calls;
+  }
+  return PMPI_Error_string(error_code, error_text, error_text_length);
+}
 
 namespace neighborhood_protocol_probe {
 inline bool active = false;
@@ -1334,5 +1361,53 @@ TEST_CASE("neighbor large-count capability reflects the generated probe",
 #else
   FAIL("generated MPI neighborhood capability macro is missing");
 #endif
+}
+
+TEST_CASE("collectively agreed semantic errors are MPI-free and rank-symmetric",
+          "[unit][mpi][failure-policy][semantic]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const local_is_valid = world.rank() != 0 ? 1 : 0;
+  auto all_are_valid = 0;
+  REQUIRE(PMPI_Allreduce(&local_is_valid, &all_are_valid, 1, MPI_INT, MPI_LAND,
+                         world.native_handle()) == MPI_SUCCESS);
+  REQUIRE(all_are_valid == 0);
+
+  constexpr auto context = std::string_view{"semantic helper symmetry"};
+  auto caught = 0;
+  auto raw_code_matches = 0;
+  auto context_matches = 0;
+  auto location_is_retained = 0;
+  auto const expected_location = std::source_location::current();
+  {
+    semantic_error_protocol_probe::activation observation{};
+    try {
+      parhip::mpi::throw_collectively_agreed_semantic_error(
+          world.native_handle(), context, expected_location);
+    } catch (parhip::mpi::mpi_error const& error) {
+      caught = 1;
+      raw_code_matches = error.error_code() == MPI_ERR_ARG ? 1 : 0;
+      context_matches = error.context() == context ? 1 : 0;
+      auto const actual_location = error.location();
+      location_is_retained =
+          actual_location.line() == expected_location.line() &&
+                  actual_location.column() == expected_location.column() &&
+                  std::string_view{actual_location.file_name()} ==
+                      expected_location.file_name() &&
+                  std::string_view{actual_location.function_name()} ==
+                      expected_location.function_name()
+              ? 1
+              : 0;
+    }
+  }
+
+  auto local = std::array{caught, raw_code_matches, context_matches,
+                          location_is_retained,
+                          semantic_error_protocol_probe::error_string_calls};
+  auto global = std::array{0, 0, 0, 0, 0};
+  REQUIRE(PMPI_Allreduce(local.data(), global.data(),
+                         static_cast<int>(local.size()), MPI_INT, MPI_SUM,
+                         world.native_handle()) == MPI_SUCCESS);
+  REQUIRE(global == std::array{world.size(), world.size(), world.size(),
+                               world.size(), 0});
 }
 }  // namespace

@@ -628,6 +628,90 @@ foreach(mpi_ranks RANGE 1 5)
 endforeach()
 
 add_executable(
+    mpi_failure_policy_probe
+    communication/mpi_failure_policy_probe.cpp
+)
+target_link_libraries(
+    mpi_failure_policy_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+
+add_test(
+    NAME unit-mpi-failure-policy-pre-init-error
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DPROBE=$<TARGET_FILE:mpi_failure_policy_probe>"
+        "-DMODE=pre-init-error"
+        "-DEXPECT_FAILURE=FALSE"
+        "-DEXPECTED_MARKER=pre-init mpi_error remained MPI-free"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+)
+set_tests_properties(
+    unit-mpi-failure-policy-pre-init-error
+    PROPERTIES RUN_SERIAL TRUE TIMEOUT 10
+)
+
+function(
+    add_mpi_failure_policy_death_test
+    test_suffix
+    mode
+    expected_diagnostic
+    expected_detail
+    expected_injection
+    expected_marker
+)
+    add_test(
+        NAME unit-mpi-failure-policy-${test_suffix}
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DMPI_RANKS=2"
+            "-DPROBE=$<TARGET_FILE:mpi_failure_policy_probe>"
+            "-DMODE=${mode}"
+            "-DEXPECT_FAILURE=TRUE"
+            "-DEXPECTED_DIAGNOSTIC=${expected_diagnostic}"
+            "-DEXPECTED_DETAIL=${expected_detail}"
+            "-DEXPECTED_INJECTION=${expected_injection}"
+            "-DEXPECTED_MARKER=${expected_marker}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+    )
+    set_tests_properties(
+        unit-mpi-failure-policy-${test_suffix}
+        PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 10
+    )
+endfunction()
+
+add_mpi_failure_policy_death_test(
+    semantic-factory-resource-failure
+    semantic-factory-resource
+    "MPI semantic error construction:"
+    "std::bad_alloc"
+    "injected semantic factory bad_alloc"
+    "affected=semantic error-string-attempts=0 cleanup-attempts=0"
+)
+add_mpi_failure_policy_death_test(
+    error-string-secondary-failure
+    error-string-secondary
+    "MPI backend failure: backend formatter failure"
+    "original raw code 17291, MPI_Error_string secondary raw code 17292"
+    "injected MPI_Error_string failure original=17291 secondary=17292"
+    "affected=backend error-string-attempts=1 cleanup-attempts=0"
+)
+add_mpi_failure_policy_death_test(
+    wrong-topology-failure
+    wrong-topology
+    "MPI adapter programming failure: topology requires an MPI topology communicator"
+    ""
+    "captured wrong-topology internal duplicate"
+    "affected=topology error-string-attempts=0 cleanup-attempts=0"
+)
+
+add_executable(
     parallel_graph_consistency_mpi_test
     distributed_consistency/parallel_graph_consistency_mpi_test.cpp
 )
