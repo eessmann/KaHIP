@@ -20,6 +20,7 @@
 
 #include "communication/mpi_tools.h"
 #include "communication/dummy_operations.h"
+#include "communication/mpi_failure.h"
 #include "data_structure/parallel_graph_access.h"
 #include "distributed_partitioning/distributed_partitioner.h"
 #include "io/parallel_graph_io.h"
@@ -40,6 +41,7 @@ int main(int argn, char **argv) {
     using namespace parhip;
     MPI_Init(&argn, &argv);
 
+    try {
     int rank, size;
     MPI_Comm communicator = MPI_COMM_WORLD;
     MPI_Comm_rank(communicator, &rank);
@@ -138,7 +140,11 @@ int main(int argn, char **argv) {
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
+    } catch (...) {
+        mpi::abort_on_exception(MPI_COMM_WORLD, "DSPAC executable failure");
+    }
     MPI_Finalize();
+    return 0;
 }
 namespace parhip {
 static void executeParhip(parallel_graph_access &G, PPartitionConfig &partitionConfig) {

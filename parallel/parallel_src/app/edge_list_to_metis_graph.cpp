@@ -140,6 +140,8 @@ int main(int argc, char** argv) {
     std::cout << "Starting graph construction...\n";
   }
 
+  auto exit_status = EXIT_SUCCESS;
+  {
   complete_graph_access G;
   G.start_construction(consecutive_id, edge_counter, consecutive_id,
                        edge_counter);
@@ -176,14 +178,14 @@ int main(int argc, char** argv) {
     if (write_status != 0) {
       std::cerr << std::format("Error writing graph to '{}'.\n",
                                output_filename);
-      MPI_Finalize();
-      return EXIT_FAILURE;
+      exit_status = EXIT_FAILURE;
     } else {
       std::cout << std::format("Graph successfully written to '{}'.\n",
                                output_filename);
     }
   }
+  }
 
   MPI_Finalize();
-  return EXIT_SUCCESS;
+  return exit_status;
 }

@@ -44,14 +44,15 @@ int main(int argn, char **argv)
         PPartitionConfig config;
         cfg.standard(config);
 
+        {
         parallel_graph_access G;
         parallel_graph_io pgio;
         pgio.readGraphBinary(config, G, filename, rank, size);
 
         string output_filename("dummy");
         parallel_graph_io::writeGraphParallelSimple(G, output_filename);
+        }
 
         MPI_Finalize();
         return 0;
 }
-

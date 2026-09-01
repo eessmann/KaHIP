@@ -9,7 +9,9 @@
 #define PARALLEL_GRAPH_ACCESS_X6O9MRS8
 
 #include <algorithm>
+#include <memory>
 #include <mpi.h>
+#include <optional>
 #include <unordered_map>
 #include <iostream>
 #include <ostream>
@@ -64,35 +66,45 @@ struct Edge {
 
 
 class parallel_graph_access;
+class ghost_exchange_plan;
 
 //handle communication of data associated with ghost nodes
 class ghost_node_communication {
 public:
-        ghost_node_communication(MPI_Comm communicator) : m_iteration_counter(0), m_first_send(true) {
-                m_communicator     = communicator;
-
-                MPI_Comm_rank( m_communicator, &m_rank);
-                MPI_Comm_size( m_communicator, &m_size);
+        ghost_node_communication(
+            MPI_Comm communicator,
+            PEID rank,
+            PEID size)
+            : m_G(nullptr),
+              m_size(size),
+              m_rank(rank),
+              m_iteration_counter(0),
+              m_skip_limit(0),
+              m_first_send(true),
+              m_send_iteration(1),
+              m_recv_iteration(1),
+              m_send_tag(0),
+              m_recv_tag(0),
+              m_desired_rounds(0),
+              m_num_adjacent(0),
+              m_send_buffers_ptr(nullptr),
+              m_communicator(communicator) {
 
                 m_PE_packed.resize(m_size);
                 m_adjacent_processors.resize(m_size);
-                for( PEID peID = 0; peID < (PEID) m_PE_packed.size(); peID++) {
-                        m_PE_packed[ peID ]           = false;
-                        m_adjacent_processors[ peID ] = false;
-                }
-
                 m_send_buffers_A.resize(m_size);
                 m_send_buffers_B.resize(m_size);
-                m_send_buffers_ptr = & m_send_buffers_A;
-                m_send_iteration   = 1;
-                m_recv_iteration   = 1;
-
-                m_send_tag         = 100*m_size;
-                m_recv_tag         = 100*m_size;
-
-        };
+                reset_generation();
+        }
 
         ~ghost_node_communication() = default;
+
+        ghost_node_communication(ghost_node_communication const&) = delete;
+        auto operator=(ghost_node_communication const&)
+            -> ghost_node_communication& = delete;
+        ghost_node_communication(ghost_node_communication&&) = delete;
+        auto operator=(ghost_node_communication&&)
+            -> ghost_node_communication& = delete;
 
 
         void setGraphReference( parallel_graph_access * G ) {
@@ -140,6 +152,11 @@ public:
 
 private:
 
+        friend class parallel_graph_access;
+
+        [[nodiscard]] bool generation_is_idle() const noexcept;
+        void reset_generation() noexcept;
+
         inline
         void receive_messages_of_neighbors();
 
@@ -176,55 +193,29 @@ class parallel_graph_access {
 public:
 
         friend class ghost_node_communication;
+        friend auto make_ghost_exchange_plan(
+            parallel_graph_access const& graph)
+            -> std::unique_ptr<ghost_exchange_plan>;
 
-        parallel_graph_access( ) : m_num_local_nodes(0),
-                                     from(0),
-                                     to(0),
-                                     m_num_ghost_nodes(0), m_max_node_degree(0), m_bm(NULL)  {
-                m_communicator = MPI_COMM_WORLD;
-                MPI_Comm_rank( m_communicator, &rank);
-                MPI_Comm_size( m_communicator, &size);
-
-                m_gnc = new ghost_node_communication(m_communicator);
-                m_gnc->setGraphReference(this);
-        };
+        parallel_graph_access();
 
         parallel_graph_access( MPI_Comm communicator );
 
         virtual ~parallel_graph_access();
 
+        parallel_graph_access(parallel_graph_access const&) = delete;
+        auto operator=(parallel_graph_access const&)
+            -> parallel_graph_access& = delete;
+        parallel_graph_access(parallel_graph_access&&) = delete;
+        auto operator=(parallel_graph_access&&)
+            -> parallel_graph_access& = delete;
+
         /* ============================================================= */
         /* build methods */
         /* ============================================================= */
-        void start_construction(NodeID n, EdgeID m, NodeID global_n, NodeID global_m, bool update_comm_rounds = true) {
-                m_building_graph             = true;
-                node                         = 0;
-                e                            = 0;
-                m_last_source                = -1;
-                m_num_nodes                  = n+1;
-                m_num_local_nodes            = n;
-                m_global_n                   = global_n;
-                m_global_m                   = global_m;
-                m_ghost_adddata_array_offset = n+1;
-                m_bm                         = NULL;
-                m_cur_degree                 = 0;
-
-                //resizes property arrays
-                m_nodes.resize(n+1);
-                m_nodes_data.resize(n+1);
-                m_edges.resize(m);
-
-                m_nodes[node].firstEdge = e;
-                m_divisor = ceil(global_n / (double)size);
-                // every PE has to make same amount communication iterations
-                // we use ceil an check afterwards wether everyone has done the right
-                // amount of communication rounds
-                if( update_comm_rounds ) {
-                        m_comm_rounds = std::max(m_comm_rounds, 8ULL);
-                        m_gnc->set_desired_rounds(m_comm_rounds);
-                        m_gnc->set_skip_limit(ceil(n/(double)m_comm_rounds));
-                }
-        };
+        void start_construction(NodeID n, EdgeID m, NodeID global_n,
+                                NodeID global_m,
+                                bool update_comm_rounds = true);
 
         void set_range(NodeID l, NodeID r) {
                 from        = l;
@@ -339,6 +330,7 @@ public:
         void finish_construction() {
                 m_edges.resize(e);
                 m_building_graph = false;
+                m_graph_construction_complete = true;
 
                 //fill isolated sources at the end
                 if ((NodeID)(m_last_source) != node-1) {
@@ -370,7 +362,12 @@ public:
         /* parallel graph access methods */
         /* ============================================================= */
         NodeID number_of_local_nodes() {return m_num_local_nodes;};
-        NodeID number_of_ghost_nodes() {return m_nodes.size() - m_num_local_nodes - 1;};
+        NodeID number_of_ghost_nodes() {
+                return m_nodes.empty()
+                           ? NodeID{0}
+                           : static_cast<NodeID>(m_nodes.size()) -
+                                 m_num_local_nodes - 1;
+        };
         NodeID number_of_global_nodes() {return m_global_n;};
         EdgeID number_of_local_edges() {return m_edges.size();};
         EdgeID number_of_global_edges() {return m_global_m;};
@@ -439,6 +436,14 @@ public:
                 }
         };
 
+        [[nodiscard]] auto find_local_id(NodeID global_id) const noexcept
+            -> std::optional<NodeID>;
+        [[nodiscard]] auto find_ghost_local_id(NodeID global_id,
+                                               PEID expected_owner)
+            const noexcept -> std::optional<NodeID>;
+
+        [[nodiscard]] auto ghost_plan() -> ghost_exchange_plan const&;
+
         //methods for local nodes only
         NodeID getGlobalID(NodeID node);
 
@@ -494,6 +499,8 @@ public:
         /* parallel graph data structure  */
         /* ============================================================= */
 private:
+        void reset_graph_generation();
+
         // the graph representation itself
         // local and ghost nodes in one array,
         // local nodes are stored in the beginning
@@ -523,6 +530,7 @@ private:
 
         // construction properties
         bool   m_building_graph;
+        bool   m_graph_construction_complete;
         NodeID m_last_source;
         NodeID m_num_ghost_nodes;
         NodeID node; //current node that is constructed
@@ -541,6 +549,7 @@ private:
         PEID rank;
 
         ghost_node_communication* m_gnc;
+        std::unique_ptr<ghost_exchange_plan> m_ghost_exchange_plan;
         balance_management* m_bm;
         MPI_Comm m_communicator;
 
@@ -949,9 +958,13 @@ inline void ghost_node_communication::update_ghost_node_data_finish() {
         m_send_iteration = 0;
         m_recv_iteration = 0;
 
-        m_send_tag = 100*m_size-1;
-        m_recv_tag = 100*m_size-1;
+        auto const base_tag =
+                static_cast<ULONG>(100) * static_cast<ULONG>(m_size);
+        m_send_tag = base_tag - 1;
+        m_recv_tag = base_tag - 1;
         m_first_send     = true;
+        m_iteration_counter = 0;
+        m_send_buffers_ptr = &m_send_buffers_A;
 
         for( int i = 0; i < m_size; i++) {
                 m_send_buffers_B[i].clear();

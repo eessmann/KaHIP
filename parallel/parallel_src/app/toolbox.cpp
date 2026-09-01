@@ -59,6 +59,7 @@ int main(int argn, char **argv) {
 
         srand(partition_config.seed);
 
+        {
         parallel_graph_access G(communicator);
         parallel_graph_io::readGraphWeighted(partition_config, G, graph_filename, rank, size, communicator);
         parallel_vector_io pvio;
@@ -99,6 +100,7 @@ int main(int argn, char **argv) {
                 parallel_vector_io pvio;
                 std::string filename("tmppartition.binp");
                 pvio.writePartitionBinaryParallelPosix(partition_config, G, filename);
+        }
         }
 
         MPI_Barrier(MPI_COMM_WORLD);

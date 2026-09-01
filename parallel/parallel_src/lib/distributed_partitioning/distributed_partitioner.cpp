@@ -5,9 +5,22 @@
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
 
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <ranges>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "communication/ghost_exchange_plan.h"
+#include "communication/mpi_failure.h"
+#include "communication/mpi_neighbors.h"
 #include "communication/mpi_trace.h"
 #include "communication/mpi_tools.h"
+#include "distributed_partitioning/distributed_consistency.h"
 #include "distributed_partitioner.h"
 #include "initial_partitioning/initial_partitioning.h"
 #include "io/parallel_graph_io.h"
@@ -20,6 +33,120 @@
 #include "tools/random_functions.h"
 #include "data_structure/linear_probing_hashmap.h"
 namespace parhip {
+namespace {
+template <typename ProjectValue, typename ReadGhostValue>
+void validate_distributed_node_values(
+    MPI_Comm communicator,
+    parallel_graph_access& graph,
+    ProjectValue project_value,
+    ReadGhostValue read_ghost_value,
+    std::string_view failure_context) {
+  auto const graph_communicator =
+      mpi::communicator_view{graph.getCommunicator()};
+  auto communicator_is_compatible = communicator != MPI_COMM_NULL;
+  if (communicator_is_compatible) {
+    auto comparison = int{MPI_UNEQUAL};
+    mpi::check_or_abort(
+        MPI_Comm_compare(communicator, graph.getCommunicator(), &comparison),
+        graph.getCommunicator(),
+        "MPI_Comm_compare(distributed consistency)");
+    communicator_is_compatible =
+        comparison == MPI_IDENT || comparison == MPI_CONGRUENT;
+  }
+  if (!mpi::detail::collective_predicate(communicator_is_compatible,
+                                         graph_communicator)) {
+    throw mpi::mpi_error{
+        MPI_ERR_COMM,
+        std::string{failure_context} + " communicator validation failed"};
+  }
+
+  auto const& plan = graph.ghost_plan();
+  auto semantic_failure = false;
+  try {
+    auto outgoing =
+        std::vector<std::vector<distributed_consistency::node_value>>(
+            plan.topology().destinations().size());
+    for (std::size_t destination_index = 0;
+         destination_index < plan.topology().destinations().size();
+         ++destination_index) {
+      auto const local_nodes =
+          plan.outgoing_local_nodes(destination_index);
+      auto& records = outgoing[destination_index];
+      records.reserve(local_nodes.size());
+      std::ranges::transform(
+          local_nodes,
+          std::back_inserter(records),
+          [&](NodeID const local_node) {
+            return distributed_consistency::node_value{
+                graph.getGlobalID(local_node),
+                project_value(graph, local_node)};
+          });
+    }
+
+    auto received = mpi::neighbor_all_to_all_v(
+        mpi::segmented_buffer<distributed_consistency::node_value>::
+            from_segments(outgoing),
+        plan.topology());
+
+    auto resolved_local_ids =
+        std::vector<std::vector<NodeID>>(plan.topology().sources().size());
+    auto local_structure_is_valid =
+        received.segment_count() == plan.topology().sources().size();
+    for (std::size_t source_index = 0;
+         source_index < plan.topology().sources().size(); ++source_index) {
+      auto const source = plan.topology().sources()[source_index];
+      auto const records = received.segment(source_index);
+      auto const expected = plan.expected_ghost_nodes(source_index);
+      auto& local_ids = resolved_local_ids[source_index];
+      local_ids.reserve(records.size());
+      auto received_ids = std::vector<NodeID>{};
+      received_ids.reserve(records.size());
+      for (auto const& record : records) {
+        received_ids.push_back(record.global_id);
+        auto const local_id =
+            graph.find_ghost_local_id(record.global_id, source);
+        local_structure_is_valid =
+            local_structure_is_valid && local_id.has_value();
+        local_ids.push_back(local_id.value_or(NodeID{0}));
+      }
+      std::ranges::sort(received_ids);
+      local_structure_is_valid =
+          local_structure_is_valid && records.size() == expected.size() &&
+          std::ranges::adjacent_find(received_ids) == received_ids.end() &&
+          std::ranges::equal(received_ids, expected);
+    }
+
+    auto const structure_is_valid = mpi::detail::collective_predicate(
+        local_structure_is_valid, plan.topology().view());
+    if (!structure_is_valid) {
+      semantic_failure = true;
+    } else {
+      auto local_values_are_valid = true;
+      for (std::size_t source_index = 0;
+           source_index < plan.topology().sources().size(); ++source_index) {
+        auto const records = received.segment(source_index);
+        auto const& local_ids = resolved_local_ids[source_index];
+        for (std::size_t record_index = 0;
+             record_index < records.size(); ++record_index) {
+          local_values_are_valid =
+              local_values_are_valid &&
+              read_ghost_value(graph, local_ids[record_index]) ==
+                  records[record_index].value;
+        }
+      }
+      semantic_failure = !mpi::detail::collective_predicate(
+          local_values_are_valid, plan.topology().view());
+    }
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(), failure_context);
+  }
+
+  if (semantic_failure) {
+    throw mpi::mpi_error{MPI_ERR_ARG, std::string{failure_context}};
+  }
+}
+}  // namespace
+
 std::vector< NodeID > distributed_partitioner::m_cf = std::vector< NodeID >();
 std::vector< NodeID > distributed_partitioner::m_sf = std::vector< NodeID >();
 std::vector< NodeID > distributed_partitioner::m_lic = std::vector< NodeID >();
@@ -274,172 +401,31 @@ void distributed_partitioner::vcycle( MPI_Comm communicator, PPartitionConfig & 
 }
 
 void distributed_partitioner::check_labels( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G) {
-  PEID m_rank, m_size;
-  MPI_Comm_rank( communicator, &m_rank);
-  MPI_Comm_size( communicator, &m_size);
-
-  std::vector< std::vector< NodeID > > send_buffers; // buffers to send messages
-  send_buffers.resize(m_size);
-  std::vector<bool> m_PE_packed;
-  m_PE_packed.resize(m_size);
-  for( unsigned peID = 0; peID < m_PE_packed.size(); peID++) {
-    m_PE_packed[ peID ] = false;
-  }
-
-  forall_local_nodes(G, node) {
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if( !G.is_local_node(target)  ) {
-        PEID peID = G.getTargetPE(target);
-        if( !m_PE_packed[peID] ) { // make sure a node is sent at most once
-          send_buffers[peID].push_back(G.getGlobalID(node));
-          send_buffers[peID].push_back(G.getNodeLabel(node));
-          m_PE_packed[peID] = true;
-        }
-      }
-    } endfor
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if( !G.is_local_node(target)  ) {
-        m_PE_packed[G.getTargetPE(target)] = false;
-      }
-    } endfor
-} endfor
-
-//send all neighbors their packages using Isends
-//a neighbor that does not receive something gets a specific token
-for( PEID peID = 0; peID < (PEID)send_buffers.size(); peID++) {
-  if( G.is_adjacent_PE(peID) ) {
-    //now we have to send a message
-    if( send_buffers[peID].size() == 0 ){
-      // length 1 encode no message
-      send_buffers[peID].push_back(0);
-    }
-
-    MPI_Request rq; int tag = peID+17*m_size;
-    MPI_Isend( &send_buffers[peID][0],
-                send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, tag, communicator, &rq);
-
-  }
-}
-
-  //receive incomming
-  PEID counter = 0;
-  while( counter < G.getNumberOfAdjacentPEs()) {
-    // wait for incomming message of an adjacent processor
-    unsigned int tag = m_rank+17*m_size;
-    MPI_Status st;
-    MPI_Probe(MPI_ANY_SOURCE, tag, communicator, &st);
-
-    int message_length;
-    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-
-    std::vector<NodeID> message; message.resize(message_length);
-
-    MPI_Status rst;
-    MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, communicator, &rst);
-
-    counter++;
-
-    // now integrate the changes
-    if(message_length == 1) continue; // nothing to do
-
-    for( int i = 0; i < message_length-1; i+=2) {
-      NodeID global_id = message[i];
-      NodeID label     = message[i+1];
-
-      if(G.getNodeLabel(G.getLocalID(global_id)) != label) {
-        std::cout <<  "labels not ok"  << std::endl;
-        exit(0);
-      }
-    }
-  }
-
-  MPI_Barrier(communicator);
+  static_cast<void>(config);
+  validate_distributed_node_values(
+      communicator,
+      G,
+      [](parallel_graph_access& graph, NodeID const local_node) {
+        return graph.getNodeLabel(local_node);
+      },
+      [](parallel_graph_access& graph, NodeID const ghost_node) {
+        return graph.getNodeLabel(ghost_node);
+      },
+      "label consistency validation failed");
 }
 
 
 void distributed_partitioner::check( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G) {
-  PEID m_rank, m_size;
-  MPI_Comm_rank( communicator, &m_rank);
-  MPI_Comm_size( communicator, &m_size);
-
-  std::vector< std::vector< NodeID > > send_buffers; // buffers to send messages
-  send_buffers.resize(m_size);
-  std::vector<bool> m_PE_packed;
-  m_PE_packed.resize(m_size);
-  for( unsigned peID = 0; peID < m_PE_packed.size(); peID++) {
-    m_PE_packed[ peID ]           = false;
-  }
-
-  forall_local_nodes(G, node) {
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if( !G.is_local_node(target)  ) {
-        PEID peID = G.getTargetPE(target);
-        if( !m_PE_packed[peID] ) { // make sure a node is sent at most once
-          send_buffers[peID].push_back(G.getGlobalID(node));
-          send_buffers[peID].push_back(G.getSecondPartitionIndex(node));
-          m_PE_packed[peID] = true;
-        }
-      }
-    } endfor
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if( !G.is_local_node(target)  ) {
-        m_PE_packed[G.getTargetPE(target)] = false;
-      }
-    } endfor
-} endfor
-
-//send all neighbors their packages using Isends
-//a neighbor that does not receive something gets a specific token
-for( PEID peID = 0; peID < (PEID)send_buffers.size(); peID++) {
-  if( G.is_adjacent_PE(peID) ) {
-    //now we have to send a message
-    if( send_buffers[peID].size() == 0 ){
-      // length 1 encode no message
-      send_buffers[peID].push_back(0);
-    }
-
-    MPI_Request rq;
-    MPI_Isend( &send_buffers[peID][0],
-                send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+17*m_size, communicator, &rq);
-  }
-}
-
-  //receive incomming
-  PEID counter = 0;
-  while( counter < G.getNumberOfAdjacentPEs()) {
-    // wait for incomming message of an adjacent processor
-    unsigned int tag = m_rank+17*m_size;
-    MPI_Status st;
-    MPI_Probe(MPI_ANY_SOURCE, tag, communicator, &st);
-
-    int message_length;
-    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-
-    std::vector<NodeID> message; message.resize(message_length);
-
-    MPI_Status rst;
-    MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, communicator, &rst);
-
-    counter++;
-
-    // now integrate the changes
-    if(message_length == 1) continue; // nothing to do
-
-    for( int i = 0; i < message_length-1; i+=2) {
-      NodeID global_id = message[i];
-      NodeID label     = message[i+1];
-
-      if(G.getSecondPartitionIndex(G.getLocalID(global_id)) != label) {
-        std::cout <<  "second partition index weird"  << std::endl;
-        exit(0);
-      }
-    }
-  }
-
-  MPI_Barrier(communicator);
+  static_cast<void>(config);
+  validate_distributed_node_values(
+      communicator,
+      G,
+      [](parallel_graph_access& graph, NodeID const local_node) {
+        return graph.getSecondPartitionIndex(local_node);
+      },
+      [](parallel_graph_access& graph, NodeID const ghost_node) {
+        return graph.getSecondPartitionIndex(ghost_node);
+      },
+      "second-partition consistency validation failed");
 }
 }

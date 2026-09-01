@@ -446,6 +446,95 @@ foreach(mpi_ranks RANGE 1 5)
 endforeach()
 
 add_executable(
+    parallel_graph_consistency_mpi_test
+    distributed_consistency/parallel_graph_consistency_mpi_test.cpp
+)
+target_link_libraries(
+    parallel_graph_consistency_mpi_test
+    PRIVATE
+        catch_mpi_runner
+        parallel
+        kahip_options
+        kahip_warnings
+)
+
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-parallel-graph-consistency-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_graph_consistency_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-parallel-graph-consistency-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 20
+    )
+endforeach()
+
+add_executable(
+    parallel_graph_lifecycle_probe
+    distributed_consistency/parallel_graph_lifecycle_probe.cpp
+)
+target_link_libraries(
+    parallel_graph_lifecycle_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+foreach(
+    graph_lifecycle
+    IN ITEMS no-plan cached-plan active-destructor active-reset
+)
+    add_test(
+        NAME unit-parallel-graph-lifecycle-${graph_lifecycle}
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROBE=$<TARGET_FILE:parallel_graph_lifecycle_probe>"
+            "-DMODE=${graph_lifecycle}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/distributed_consistency/verify_parallel_graph_lifecycle.cmake"
+    )
+    set_tests_properties(
+        unit-parallel-graph-lifecycle-${graph_lifecycle}
+        PROPERTIES RUN_SERIAL TRUE TIMEOUT 10
+    )
+endforeach()
+
+add_executable(
+    distributed_consistency_mpi_test
+    distributed_consistency/distributed_consistency_mpi_test.cpp
+)
+target_link_libraries(
+    distributed_consistency_mpi_test
+    PRIVATE
+        catch_mpi_runner
+        parallel
+        kahip_options
+        kahip_warnings
+)
+
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-distributed-consistency-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:distributed_consistency_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-distributed-consistency-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 25
+    )
+endforeach()
+
+add_executable(
     mpi_async_neighbors_test
     communication/mpi_async_neighbors_test.cpp
 )

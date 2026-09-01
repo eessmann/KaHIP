@@ -152,6 +152,12 @@ list(
     REGEX "/lib/dspac/"
 )
 file(
+    GLOB PARHIP_MPI_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/communication/*.h"
+)
+list(REMOVE_ITEM PARHIP_CORE_HEADERS ${PARHIP_MPI_HEADERS})
+file(
     GLOB_RECURSE PARHIP_GRAPH_IO_HEADERS
     CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/data_structure/*.h"
@@ -176,15 +182,32 @@ set(LIBPARALLEL_SOURCE_FILES
     lib/distributed_partitioning/initial_partitioning/initial_partitioning.cpp
     lib/distributed_partitioning/initial_partitioning/distributed_evolutionary_partitioning.cpp
     lib/distributed_partitioning/initial_partitioning/random_initial_partitioning.cpp
-    lib/communication/mpi_adapter.cpp
-    lib/communication/mpi_neighbors.cpp
-    lib/communication/mpi_failure.cpp
     lib/communication/mpi_tools.cpp
     lib/communication/dummy_operations.cpp
     lib/io/parallel_graph_io.cpp
     lib/io/parallel_vector_io.cpp
     lib/tools/distributed_quality_metrics.cpp
 )
+
+set(
+    PARHIP_MPI_SOURCE_FILES
+    lib/communication/mpi_adapter.cpp
+    lib/communication/mpi_neighbors.cpp
+    lib/communication/mpi_failure.cpp
+    lib/communication/ghost_exchange_plan.cpp
+)
+add_library(parhip_mpi_obj OBJECT ${PARHIP_MPI_SOURCE_FILES})
+kahip_add_private_header_set(
+    parhip_mpi_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    ${PARHIP_MPI_HEADERS}
+)
+kahip_configure_parhip_object(parhip_mpi_obj)
+target_link_libraries(
+    parhip_mpi_obj
+    PUBLIC fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
+)
+
 add_library(parhip_core_obj OBJECT ${LIBPARALLEL_SOURCE_FILES})
 kahip_add_private_header_set(
     parhip_core_obj
@@ -217,7 +240,7 @@ target_include_directories(
 )
 target_link_libraries(
     parallel
-    PRIVATE parhip_core_obj kahip_options kahip_warnings
+    PRIVATE parhip_core_obj parhip_mpi_obj kahip_options kahip_warnings
 )
 target_compile_definitions(
     parallel
@@ -247,6 +270,10 @@ kahip_add_private_header_set(
     ${PARHIP_GRAPH_IO_HEADERS}
 )
 kahip_configure_parhip_object(parhip_graph_io_obj)
+target_link_libraries(
+    parhip_graph_io_obj
+    PRIVATE fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
+)
 
 set(LIBEDGELIST_SOURCE_FILES
     lib/data_structure/parallel_graph_access.cpp
@@ -262,11 +289,19 @@ kahip_add_private_header_set(
     ${PARHIP_GRAPH_IO_HEADERS}
 )
 kahip_configure_parhip_object(parhip_edge_list_obj)
+target_link_libraries(
+    parhip_edge_list_obj
+    PRIVATE fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
+)
 
 add_library(libedgelist STATIC)
 target_link_libraries(
     libedgelist
-    PRIVATE parhip_edge_list_obj kahip_options kahip_warnings
+    PRIVATE
+        parhip_edge_list_obj
+        parhip_mpi_obj
+        kahip_options
+        kahip_warnings
 )
 target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3)
 target_include_directories(
@@ -325,7 +360,10 @@ target_compile_definitions(
     PRIVATE
         "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF"
 )
-target_link_libraries(graph2binary PRIVATE parhip_graph_io_obj)
+target_link_libraries(
+    graph2binary
+    PRIVATE parhip_graph_io_obj parhip_mpi_obj
+)
 target_link_libraries(graph2binary PRIVATE kahip_version)
 target_link_libraries(graph2binary PRIVATE MPI::MPI_CXX)
 target_link_libraries(graph2binary PRIVATE kahip_options kahip_warnings)
@@ -337,7 +375,10 @@ target_compile_definitions(
     PRIVATE
         "-DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION -DGRAPH2DGF"
 )
-target_link_libraries(graph2binary_external PRIVATE parhip_graph_io_obj)
+target_link_libraries(
+    graph2binary_external
+    PRIVATE parhip_graph_io_obj parhip_mpi_obj
+)
 target_link_libraries(graph2binary_external PRIVATE kahip_version)
 target_link_libraries(graph2binary_external PRIVATE kahip_options kahip_warnings)
 install(TARGETS graph2binary_external DESTINATION bin)
@@ -348,7 +389,7 @@ target_compile_definitions(
     PRIVATE
         "-DGRAPH_GENERATOR_MPI -DGRAPHGEN_DISTRIBUTED_MEMORY -DPARALLEL_LABEL_COMPRESSION"
 )
-target_link_libraries(readbgf PRIVATE parhip_graph_io_obj)
+target_link_libraries(readbgf PRIVATE parhip_graph_io_obj parhip_mpi_obj)
 target_link_libraries(readbgf PRIVATE kahip_version)
 target_link_libraries(readbgf PRIVATE kahip_options kahip_warnings)
 install(TARGETS readbgf DESTINATION bin)
