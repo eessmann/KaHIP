@@ -159,7 +159,9 @@ foreach(
     IN ITEMS
         label-request-owner
         label-reply-correlation
+        label-reply-domain
         quotient-edge-owner
+        quotient-edge-target-domain
         quotient-edge-sequence
         quotient-weight-owner
 )
@@ -173,10 +175,20 @@ foreach(
             receive_filter
             "label reply receive validation rejects bad keyed correlation collectively"
         )
+    elseif(receive_case STREQUAL "label-reply-domain")
+        set(
+            receive_filter
+            "label reply receive validation rejects an out-of-domain coarse ID collectively"
+        )
     elseif(receive_case STREQUAL "quotient-edge-owner")
         set(
             receive_filter
             "quotient edge receive validation rejects a valid wrong-owner source collectively"
+        )
+    elseif(receive_case STREQUAL "quotient-edge-target-domain")
+        set(
+            receive_filter
+            "quotient edge receive validation rejects an out-of-domain target collectively"
         )
     elseif(receive_case STREQUAL "quotient-edge-sequence")
         set(
@@ -236,6 +248,61 @@ set_tests_properties(
         PROCESSORS 2
         RUN_SERIAL TRUE
         TIMEOUT 10
+)
+
+function(add_projection_validation_test test_name mpi_ranks catch_filter)
+    add_test(
+        NAME ${test_name}
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_projection_mpi_test>
+            "${catch_filter}"
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        ${test_name}
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 5
+    )
+endfunction()
+
+add_projection_validation_test(
+    unit-parallel-projection-domain-skew-3-rank
+    3
+    "projection rejects an empty-payload coarse-count mismatch collectively"
+)
+add_projection_validation_test(
+    unit-parallel-projection-zero-3-rank
+    3
+    "zero-node projection performs two empty dense exchanges"
+)
+add_projection_validation_test(
+    unit-parallel-projection-invalid-tail-3-rank
+    3
+    "projection rejects a tail coarse node before exchanging or mutating"
+)
+add_projection_validation_test(
+    unit-parallel-projection-uneven-3-rank
+    3
+    "projection routes an uneven coarse domain by exact ownership"
+)
+add_projection_validation_test(
+    unit-parallel-projection-request-corruption-2-rank
+    2
+    "projection request corruption fails before replies and preserves labels"
+)
+add_projection_validation_test(
+    unit-parallel-projection-reply-corruption-2-rank
+    2
+    "projection reply corruption fails transactionally"
+)
+add_projection_validation_test(
+    unit-parallel-projection-reply-duplicate-2-rank
+    2
+    "projection rejects duplicate replies without partial label writes"
 )
 
 foreach(mpi_ranks RANGE 1 5)
@@ -375,6 +442,50 @@ foreach(mpi_ranks RANGE 1 5)
             PROCESSORS ${mpi_ranks}
             RUN_SERIAL TRUE
             TIMEOUT 10
+    )
+endforeach()
+
+add_executable(
+    mpi_lifecycle_failure_probe
+    communication/mpi_lifecycle_failure_probe.cpp
+)
+target_link_libraries(
+    mpi_lifecycle_failure_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+
+foreach(lifecycle_query IN ITEMS Initialized Finalized)
+    string(TOLOWER "${lifecycle_query}" lifecycle_mode)
+    add_test(
+        NAME unit-mpi-lifecycle-${lifecycle_mode}-query-failure
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROBE=$<TARGET_FILE:mpi_lifecycle_failure_probe>"
+            "-DMODE=${lifecycle_mode}"
+            "-DEXPECTED_QUERY=MPI_${lifecycle_query}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_lifecycle_failure.cmake"
+    )
+    set_tests_properties(
+        unit-mpi-lifecycle-${lifecycle_mode}-query-failure
+        PROPERTIES
+            RUN_SERIAL TRUE
+            TIMEOUT 10
+    )
+endforeach()
+
+foreach(lifecycle_state IN ITEMS before-initialization post-finalization)
+    add_test(
+        NAME unit-mpi-lifecycle-${lifecycle_state}-inactive
+        COMMAND
+            $<TARGET_FILE:mpi_lifecycle_failure_probe>
+            "${lifecycle_state}"
+    )
+    set_tests_properties(
+        unit-mpi-lifecycle-${lifecycle_state}-inactive
+        PROPERTIES
+            RUN_SERIAL TRUE
+            TIMEOUT 5
     )
 endforeach()
 

@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -31,6 +33,17 @@ inline std::vector<int> isend_tags;
 inline std::vector<int> probe_tags;
 inline std::vector<int> recv_tags;
 
+enum class receive_mutation {
+  none,
+  projection_request_wrong_owner,
+  projection_reply_wrong_coarse_id,
+  projection_reply_duplicate_request,
+};
+
+inline receive_mutation mutation = receive_mutation::none;
+inline int mutation_payload_ordinal = 0;
+inline int mutation_target_rank = 0;
+
 void reset() {
   all_to_all_v_calls = 0;
   all_to_all_v_c_calls = 0;
@@ -41,6 +54,9 @@ void reset() {
   isend_tags.clear();
   probe_tags.clear();
   recv_tags.clear();
+  mutation = receive_mutation::none;
+  mutation_payload_ordinal = 0;
+  mutation_target_rank = 0;
 }
 
 [[nodiscard]] auto dense_payload_collective_calls() -> int {
@@ -53,6 +69,93 @@ void record_payload_extent(MPI_Datatype datatype) {
   REQUIRE(PMPI_Type_get_extent(datatype, &lower_bound, &extent) == MPI_SUCCESS);
   REQUIRE(lower_bound == 0);
   payload_extents.push_back(extent);
+}
+
+class scoped_receive_mutation {
+public:
+  scoped_receive_mutation(receive_mutation selected,
+                          int payload_ordinal,
+                          int target_rank = 0) noexcept {
+    mutation = selected;
+    mutation_payload_ordinal = payload_ordinal;
+    mutation_target_rank = target_rank;
+  }
+
+  ~scoped_receive_mutation() noexcept {
+    mutation = receive_mutation::none;
+    mutation_payload_ordinal = 0;
+    mutation_target_rank = 0;
+  }
+
+  scoped_receive_mutation(scoped_receive_mutation const&) = delete;
+  auto operator=(scoped_receive_mutation const&)
+      -> scoped_receive_mutation& = delete;
+};
+
+template <typename Count, typename Displacement>
+void mutate_received_payload(int payload_ordinal,
+                             void* receive_buffer,
+                             Count const receive_counts[],
+                             Displacement const receive_displacements[],
+                             MPI_Datatype receive_datatype,
+                             MPI_Comm communicator) {
+  if (mutation == receive_mutation::none ||
+      payload_ordinal != mutation_payload_ordinal) {
+    return;
+  }
+
+  int rank = 0;
+  int size = 0;
+  REQUIRE(PMPI_Comm_rank(communicator, &rank) == MPI_SUCCESS);
+  REQUIRE(PMPI_Comm_size(communicator, &size) == MPI_SUCCESS);
+  if (rank != mutation_target_rank) {
+    return;
+  }
+
+  MPI_Aint lower_bound = 0;
+  MPI_Aint extent = 0;
+  REQUIRE(PMPI_Type_get_extent(
+              receive_datatype, &lower_bound, &extent) == MPI_SUCCESS);
+  REQUIRE(lower_bound == 0);
+  for (int source = 0; source < size; ++source) {
+    if (receive_counts[source] <= 0) {
+      continue;
+    }
+    auto* first_record = static_cast<std::byte*>(receive_buffer) +
+                         static_cast<MPI_Aint>(
+                             receive_displacements[source]) *
+                             extent;
+    switch (mutation) {
+      case receive_mutation::projection_request_wrong_owner:
+        // The target rank owns coarse IDs 0 and 1 in this fixture. ID 2 is
+        // in-domain but owned by the sender, so only receive-side ownership
+        // validation rejects it.
+        reinterpret_cast<parhip::projection::request*>(first_record)
+            ->coarse_global_id = parhip::NodeID{2};
+        return;
+      case receive_mutation::projection_reply_wrong_coarse_id:
+        // Rank 0 requested coarse ID 2 from source 1. ID 3 has the same
+        // source owner but is not the coarse ID associated with the request.
+        reinterpret_cast<parhip::projection::reply*>(first_record)
+            ->coarse_global_id = parhip::NodeID{3};
+        return;
+      case receive_mutation::projection_reply_duplicate_request: {
+        if (receive_counts[source] < 2) {
+          continue;
+        }
+        auto* first = reinterpret_cast<parhip::projection::reply*>(
+            first_record);
+        auto* second = reinterpret_cast<parhip::projection::reply*>(
+            first_record + extent);
+        second->request_id = first->request_id;
+        second->coarse_global_id = first->coarse_global_id;
+        return;
+      }
+      case receive_mutation::none:
+        return;
+    }
+  }
+  FAIL("selected projection receive mutation found no record on its target rank");
 }
 
 [[nodiscard]] auto calls_in_tag_phase(std::vector<int> const& tags,
@@ -79,15 +182,25 @@ extern "C" int MPI_Alltoallv(const void* send_buffer,
     ++protocol_probe::all_to_all_v_calls;
     protocol_probe::record_payload_extent(send_datatype);
   }
-  return PMPI_Alltoallv(send_buffer,
-                        send_counts,
-                        send_displacements,
-                        send_datatype,
-                        receive_buffer,
-                        receive_counts,
-                        receive_displacements,
-                        receive_datatype,
-                        communicator);
+  auto const payload_ordinal = protocol_probe::dense_payload_collective_calls();
+  auto const result = PMPI_Alltoallv(send_buffer,
+                                     send_counts,
+                                     send_displacements,
+                                     send_datatype,
+                                     receive_buffer,
+                                     receive_counts,
+                                     receive_displacements,
+                                     receive_datatype,
+                                     communicator);
+  if (protocol_probe::active && result == MPI_SUCCESS) {
+    protocol_probe::mutate_received_payload(payload_ordinal,
+                                            receive_buffer,
+                                            receive_counts,
+                                            receive_displacements,
+                                            receive_datatype,
+                                            communicator);
+  }
+  return result;
 }
 
 #if KAHIP_HAVE_MPI_ALLTOALLV_C
@@ -104,15 +217,25 @@ extern "C" int MPI_Alltoallv_c(const void* send_buffer,
     ++protocol_probe::all_to_all_v_c_calls;
     protocol_probe::record_payload_extent(send_datatype);
   }
-  return PMPI_Alltoallv_c(send_buffer,
-                          send_counts,
-                          send_displacements,
-                          send_datatype,
-                          receive_buffer,
-                          receive_counts,
-                          receive_displacements,
-                          receive_datatype,
-                          communicator);
+  auto const payload_ordinal = protocol_probe::dense_payload_collective_calls();
+  auto const result = PMPI_Alltoallv_c(send_buffer,
+                                       send_counts,
+                                       send_displacements,
+                                       send_datatype,
+                                       receive_buffer,
+                                       receive_counts,
+                                       receive_displacements,
+                                       receive_datatype,
+                                       communicator);
+  if (protocol_probe::active && result == MPI_SUCCESS) {
+    protocol_probe::mutate_received_payload(payload_ordinal,
+                                            receive_buffer,
+                                            receive_counts,
+                                            receive_displacements,
+                                            receive_datatype,
+                                            communicator);
+  }
+  return result;
 }
 #endif
 
@@ -256,6 +379,79 @@ void build_empty_graph_with_global_count(
       static_cast<std::size_t>(size) + 1, parhip::NodeID{0});
   graph.set_range_array(ranges);
   graph.finish_construction();
+}
+
+void build_projection_coarser(parhip::parallel_graph_access& graph,
+                              int rank,
+                              int size,
+                              parhip::NodeID global_nodes) {
+  auto const ownership = parhip::mpi::contiguous_owner_layout<parhip::NodeID>{
+      global_nodes, static_cast<std::size_t>(size)};
+  auto ranges = std::vector<parhip::NodeID>(
+      static_cast<std::size_t>(size) + 1);
+  for (int pe = 0; pe <= size; ++pe) {
+    ranges[static_cast<std::size_t>(pe)] =
+        ownership.boundary(static_cast<std::size_t>(pe));
+  }
+  auto const first = ranges[static_cast<std::size_t>(rank)];
+  auto const end = ranges[static_cast<std::size_t>(rank + 1)];
+  auto const local_nodes = end - first;
+  graph.start_construction(local_nodes, 0, global_nodes, 0, false);
+  graph.set_range(first, local_nodes == 0 ? first : end - 1);
+  graph.set_range_array(ranges);
+  for (auto global = first; global < end; ++global) {
+    auto const node = graph.new_node();
+    graph.setNodeWeight(node, 1);
+    graph.setNodeLabel(node, parhip::NodeID{100} + global);
+    graph.setSecondPartitionIndex(node, 0);
+  }
+  graph.finish_construction();
+}
+
+template <std::size_t Count>
+void build_projection_finer(
+    parhip::parallel_graph_access& graph,
+    int rank,
+    int size,
+    std::array<parhip::NodeID, Count> const& coarse_nodes) {
+  auto const local_nodes = static_cast<parhip::NodeID>(Count);
+  auto const global_nodes =
+      local_nodes * static_cast<parhip::NodeID>(size);
+  auto const first = local_nodes * static_cast<parhip::NodeID>(rank);
+  graph.start_construction(local_nodes, 0, global_nodes, 0, false);
+  graph.set_range(first, local_nodes == 0 ? first : first + local_nodes - 1);
+  auto ranges = std::vector<parhip::NodeID>(
+      static_cast<std::size_t>(size) + 1);
+  for (int pe = 0; pe <= size; ++pe) {
+    ranges[static_cast<std::size_t>(pe)] =
+        local_nodes * static_cast<parhip::NodeID>(pe);
+  }
+  graph.set_range_array(ranges);
+  for (std::size_t index = 0; index < Count; ++index) {
+    auto const node = graph.new_node();
+    graph.setNodeWeight(node, 1);
+    graph.setNodeLabel(
+        node, parhip::NodeID{900} + first + static_cast<parhip::NodeID>(index));
+    graph.setSecondPartitionIndex(node, 0);
+  }
+  graph.finish_construction();
+  graph.allocate_node_to_cnode();
+  for (std::size_t index = 0; index < Count; ++index) {
+    graph.setCNode(static_cast<parhip::NodeID>(index), coarse_nodes[index]);
+  }
+}
+
+template <std::size_t Count>
+void require_projection_labels_unchanged(
+    parhip::parallel_graph_access& finer,
+    int rank) {
+  auto const first = static_cast<parhip::NodeID>(Count) *
+                     static_cast<parhip::NodeID>(rank);
+  for (std::size_t index = 0; index < Count; ++index) {
+    REQUIRE(finer.getNodeLabel(static_cast<parhip::NodeID>(index)) ==
+            parhip::NodeID{900} + first +
+                static_cast<parhip::NodeID>(index));
+  }
 }
 
 template <typename Operation>
@@ -492,6 +688,249 @@ TEST_CASE("projection uses two dense exchanges and correlates stable request IDs
 #else
   REQUIRE(parhip::mpi::trace::snapshot().empty());
 #endif
+}
+
+TEST_CASE("projection rejects an empty-payload coarse-count mismatch collectively",
+          "[mpi][projection][failure][domain]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size,
+                         std::array<parhip::NodeID, 0>{});
+  build_empty_graph_with_global_count(
+      coarser, rank == 0 ? parhip::NodeID{2} : parhip::NodeID{3}, size);
+
+  protocol_probe::reset();
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_projection{}.parallel_project(
+            MPI_COMM_WORLD, finer, coarser);
+      },
+      "projection coarse node count agreement failed",
+      size);
+  protocol_probe::active = false;
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 0);
+}
+
+TEST_CASE("zero-node projection performs two empty dense exchanges",
+          "[mpi][projection][zero]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size,
+                         std::array<parhip::NodeID, 0>{});
+  build_projection_coarser(coarser, rank, size, 0);
+
+  protocol_probe::reset();
+  protocol_probe::active = true;
+  parhip::parallel_projection{}.parallel_project(
+      MPI_COMM_WORLD, finer, coarser);
+  protocol_probe::active = false;
+
+  REQUIRE(finer.number_of_local_nodes() == 0);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+  REQUIRE(protocol_probe::isend_calls == 0);
+  REQUIRE(protocol_probe::probe_calls == 0);
+  REQUIRE(protocol_probe::recv_calls == 0);
+}
+
+TEST_CASE("projection rejects a tail coarse node before exchanging or mutating",
+          "[mpi][projection][failure][domain]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  auto const coarse_nodes = rank == 0
+      ? std::array<parhip::NodeID, 2>{5, 0}
+      : rank == 1 ? std::array<parhip::NodeID, 2>{2, 3}
+                  : std::array<parhip::NodeID, 2>{4, 4};
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size, coarse_nodes);
+  build_projection_coarser(coarser, rank, size, 5);
+
+  protocol_probe::reset();
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_projection{}.parallel_project(
+            MPI_COMM_WORLD, finer, coarser);
+      },
+      "projection local coarse-node validation failed",
+      size);
+  protocol_probe::active = false;
+
+  require_projection_labels_unchanged<2>(finer, rank);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 0);
+}
+
+TEST_CASE("projection routes an uneven coarse domain by exact ownership",
+          "[mpi][projection][ownership]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  auto const coarse_nodes = rank == 0
+      ? std::array<parhip::NodeID, 2>{0, 4}
+      : rank == 1 ? std::array<parhip::NodeID, 2>{2, 1}
+                  : std::array<parhip::NodeID, 2>{4, 3};
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size, coarse_nodes);
+  build_projection_coarser(coarser, rank, size, 5);
+
+  protocol_probe::reset();
+  protocol_probe::active = true;
+  parhip::parallel_projection{}.parallel_project(
+      MPI_COMM_WORLD, finer, coarser);
+  protocol_probe::active = false;
+
+  for (std::size_t index = 0; index < coarse_nodes.size(); ++index) {
+    REQUIRE(finer.getNodeLabel(static_cast<parhip::NodeID>(index)) ==
+            parhip::NodeID{100} + coarse_nodes[index]);
+  }
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+}
+
+TEST_CASE("projection request corruption fails before replies and preserves labels",
+          "[mpi][projection][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  auto const coarse_nodes = rank == 0
+      ? std::array<parhip::NodeID, 2>{0, 2}
+      : std::array<parhip::NodeID, 2>{2, 0};
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size, coarse_nodes);
+  build_projection_coarser(coarser, rank, size, 4);
+
+  protocol_probe::reset();
+  parhip::mpi::trace::reset();
+  parhip::mpi::trace::set_active(true);
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::projection_request_wrong_owner, 1};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_projection{}.parallel_project(
+            MPI_COMM_WORLD, finer, coarser);
+      },
+      "projection request received validation failed",
+      size);
+  protocol_probe::active = false;
+
+  require_projection_labels_unchanged<2>(finer, rank);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 1);
+  REQUIRE(parhip::mpi::trace::snapshot().empty());
+  parhip::mpi::trace::set_active(false);
+}
+
+TEST_CASE("projection reply corruption fails transactionally",
+          "[mpi][projection][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  auto const coarse_nodes = rank == 0
+      ? std::array<parhip::NodeID, 2>{0, 2}
+      : std::array<parhip::NodeID, 2>{2, 0};
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size, coarse_nodes);
+  build_projection_coarser(coarser, rank, size, 4);
+
+  protocol_probe::reset();
+  parhip::mpi::trace::reset();
+  parhip::mpi::trace::set_active(true);
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::projection_reply_wrong_coarse_id, 2};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_projection{}.parallel_project(
+            MPI_COMM_WORLD, finer, coarser);
+      },
+      "projection reply received validation failed",
+      size);
+  protocol_probe::active = false;
+
+  require_projection_labels_unchanged<2>(finer, rank);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+  REQUIRE(parhip::mpi::trace::snapshot().empty());
+  parhip::mpi::trace::set_active(false);
+}
+
+TEST_CASE("projection rejects duplicate replies without partial label writes",
+          "[mpi][projection][failure][receive][duplicate]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  auto const coarse_nodes = rank == 0
+      ? std::array<parhip::NodeID, 2>{2, 3}
+      : std::array<parhip::NodeID, 2>{0, 1};
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_projection_finer(finer, rank, size, coarse_nodes);
+  build_projection_coarser(coarser, rank, size, 4);
+
+  protocol_probe::reset();
+  parhip::mpi::trace::reset();
+  parhip::mpi::trace::set_active(true);
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::projection_reply_duplicate_request,
+      2};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_projection{}.parallel_project(
+            MPI_COMM_WORLD, finer, coarser);
+      },
+      "projection reply received validation failed",
+      size);
+  protocol_probe::active = false;
+
+  require_projection_labels_unchanged<2>(finer, rank);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+  REQUIRE(parhip::mpi::trace::snapshot().empty());
+  parhip::mpi::trace::set_active(false);
 }
 
 TEST_CASE("block-down dense owner phase uses keyed collective and exact updates",

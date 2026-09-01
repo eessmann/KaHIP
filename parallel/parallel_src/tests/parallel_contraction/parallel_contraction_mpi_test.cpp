@@ -43,7 +43,9 @@ enum class receive_mutation {
   none,
   label_request_wrong_owner,
   label_reply_bad_correlation,
+  label_reply_coarse_id_out_of_domain,
   quotient_edge_wrong_owner,
+  quotient_edge_target_out_of_domain,
   quotient_edge_sequence_gap,
   quotient_node_weight_wrong_owner,
 };
@@ -156,6 +158,10 @@ void mutate_received_payload(int payload_ordinal,
         reinterpret_cast<contraction::bundled_edge*>(record)->source =
             NodeID{2};
         break;
+      case receive_mutation::quotient_edge_target_out_of_domain:
+        reinterpret_cast<contraction::bundled_edge*>(record)->target =
+            NodeID{4};
+        break;
       case receive_mutation::quotient_node_weight_wrong_owner:
         reinterpret_cast<contraction::node_weight_contribution*>(record)
             ->coarse_global_id = NodeID{2};
@@ -166,6 +172,12 @@ void mutate_received_payload(int payload_ordinal,
         // requested, so only semantic correlation rejects it.
         reinterpret_cast<contraction::label_reply*>(record)->old_label =
             NodeID{2};
+        break;
+      case receive_mutation::label_reply_coarse_id_out_of_domain:
+        // The fixture has exactly three distinct labels, so ID 3 is the
+        // first invalid half-open coarse ID and exercises the received bound.
+        reinterpret_cast<contraction::label_reply*>(record)
+            ->coarse_global_id = NodeID{3};
         break;
       case receive_mutation::quotient_edge_sequence_gap:
         ++reinterpret_cast<contraction::bundled_edge*>(record)
@@ -580,6 +592,34 @@ TEST_CASE("label reply receive validation rejects bad keyed correlation collecti
   protocol_probe::active = false;
 }
 
+TEST_CASE("label reply receive validation rejects an out-of-domain coarse ID collectively",
+          "[unit][mpi][contraction][label-mapping][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_label_fixture(graph, rank, size);
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::label_reply_coarse_id_out_of_domain,
+      2};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        static_cast<void>(
+            parallel_contraction_test_access::compute_label_mapping(
+                MPI_COMM_WORLD, graph));
+      },
+      "label reply validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
 TEST_CASE("quotient edges use one dense keyed exchange and aggregate exactly",
           "[unit][mpi][contraction][quotient-edges]") {
   int rank = 0;
@@ -745,6 +785,40 @@ TEST_CASE("quotient edge receive validation rejects a valid wrong-owner source c
   protocol_probe::reset();
   protocol_probe::scoped_receive_mutation mutation{
       protocol_probe::receive_mutation::quotient_edge_wrong_owner, 1};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            local_edges,
+            no_node_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient edge received validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
+TEST_CASE("quotient edge receive validation rejects an out-of-domain target collectively",
+          "[unit][mpi][contraction][quotient-edges][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph local_edges;
+  local_edges[hashed_edge{coarse_nodes, 0, 2}].weight = 4;
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::quotient_edge_target_out_of_domain,
+      1};
   protocol_probe::active = true;
   require_collective_validation_failure(
       [&] {

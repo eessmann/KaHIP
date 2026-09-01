@@ -391,3 +391,122 @@ Every build, test, oracle run, and verification command used the required
   payloads, no tag-7/tag-8/tag-10 dense P2P protocol, and only the required
   sparse tag-6/tag-9/tag-11 deferrals.
 - `git diff --check` passed before the final commit.
+
+## Fix round 3: transactional projection and lifecycle queries
+
+### Scope and projection protocol
+
+This round starts from reviewed fix-round-2 commit
+`d6afee826162a071d573a44161259f55327e4b96` and closes the remaining
+projection and lifecycle findings. Task 7 sparse exchanges remain deliberately
+deferred.
+
+`parallel_projection::parallel_project` now uses the checked communicator
+view, agrees the global coarse-node count before ownership or allocation, and
+routes through the same exact `contiguous_owner_layout<NodeID>` as the other
+dense owner phases. It contains no floating-point ownership arithmetic or raw
+rank/size query. A first pass validates every finer coarse ID and the exact
+local coarse range collectively before any owner optional is consumed.
+
+Both locally resolvable and remote label assignments are staged. Incoming
+requests are checked by source segment for the full coarse domain, exact
+receiver ownership, safe local coarse presence, unique request IDs, and one
+request per coarse ID. That common validation completes before labels are read
+or any reply is constructed. Incoming replies are then checked by their actual
+source segment for the exact coarse owner, known request ID, exact requested
+coarse ID, uniqueness, and complete one-to-one coverage. No map entry is
+erased and no finer label is written during validation. Only after the final
+common validation does the function append request/reply trace records, apply
+all staged labels, and enter the existing ghost update. The valid trace actor
+fields and canonical ordering remain exact.
+
+### Projection RED/GREEN evidence
+
+The first focused RED run exposed all original failure modes:
+
+- empty-payload coarse-count skew was caught by zero of three ranks;
+- a tail coarse ID equal to `N` timed out rather than reaching a common error;
+- typed request corruption timed out after payload one because some ranks
+  built replies while another threw;
+- typed reply correlation corruption and duplicate/missing reply corruption
+  timed out after payload two; and
+- the old function had already written locally resolvable labels before those
+  failures.
+
+The valid `N=0` and uneven `N=5,size=3` cases were retained as characterization
+tests and then passed the exact implementation. GREEN now proves:
+
+- empty domain performs exactly two empty dense payload exchanges;
+- empty-payload domain skew and `cnode == N` fail commonly before traffic or
+  mutation;
+- uneven ownership projects the exact expected labels;
+- request corruption performs exactly one payload exchange and constructs no
+  reply payload;
+- request, reply, and duplicate/missing-reply failures leave every finer label
+  unchanged, including locally resolvable nodes; and
+- both request and reply traces remain empty on failure.
+
+The mutation hook is typed and selected by explicit payload ordinal in both
+the MPI-3 `MPI_Alltoallv` interposer and guarded MPI-4 `MPI_Alltoallv_c`
+interposer. A deliberate mutation that emitted request trace records before
+reply validation made the new trace-transaction assertion RED on both ranks;
+restoring final-validation-first ordering made the valid exact trace and all
+three failure fixtures GREEN.
+
+### Lifecycle query fail-fast
+
+Lifecycle state is now explicitly classified as before initialization, active,
+or finalized. A non-success result from `MPI_Initialized` or `MPI_Finalized`
+cannot be treated as inactivity: it emits only the query name and raw return
+code best-effort, then calls `std::abort`. Because runtime state is unknown,
+that path does not call `MPI_Error_string`, `MPI_Abort`, or another lifecycle
+query.
+
+The dedicated subprocess probe interposes both failure cases, traps any
+forbidden MPI diagnostic/abort call, and installs a test-only SIGABRT observer.
+CTest requires the distinctive SIGABRT exit, the raw diagnostic, and absence
+of a forbidden call; an arbitrary nonzero exit no longer passes. Separate
+subprocess modes exercise the real MPI runtime before initialization and after
+a real `MPI_Init`/`MPI_Finalize` pair, and require inactive state in both cases
+while also checking active state between initialization and finalization. The
+two normal-state tests first went RED as unsupported probe modes; all four
+lifecycle tests are now GREEN.
+
+### Remaining malformed-receive coverage
+
+The shared typed PMPI mutation seam now also corrupts:
+
+- a label reply to use `coarse_global_id == global_num_distinct_ids`; and
+- a quotient edge to use `target == number_of_cnodes`.
+
+Temporarily removing each production predicate proved the tests were
+discriminating: the label test reported zero of three ranks catching, while
+the edge test reached an out-of-range graph index and aborted. With the
+predicates restored, every rank reaches the named common validation context.
+The same mutation helper remains guarded consistently for MPI-4 `_c` builds.
+
+### Fix-round-3 verification
+
+Every configure, build, test, oracle, and audit command used the required
+`systemd-run --user --scope` memory limits; builds used at most two jobs.
+
+- Trace-ON debug full build passed; full CTest: **87/87 passed**.
+- Default trace-OFF release full build passed; full CTest: **82/82 passed**.
+  Ninja emitted its known recoverable premature-EOF warning, regenerated, and
+  completed compilation and linking successfully.
+- The final two-rank fixed tuple retained partition SHA-256
+  `a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0`
+  and canonical 436,721-record aggregate SHA-256
+  `a179bb30213dbb26638657a1d611e951a8bf900b817647fc03d4c700a83f0a18`.
+- Debug capability/cache readback has tracing ON and
+  `KAHIP_HAVE_MPI_ALLTOALLV_C 0`; release has tracing OFF and the same
+  capability result. The MPI-3 path ran locally; the typed `_c` seam remains
+  compile-guarded for MPI-4 CI rather than being faked.
+- The protocol audit finds seven production dense `all_to_all_v` payload call
+  sites: the two transactional projection phases plus the five Task 6 owner
+  phases. It finds no tag-7/tag-8/tag-10 dense P2P protocol and only the
+  required sparse tag-6/tag-9/tag-11 deferrals.
+- An independent read-only review found no remaining production correctness,
+  deadlock, or partial-state defect after the lifecycle and trace-transaction
+  coverage gaps were closed.
+- `git diff --check` passed before the final commit.

@@ -8,19 +8,45 @@
 #include "communication/mpi_error.h"
 
 namespace parhip::mpi {
-auto runtime_is_active() noexcept -> bool {
-  int initialized = 0;
-  int finalized = 0;
-  if (MPI_Initialized(&initialized) != MPI_SUCCESS || initialized == 0) {
-    return false;
+namespace {
+enum class runtime_state {
+  before_initialization,
+  active,
+  finalized,
+};
+
+[[noreturn]] void abort_on_lifecycle_query_failure(
+    std::string_view query,
+    int error_code) noexcept {
+  try {
+    spdlog::critical(
+        "MPI lifecycle query failure: {} returned raw error {}",
+        query,
+        error_code);
+  } catch (...) {
+    // Runtime state is unknown, so no further MPI call is safe even when
+    // diagnostic formatting fails.
   }
-  if (MPI_Finalized(&finalized) != MPI_SUCCESS) {
-    return false;
-  }
-  return finalized == 0;
+  std::abort();
 }
 
-namespace {
+[[nodiscard]] auto query_runtime_state() noexcept -> runtime_state {
+  int initialized = 0;
+  int finalized = 0;
+  auto const initialized_result = MPI_Initialized(&initialized);
+  if (initialized_result != MPI_SUCCESS) {
+    abort_on_lifecycle_query_failure("MPI_Initialized", initialized_result);
+  }
+  if (initialized == 0) {
+    return runtime_state::before_initialization;
+  }
+  auto const finalized_result = MPI_Finalized(&finalized);
+  if (finalized_result != MPI_SUCCESS) {
+    abort_on_lifecycle_query_failure("MPI_Finalized", finalized_result);
+  }
+  return finalized == 0 ? runtime_state::active : runtime_state::finalized;
+}
+
 void log_failure(std::string_view boundary,
                  std::exception_ptr failure) noexcept {
   try {
@@ -40,6 +66,10 @@ void log_failure(std::string_view boundary,
   }
 }
 }  // namespace
+
+auto runtime_is_active() noexcept -> bool {
+  return query_runtime_state() == runtime_state::active;
+}
 
 [[noreturn]] void abort_on_exception(MPI_Comm communicator,
                                      std::string_view boundary,
