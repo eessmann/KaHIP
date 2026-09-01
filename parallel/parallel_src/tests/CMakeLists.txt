@@ -762,6 +762,33 @@ foreach(mpi_ranks RANGE 1 5)
     )
 endforeach()
 
+add_mpi_failure_policy_death_test(
+    neighbor-receive-offset-capacity-failure
+    neighbor-receive-offset-capacity
+    "MPI adapter capacity failure:"
+    "neighbor_all_to_all_v: cumulative element offset exceeds local size_t capacity"
+    "injected rank-zero neighbor receive offset capacity"
+    "affected=neighbor-graph error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=0 dense-payload-attempts=0 dense-datatype-attempts=0 graph-semantic-validation-attempts=0 graph-create-attempts=0 neighbor-count-exchange-attempts=1 neighbor-payload-attempts=0 neighbor-datatype-attempts=0 neighbor-phase-round-attempts=0 neighbor-capacity-after-injection-attempts=1"
+)
+
+add_mpi_failure_policy_death_test(
+    neighbor-receive-byte-capacity-failure
+    neighbor-receive-byte-capacity
+    "MPI adapter capacity failure:"
+    "neighbor_all_to_all_v: element storage byte size exceeds local size_t capacity"
+    "injected rank-zero neighbor receive byte capacity"
+    "affected=neighbor-graph error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=0 dense-payload-attempts=0 dense-datatype-attempts=0 graph-semantic-validation-attempts=0 graph-create-attempts=0 neighbor-count-exchange-attempts=1 neighbor-payload-attempts=0 neighbor-datatype-attempts=0 neighbor-phase-round-attempts=0 neighbor-capacity-after-injection-attempts=1"
+)
+
+add_mpi_failure_policy_death_test(
+    neighbor-bounded-round-arithmetic-failure
+    neighbor-bounded-round-arithmetic
+    "MPI adapter capacity failure:"
+    "neighbor_all_to_all_v bounded MPI-3 plan: bounded MPI-3 chunk arithmetic exceeds local size_t capacity"
+    "injected rank-zero bounded neighbor round arithmetic capacity"
+    "affected=neighbor-graph error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=2 dense-count-exchange-attempts=0 dense-payload-attempts=0 dense-datatype-attempts=0 graph-semantic-validation-attempts=0 graph-create-attempts=0 neighbor-count-exchange-attempts=1 neighbor-payload-attempts=0 neighbor-datatype-attempts=0 neighbor-phase-round-attempts=2 neighbor-capacity-after-injection-attempts=1"
+)
+
 add_executable(
     parallel_graph_consistency_mpi_test
     distributed_consistency/parallel_graph_consistency_mpi_test.cpp

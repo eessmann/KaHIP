@@ -135,8 +135,6 @@ inline int maximum_active_send_segments = 0;
 inline int maximum_active_receive_segments = 0;
 inline int maximum_payload_count = 0;
 inline int nonzero_displacement_calls = 0;
-inline bool inject_receive_count_overflow = false;
-inline bool inject_receive_byte_size_overflow = false;
 
 void reset() {
   dist_graph_create_calls = 0;
@@ -148,8 +146,6 @@ void reset() {
   maximum_active_receive_segments = 0;
   maximum_payload_count = 0;
   nonzero_displacement_calls = 0;
-  inject_receive_count_overflow = false;
-  inject_receive_byte_size_overflow = false;
 }
 }  // namespace neighborhood_protocol_probe
 
@@ -180,45 +176,9 @@ extern "C" int MPI_Neighbor_alltoall(void const* send_buffer,
   if (neighborhood_protocol_probe::active) {
     ++neighborhood_protocol_probe::neighbor_count_calls;
   }
-  auto const result = PMPI_Neighbor_alltoall(
-      send_buffer, send_count, send_datatype, receive_buffer, receive_count,
-      receive_datatype, communicator);
-  if (neighborhood_protocol_probe::active &&
-      neighborhood_protocol_probe::inject_receive_count_overflow &&
-      result == MPI_SUCCESS && receive_count == 1 &&
-      receive_datatype == MPI_UINT64_T) {
-    auto indegree = 0;
-    auto outdegree = 0;
-    auto weighted = 0;
-    if (PMPI_Dist_graph_neighbors_count(communicator, &indegree, &outdegree,
-                                        &weighted) == MPI_SUCCESS) {
-      auto* counts = static_cast<std::uint64_t*>(receive_buffer);
-      std::ranges::fill(std::span{counts, static_cast<std::size_t>(indegree)},
-                        std::numeric_limits<std::uint64_t>::max());
-    }
-  } else if (neighborhood_protocol_probe::active &&
-             neighborhood_protocol_probe::inject_receive_byte_size_overflow &&
-             result == MPI_SUCCESS && receive_count == 1 &&
-             receive_datatype == MPI_UINT64_T) {
-    auto indegree = 0;
-    auto outdegree = 0;
-    auto weighted = 0;
-    if (PMPI_Dist_graph_neighbors_count(communicator, &indegree, &outdegree,
-                                        &weighted) == MPI_SUCCESS) {
-      auto rank = 0;
-      if (PMPI_Comm_rank(communicator, &rank) == MPI_SUCCESS && rank == 0) {
-        auto* counts = static_cast<std::uint64_t*>(receive_buffer);
-        std::uint64_t const product_only_overflow =
-            std::numeric_limits<std::size_t>::max() /
-                sizeof(test_support::wire_entry) +
-            std::size_t{1};
-        std::ranges::fill(
-            std::span{counts, static_cast<std::size_t>(indegree)},
-            product_only_overflow);
-      }
-    }
-  }
-  return result;
+  return PMPI_Neighbor_alltoall(send_buffer, send_count, send_datatype,
+                                receive_buffer, receive_count, receive_datatype,
+                                communicator);
 }
 
 extern "C" int MPI_Neighbor_alltoallv(void const* send_buffer,
@@ -507,14 +467,6 @@ template <typename Operation>
 void require_collective_semantic_error(Operation&& operation,
                                        std::string_view expected_context,
                                        communicator_view communicator) {
-  require_exact_common_mpi_error(std::forward<Operation>(operation),
-                                 expected_context, communicator);
-}
-
-template <typename Operation>
-void require_deferred_capacity_mpi_error(Operation&& operation,
-                                         std::string_view expected_context,
-                                         communicator_view communicator) {
   require_exact_common_mpi_error(std::forward<Operation>(operation),
                                  expected_context, communicator);
 }
@@ -1573,56 +1525,6 @@ TEST_CASE(
       "neighbor_all_to_all_v collective input validation failed", world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
-  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
-  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
-}
-
-TEST_CASE("neighborhood receive offset overflow is common and pre-payload",
-          "[unit][mpi][neighbor][exchange][failure][overflow]") {
-  communicator_view const world{MPI_COMM_WORLD};
-  if (world.size() < 3) {
-    return;
-  }
-  auto outgoing = world.rank() == 0 ? std::vector<int>{} : std::vector<int>{0};
-  distributed_graph graph{world, std::move(outgoing)};
-  auto segments = std::vector<std::vector<int>>(graph.destinations().size(),
-                                                std::vector<int>{world.rank()});
-
-  neighborhood_protocol_probe::reset();
-  neighborhood_protocol_probe::inject_receive_count_overflow = true;
-  neighborhood_protocol_probe::active = true;
-  require_deferred_capacity_mpi_error(
-      [&] {
-        static_cast<void>(neighbor_all_to_all_v(
-            segmented_buffer<int>::from_segments(segments), graph));
-      },
-      "neighbor_all_to_all_v receive layout validation failed", world);
-  neighborhood_protocol_probe::active = false;
-  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
-  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
-  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
-}
-
-TEST_CASE("neighborhood receive byte size overflow is common and pre-allocation",
-          "[unit][mpi][neighbor][exchange][failure][overflow]") {
-  communicator_view const world{MPI_COMM_WORLD};
-  distributed_graph graph{world, {world.rank()}};
-  auto const value = test_support::wire_entry{
-      static_cast<std::uint64_t>(world.rank()), world.rank(), 1.0};
-
-  neighborhood_protocol_probe::reset();
-  neighborhood_protocol_probe::inject_receive_byte_size_overflow = true;
-  neighborhood_protocol_probe::active = true;
-  require_deferred_capacity_mpi_error(
-      [&] {
-        static_cast<void>(neighbor_all_to_all_v(
-            segmented_buffer<test_support::wire_entry>::from_segments(
-                std::vector<std::vector<test_support::wire_entry>>{{value}}),
-            graph));
-      },
-      "neighbor_all_to_all_v receive layout validation failed", world);
-  neighborhood_protocol_probe::active = false;
-  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
 }

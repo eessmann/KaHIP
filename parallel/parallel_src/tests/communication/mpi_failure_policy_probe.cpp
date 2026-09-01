@@ -43,6 +43,9 @@ enum class failure_mode {
   dense_receive_offset_capacity,
   dense_receive_byte_capacity,
   distributed_graph_degree_capacity,
+  neighbor_receive_offset_capacity,
+  neighbor_receive_byte_capacity,
+  neighbor_bounded_round_arithmetic,
 };
 
 auto selected_mode = failure_mode::pre_init_error;
@@ -59,6 +62,12 @@ auto dense_payload_attempts = 0;
 auto dense_datatype_attempts = 0;
 auto graph_semantic_validation_attempts = 0;
 auto graph_create_attempts = 0;
+auto neighbor_count_exchange_attempts = 0;
+auto neighbor_payload_attempts = 0;
+auto neighbor_datatype_attempts = 0;
+auto neighbor_phase_round_attempts = 0;
+auto neighbor_capacity_after_injection_attempts = 0;
+auto neighbor_graph_communicator = MPI_COMM_NULL;
 auto cached_rank = -1;
 auto cached_size = -1;
 
@@ -72,6 +81,17 @@ constexpr auto secondary_formatter_error = 17292;
 
 [[nodiscard]] auto is_graph_capacity_mode() noexcept -> bool {
   return selected_mode == failure_mode::distributed_graph_degree_capacity;
+}
+
+[[nodiscard]] auto is_neighbor_capacity_mode() noexcept -> bool {
+  return selected_mode == failure_mode::neighbor_receive_offset_capacity ||
+         selected_mode == failure_mode::neighbor_receive_byte_capacity ||
+         selected_mode == failure_mode::neighbor_bounded_round_arithmetic;
+}
+
+[[nodiscard]] auto is_neighbor_receive_capacity_mode() noexcept -> bool {
+  return selected_mode == failure_mode::neighbor_receive_offset_capacity ||
+         selected_mode == failure_mode::neighbor_receive_byte_capacity;
 }
 
 void record_pre_initialization_mpi_call(char const* operation) noexcept {
@@ -88,6 +108,15 @@ void record_pre_initialization_mpi_call(char const* operation) noexcept {
   std::fprintf(stderr, "forbidden MPI call or cleanup after injection: %s\n",
                operation);
   std::_Exit(90);
+}
+
+void record_forbidden_datatype_attempt(char const* operation) noexcept {
+  if (is_neighbor_receive_capacity_mode()) {
+    ++neighbor_datatype_attempts;
+  } else {
+    ++dense_datatype_attempts;
+  }
+  forbidden_failure_path_call(operation);
 }
 
 [[nodiscard]] auto affected_name(MPI_Comm communicator) noexcept
@@ -107,9 +136,16 @@ void record_pre_initialization_mpi_call(char const* operation) noexcept {
         return "dense-operation";
       case failure_mode::distributed_graph_degree_capacity:
         return "graph-validation";
+      case failure_mode::neighbor_receive_offset_capacity:
+      case failure_mode::neighbor_receive_byte_capacity:
+      case failure_mode::neighbor_bounded_round_arithmetic:
+        return "neighbor-operation";
       case failure_mode::pre_init_error:
         break;
     }
+  }
+  if (communicator == neighbor_graph_communicator) {
+    return "neighbor-graph";
   }
   if (communicator == MPI_COMM_WORLD) {
     return "world";
@@ -203,12 +239,20 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int error_code) {
                  "dense-count-exchange-attempts=%d "
                  "dense-payload-attempts=%d dense-datatype-attempts=%d "
                  "graph-semantic-validation-attempts=%d "
-                 "graph-create-attempts=%d\n",
+                 "graph-create-attempts=%d "
+                 "neighbor-count-exchange-attempts=%d "
+                 "neighbor-payload-attempts=%d "
+                 "neighbor-datatype-attempts=%d "
+                 "neighbor-phase-round-attempts=%d "
+                 "neighbor-capacity-after-injection-attempts=%d\n",
                  cached_rank, static_cast<int>(affected.size()),
                  affected.data(), error_string_attempts, cleanup_attempts,
                  capacity_allreduce_attempts, dense_count_exchange_attempts,
                  dense_payload_attempts, dense_datatype_attempts,
-                 graph_semantic_validation_attempts, graph_create_attempts);
+                 graph_semantic_validation_attempts, graph_create_attempts,
+                 neighbor_count_exchange_attempts, neighbor_payload_attempts,
+                 neighbor_datatype_attempts, neighbor_phase_round_attempts,
+                 neighbor_capacity_after_injection_attempts);
     std::_Exit(86);
   }
   return PMPI_Abort(communicator, error_code);
@@ -248,6 +292,50 @@ extern "C" int MPI_Allreduce(void const* send_buffer,
     }
     injection_is_armed = true;
     return PMPI_Allreduce(injected.data(), receive_buffer, count, datatype,
+                          operation, communicator);
+  }
+  if (is_neighbor_capacity_mode() && communicator == tracked_communicator) {
+    if (selected_mode == failure_mode::neighbor_bounded_round_arithmetic &&
+        count == 1 && datatype == MPI_UINT64_T && operation == MPI_MAX) {
+      ++neighbor_phase_round_attempts;
+      if (neighbor_phase_round_attempts > cached_size) {
+        forbidden_failure_path_call(
+            "MPI_Allreduce(neighbor bounded phase count)");
+      }
+      auto injected = *static_cast<std::uint64_t const*>(send_buffer);
+      if (neighbor_phase_round_attempts == 1 && cached_rank == 0) {
+        injected = std::numeric_limits<std::uint64_t>::max();
+        std::fputs(
+            "injected rank-zero bounded neighbor round arithmetic capacity\n",
+            stderr);
+      }
+      if (neighbor_phase_round_attempts == 1) {
+        injection_is_armed = true;
+      }
+      return PMPI_Allreduce(&injected, receive_buffer, count, datatype,
+                            operation, communicator);
+    }
+    if (count == 2 && datatype == MPI_UINT64_T && operation == MPI_BOR) {
+      ++capacity_allreduce_attempts;
+      if (injection_is_armed) {
+        ++neighbor_capacity_after_injection_attempts;
+      }
+      auto const expected_capacity_attempts =
+          selected_mode == failure_mode::neighbor_bounded_round_arithmetic ? 2
+                                                                           : 1;
+      if (capacity_allreduce_attempts > expected_capacity_attempts ||
+          neighbor_capacity_after_injection_attempts > 1 ||
+          send_buffer == nullptr || receive_buffer == nullptr) {
+        forbidden_failure_path_call(
+            "MPI_Allreduce(neighbor capacity resolver shape)");
+      }
+      return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype,
+                            operation, communicator);
+    }
+    if (injection_is_armed) {
+      forbidden_failure_path_call("MPI_Allreduce(neighbor failure path)");
+    }
+    return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype,
                           operation, communicator);
   }
   if (injection_is_armed) {
@@ -328,6 +416,53 @@ extern "C" int MPI_Alltoall(void const* send_buffer,
   return result;
 }
 
+extern "C" int MPI_Neighbor_alltoall(void const* send_buffer,
+                                     int send_count,
+                                     MPI_Datatype send_datatype,
+                                     void* receive_buffer,
+                                     int receive_count,
+                                     MPI_Datatype receive_datatype,
+                                     MPI_Comm communicator) {
+  auto const result = PMPI_Neighbor_alltoall(
+      send_buffer, send_count, send_datatype, receive_buffer, receive_count,
+      receive_datatype, communicator);
+  if (!is_neighbor_capacity_mode()) {
+    return result;
+  }
+
+  ++neighbor_count_exchange_attempts;
+  if (result != MPI_SUCCESS || neighbor_count_exchange_attempts != 1 ||
+      cached_size != 2 || receive_buffer == nullptr || send_count != 1 ||
+      receive_count != 1 || send_datatype != MPI_UINT64_T ||
+      receive_datatype != MPI_UINT64_T ||
+      communicator != tracked_communicator) {
+    forbidden_failure_path_call(
+        "MPI_Neighbor_alltoall(neighbor count exchange shape)");
+  }
+
+  if (is_neighbor_receive_capacity_mode()) {
+    if (cached_rank == 0) {
+      auto* counts = static_cast<std::uint64_t*>(receive_buffer);
+      static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
+      if (selected_mode == failure_mode::neighbor_receive_offset_capacity) {
+        counts[0] = std::numeric_limits<std::size_t>::max();
+        counts[1] = std::uint64_t{1};
+        std::fputs("injected rank-zero neighbor receive offset capacity\n",
+                   stderr);
+      } else {
+        counts[0] = std::numeric_limits<std::size_t>::max() /
+                        sizeof(failure_probe::dense_wire_record) +
+                    std::uint64_t{1};
+        counts[1] = std::uint64_t{0};
+        std::fputs("injected rank-zero neighbor receive byte capacity\n",
+                   stderr);
+      }
+    }
+    injection_is_armed = true;
+  }
+  return result;
+}
+
 extern "C" int MPI_Alltoallv(void const* send_buffer,
                              int const* send_counts,
                              int const* send_displacements,
@@ -367,10 +502,50 @@ extern "C" int MPI_Alltoallv_c(void const* send_buffer,
 }
 #endif
 
+extern "C" int MPI_Neighbor_alltoallv(void const* send_buffer,
+                                      int const* send_counts,
+                                      int const* send_displacements,
+                                      MPI_Datatype send_datatype,
+                                      void* receive_buffer,
+                                      int const* receive_counts,
+                                      int const* receive_displacements,
+                                      MPI_Datatype receive_datatype,
+                                      MPI_Comm communicator) {
+  if (injection_is_armed && is_neighbor_capacity_mode()) {
+    ++neighbor_payload_attempts;
+    forbidden_failure_path_call("MPI_Neighbor_alltoallv(neighbor payload)");
+  }
+  return PMPI_Neighbor_alltoallv(send_buffer, send_counts, send_displacements,
+                                 send_datatype, receive_buffer, receive_counts,
+                                 receive_displacements, receive_datatype,
+                                 communicator);
+}
+
+#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
+extern "C" int MPI_Neighbor_alltoallv_c(void const* send_buffer,
+                                        MPI_Count const* send_counts,
+                                        MPI_Aint const* send_displacements,
+                                        MPI_Datatype send_datatype,
+                                        void* receive_buffer,
+                                        MPI_Count const* receive_counts,
+                                        MPI_Aint const* receive_displacements,
+                                        MPI_Datatype receive_datatype,
+                                        MPI_Comm communicator) {
+  if (injection_is_armed && is_neighbor_capacity_mode()) {
+    ++neighbor_payload_attempts;
+    forbidden_failure_path_call("MPI_Neighbor_alltoallv_c(neighbor payload)");
+  }
+  return PMPI_Neighbor_alltoallv_c(send_buffer, send_counts, send_displacements,
+                                   send_datatype, receive_buffer,
+                                   receive_counts, receive_displacements,
+                                   receive_datatype, communicator);
+}
+#endif
+
 extern "C" int MPI_Get_address(void const* location, MPI_Aint* address) {
-  if (injection_is_armed && is_dense_capacity_mode()) {
-    ++dense_datatype_attempts;
-    forbidden_failure_path_call("MPI_Get_address");
+  if (injection_is_armed &&
+      (is_dense_capacity_mode() || is_neighbor_receive_capacity_mode())) {
+    record_forbidden_datatype_attempt("MPI_Get_address");
   }
   return PMPI_Get_address(location, address);
 }
@@ -380,9 +555,9 @@ extern "C" int MPI_Type_create_struct(int count,
                                       MPI_Aint const displacements[],
                                       MPI_Datatype const datatypes[],
                                       MPI_Datatype* new_datatype) {
-  if (injection_is_armed && is_dense_capacity_mode()) {
-    ++dense_datatype_attempts;
-    forbidden_failure_path_call("MPI_Type_create_struct");
+  if (injection_is_armed &&
+      (is_dense_capacity_mode() || is_neighbor_receive_capacity_mode())) {
+    record_forbidden_datatype_attempt("MPI_Type_create_struct");
   }
   return PMPI_Type_create_struct(count, block_lengths, displacements, datatypes,
                                  new_datatype);
@@ -392,26 +567,26 @@ extern "C" int MPI_Type_create_resized(MPI_Datatype old_datatype,
                                        MPI_Aint lower_bound,
                                        MPI_Aint extent,
                                        MPI_Datatype* new_datatype) {
-  if (injection_is_armed && is_dense_capacity_mode()) {
-    ++dense_datatype_attempts;
-    forbidden_failure_path_call("MPI_Type_create_resized");
+  if (injection_is_armed &&
+      (is_dense_capacity_mode() || is_neighbor_receive_capacity_mode())) {
+    record_forbidden_datatype_attempt("MPI_Type_create_resized");
   }
   return PMPI_Type_create_resized(old_datatype, lower_bound, extent,
                                   new_datatype);
 }
 
 extern "C" int MPI_Type_commit(MPI_Datatype* datatype) {
-  if (injection_is_armed && is_dense_capacity_mode()) {
-    ++dense_datatype_attempts;
-    forbidden_failure_path_call("MPI_Type_commit");
+  if (injection_is_armed &&
+      (is_dense_capacity_mode() || is_neighbor_receive_capacity_mode())) {
+    record_forbidden_datatype_attempt("MPI_Type_commit");
   }
   return PMPI_Type_commit(datatype);
 }
 
 extern "C" int MPI_Type_free(MPI_Datatype* datatype) {
-  if (injection_is_armed && is_dense_capacity_mode()) {
-    ++dense_datatype_attempts;
-    forbidden_failure_path_call("MPI_Type_free");
+  if (injection_is_armed &&
+      (is_dense_capacity_mode() || is_neighbor_receive_capacity_mode())) {
+    record_forbidden_datatype_attempt("MPI_Type_free");
   }
   return PMPI_Type_free(datatype);
 }
@@ -430,6 +605,8 @@ extern "C" int MPI_Comm_dup(MPI_Comm communicator,
       std::fputs("captured dense operation duplicate\n", stderr);
     } else if (is_graph_capacity_mode()) {
       std::fputs("captured distributed-graph validation duplicate\n", stderr);
+    } else if (is_neighbor_capacity_mode()) {
+      std::fputs("captured neighbor operation duplicate\n", stderr);
     }
   }
   return result;
@@ -554,6 +731,38 @@ auto run_pre_initialization_control() -> int {
   static_cast<void>(graph);
   returned_from_failure("distributed-graph-degree-capacity");
 }
+
+[[noreturn]] void run_neighbor_capacity_failure(char const* mode) {
+  auto graph = parhip::mpi::distributed_graph{
+      parhip::mpi::communicator_view{MPI_COMM_WORLD}, {0, 1}};
+  neighbor_graph_communicator = graph.native_handle();
+
+  auto const values_per_destination =
+      selected_mode == failure_mode::neighbor_bounded_round_arithmetic
+          ? std::size_t{3}
+          : std::size_t{1};
+  auto segments = std::vector<std::vector<failure_probe::dense_wire_record>>(
+      graph.destinations().size());
+  for (auto& segment : segments) {
+    segment.resize(values_per_destination,
+                   failure_probe::dense_wire_record{
+                       .value = static_cast<std::uint64_t>(cached_rank + 1)});
+  }
+
+  track_next_duplicate = true;
+  auto const options =
+      selected_mode == failure_mode::neighbor_bounded_round_arithmetic
+          ? parhip::mpi::collective_options{
+                .mpi3_round_ceiling = 2,
+                .force_mpi3 = true,
+            }
+          : parhip::mpi::collective_options{};
+  static_cast<void>(parhip::mpi::neighbor_all_to_all_v(
+      parhip::mpi::segmented_buffer<
+          failure_probe::dense_wire_record>::from_segments(segments),
+      graph, options));
+  returned_from_failure(mode);
+}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -580,6 +789,12 @@ int main(int argc, char* argv[]) {
     selected_mode = failure_mode::dense_receive_byte_capacity;
   } else if (mode == "distributed-graph-degree-capacity") {
     selected_mode = failure_mode::distributed_graph_degree_capacity;
+  } else if (mode == "neighbor-receive-offset-capacity") {
+    selected_mode = failure_mode::neighbor_receive_offset_capacity;
+  } else if (mode == "neighbor-receive-byte-capacity") {
+    selected_mode = failure_mode::neighbor_receive_byte_capacity;
+  } else if (mode == "neighbor-bounded-round-arithmetic") {
+    selected_mode = failure_mode::neighbor_bounded_round_arithmetic;
   } else {
     std::fprintf(stderr, "unknown failure-policy mode: %s\n", argv[1]);
     return 64;
@@ -615,6 +830,12 @@ int main(int argc, char* argv[]) {
       run_dense_receive_capacity_failure("dense-receive-byte-capacity");
     case failure_mode::distributed_graph_degree_capacity:
       run_distributed_graph_degree_capacity_failure();
+    case failure_mode::neighbor_receive_offset_capacity:
+      run_neighbor_capacity_failure("neighbor-receive-offset-capacity");
+    case failure_mode::neighbor_receive_byte_capacity:
+      run_neighbor_capacity_failure("neighbor-receive-byte-capacity");
+    case failure_mode::neighbor_bounded_round_arithmetic:
+      run_neighbor_capacity_failure("neighbor-bounded-round-arithmetic");
     case failure_mode::pre_init_error:
       break;
   }
