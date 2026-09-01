@@ -22,7 +22,8 @@ void initial_partitioning_algorithm::perform_partitioning( MPI_Comm communicator
   if( config.initial_partitioning_algorithm ==
       InitialPartitioningAlgorithm::RANDOMIP) {
     random_initial_partitioning dist_rpart;
-    dist_rpart.perform_partitioning( communicator, config, Q );
+    dist_rpart.perform_partitioning(
+        mpi::communicator_view{communicator}, config, Q);
   } else {
     distributed_evolutionary_partitioning dist_epart;
     dist_epart.perform_partitioning( communicator, config, Q);

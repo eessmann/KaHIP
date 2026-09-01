@@ -4,6 +4,9 @@
 
 namespace parhip::mpi {
 communicator::communicator(communicator_view source) {
+  require_live_intracommunicator(
+      source,
+      "communicator duplication requires a live intracommunicator");
   check_or_abort(MPI_Comm_dup(source.native_handle(), &communicator_),
                  source.native_handle(),
                  "MPI_Comm_dup");
@@ -29,7 +32,10 @@ auto communicator::operator=(communicator&& other) noexcept -> communicator& {
 }
 
 void communicator::reset() noexcept {
-  if (communicator_ != MPI_COMM_NULL && runtime_is_active()) {
+  if (communicator_ != MPI_COMM_NULL) {
+    if (!runtime_is_active()) {
+      abort_on_inactive_mpi_ownership("communicator destruction");
+    }
     auto const free_result = MPI_Comm_free(&communicator_);
     if (free_result != MPI_SUCCESS) {
       // MPI_Comm_free may already have invalidated the saved handle. The
@@ -73,7 +79,10 @@ auto datatype::operator=(datatype&& other) noexcept -> datatype& {
 }
 
 void datatype::reset() noexcept {
-  if (owns_ && handle_ != MPI_DATATYPE_NULL && runtime_is_active()) {
+  if (owns_ && handle_ != MPI_DATATYPE_NULL) {
+    if (!runtime_is_active()) {
+      abort_on_inactive_mpi_ownership("owned datatype destruction");
+    }
     check_or_abort(MPI_Type_free(&handle_),
                    failure_communicator_,
                    "MPI_Type_free");

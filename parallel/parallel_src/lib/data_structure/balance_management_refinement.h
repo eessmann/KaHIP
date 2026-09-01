@@ -9,37 +9,31 @@
 #define BALANCE_MANAGEMENT_REFINEMENT_ZHYKQBYB
 
 #include "balance_management.h"
+#include "communication/mpi_handles.h"
 namespace parhip {
 class parallel_graph_access;
 
 class balance_management_refinement : public balance_management {
-public:
-        balance_management_refinement( parallel_graph_access * G, NodeID num_labels);
-        virtual ~balance_management_refinement();
+ public:
+  balance_management_refinement(parallel_graph_access* graph,
+                                PartitionID total_num_labels);
+  ~balance_management_refinement() override;
 
-        virtual NodeWeight getBlockSize( PartitionID block );
-        virtual void setBlockSize( PartitionID block, NodeWeight block_size ) ;
-        virtual void update_non_contained_block_balance( PartitionID from, PartitionID to, NodeWeight node_weight) {/*noop*/};
+  [[nodiscard]] auto getBlockSize(PartitionID block) -> NodeWeight override;
+  void setBlockSize(PartitionID block, NodeWeight block_size) override;
+  void update_non_contained_block_balance(PartitionID,
+                                          PartitionID,
+                                          NodeWeight) override {}
 
-        virtual void init();
-        virtual void update();
+  void init() override;
+  void update() override;
 
-private:
-        std::vector< NodeWeight > m_total_block_weights;
-        std::vector< NodeWeight > m_local_block_weights;
+ private:
+  void init(mpi::communicator_view communicator);
+  void update(mpi::communicator_view communicator);
+
+  std::vector<NodeWeight> m_total_block_weights;
+  std::vector<NodeWeight> m_local_block_weights;
 };
-
-
-inline
-void balance_management_refinement::setBlockSize( PartitionID block, NodeWeight block_size ) {
-        ULONG delta = block_size - m_total_block_weights[block];
-        m_local_block_weights[block] += delta;
-        m_total_block_weights[block] = block_size;
-}
-
-inline
-NodeWeight balance_management_refinement::getBlockSize( PartitionID block ) {
-        return m_total_block_weights[block];
-}
-}
-#endif /* end of include guard: BALANCE_MANAGEMENT_REFINEMENT_ZHYKQBYB */
+}  // namespace parhip
+#endif  // BALANCE_MANAGEMENT_REFINEMENT_ZHYKQBYB

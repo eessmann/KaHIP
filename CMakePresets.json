@@ -95,6 +95,108 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "ci-serial-gcc",
+      "displayName": "CI serial GCC",
+      "description": "Reproducible GCC release build without MPI",
+      "inherits": "gcc-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-serial-gcc-64bit",
+      "displayName": "CI serial GCC 64-bit",
+      "description": "Reproducible GCC release build with the 64-bit KaHIP API",
+      "inherits": "ci-serial-gcc",
+      "cacheVariables": {
+        "64BITMODE": "ON"
+      }
+    },
+    {
+      "name": "ci-serial-clang",
+      "displayName": "CI serial Clang",
+      "description": "Reproducible Clang release build without MPI",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-mpi-gcc",
+      "displayName": "CI MPI GCC",
+      "description": "Deterministic ParHIP release build with GCC",
+      "inherits": "gcc-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "OFF",
+        "PARHIP": "ON",
+        "DETERMINISTIC_PARHIP": "ON",
+        "KAHIP_ENABLE_MPI_TRACE": "ON",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-mpi-clang",
+      "displayName": "CI MPI Clang",
+      "description": "Deterministic ParHIP release build with Clang",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "OFF",
+        "PARHIP": "ON",
+        "DETERMINISTIC_PARHIP": "ON",
+        "KAHIP_ENABLE_MPI_TRACE": "ON",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-sanitizer-clang",
+      "displayName": "CI Clang ASan and UBSan",
+      "description": "Debug serial build with address and undefined-behaviour sanitizers",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON",
+        "kahip_ENABLE_IPO": "OFF",
+        "kahip_ENABLE_SANITIZERS": "ON",
+        "kahip_ENABLE_SANITIZER_ADDRESS": "ON",
+        "kahip_ENABLE_SANITIZER_UNDEFINED": "ON",
+        "kahip_ENABLE_SANITIZER_LEAK": "OFF",
+        "kahip_ENABLE_SANITIZER_THREAD": "OFF",
+        "kahip_ENABLE_SANITIZER_MEMORY": "OFF"
+      }
+    },
+    {
+      "name": "ci-windows-serial",
+      "displayName": "CI Windows serial",
+      "description": "Reproducible MSVC release build without MPI",
+      "inherits": [
+        "conf-common",
+        "vcpkg-common"
+      ],
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
     }
   ],
   "buildPresets": [
@@ -117,6 +219,48 @@
       "name": "build-unix-clang-release",
       "description": "Build the Clang Release configuration",
       "configurePreset": "unix-clang-release"
+    },
+    {
+      "name": "build-ci-serial-gcc",
+      "description": "Build the CI serial GCC configuration with at most two jobs",
+      "configurePreset": "ci-serial-gcc",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-serial-gcc-64bit",
+      "description": "Build the CI serial GCC 64-bit configuration with at most two jobs",
+      "configurePreset": "ci-serial-gcc-64bit",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-serial-clang",
+      "description": "Build the CI serial Clang configuration with at most two jobs",
+      "configurePreset": "ci-serial-clang",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-mpi-gcc",
+      "description": "Build the CI MPI GCC configuration with at most two jobs",
+      "configurePreset": "ci-mpi-gcc",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-mpi-clang",
+      "description": "Build the CI MPI Clang configuration with at most two jobs",
+      "configurePreset": "ci-mpi-clang",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-sanitizer-clang",
+      "description": "Build the CI sanitizer configuration with at most two jobs",
+      "configurePreset": "ci-sanitizer-clang",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-windows-serial",
+      "description": "Build the CI Windows serial configuration with at most two jobs",
+      "configurePreset": "ci-windows-serial",
+      "jobs": 2
     }
   ],
   "testPresets": [
@@ -160,6 +304,48 @@
       "displayName": "Clang Release tests (strict)",
       "inherits": "test-common",
       "configurePreset": "unix-clang-release"
+    },
+    {
+      "name": "test-ci-serial-gcc",
+      "displayName": "CI serial GCC tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-serial-gcc"
+    },
+    {
+      "name": "test-ci-serial-gcc-64bit",
+      "displayName": "CI serial GCC 64-bit tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-serial-gcc-64bit"
+    },
+    {
+      "name": "test-ci-serial-clang",
+      "displayName": "CI serial Clang tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-serial-clang"
+    },
+    {
+      "name": "test-ci-mpi-gcc",
+      "displayName": "CI MPI GCC tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-mpi-gcc"
+    },
+    {
+      "name": "test-ci-mpi-clang",
+      "displayName": "CI MPI Clang tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-mpi-clang"
+    },
+    {
+      "name": "test-ci-sanitizer-clang",
+      "displayName": "CI Clang sanitizer tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-sanitizer-clang"
+    },
+    {
+      "name": "test-ci-windows-serial",
+      "displayName": "CI Windows serial tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-windows-serial"
     }
   ]
 }

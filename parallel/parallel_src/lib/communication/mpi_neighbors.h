@@ -209,23 +209,33 @@ inline auto sum_is_representable(std::size_t lhs,
   return true;
 }
 
-template <typename T>
-void mpi3_bounded_neighbor_all_to_all_v(
-    segmented_buffer<T> const& sends,
-    std::span<T> receive_storage,
-    std::vector<std::size_t> const& receive_counts,
-    std::vector<std::size_t> const& receive_offsets,
-    MPI_Datatype datatype,
+struct mpi3_bounded_neighbor_phase final {
+  std::optional<std::size_t> destination_index;
+  std::optional<std::size_t> source_index;
+  std::size_t send_total = 0;
+  std::size_t receive_total = 0;
+  std::size_t round_count = 0;
+};
+
+struct mpi3_bounded_neighbor_plan final {
+  std::size_t ceiling = 0;
+  std::vector<mpi3_bounded_neighbor_phase> phases;
+};
+
+[[nodiscard]] inline auto make_mpi3_bounded_neighbor_plan(
+    std::span<std::size_t const> send_counts,
+    std::span<std::size_t const> send_offsets,
+    std::span<std::size_t const> receive_counts,
+    std::span<std::size_t const> receive_offsets,
     std::size_t ceiling,
     distributed_graph const& graph,
-    communicator_view communicator) {
+    communicator_view communicator) -> mpi3_bounded_neighbor_plan {
   auto const rank = static_cast<std::size_t>(communicator.rank());
   auto const size = static_cast<std::size_t>(communicator.size());
-  auto send_counts = std::vector<int>(graph.destinations().size(), 0);
-  auto receive_counts_i = std::vector<int>(graph.sources().size(), 0);
-  auto send_displacements = std::vector<int>(graph.destinations().size(), 0);
-  auto receive_displacements = std::vector<int>(graph.sources().size(), 0);
-  auto phase_round_counts = std::vector<std::size_t>(size);
+  auto result = mpi3_bounded_neighbor_plan{
+      .ceiling = ceiling,
+      .phases = std::vector<mpi3_bounded_neighbor_phase>(size),
+  };
   auto local_capacity = capacity_result{};
 
   for (std::size_t phase = 0; phase < size; ++phase) {
@@ -238,7 +248,7 @@ void mpi3_bounded_neighbor_all_to_all_v(
         graph.destination_index(static_cast<int>(destination_rank));
     auto const source_index = graph.source_index(static_cast<int>(source_rank));
     auto const send_total = destination_index.has_value()
-                                ? sends.counts()[*destination_index]
+                                ? send_counts[*destination_index]
                                 : std::size_t{0};
     auto const receive_total = source_index.has_value()
                                    ? receive_counts[*source_index]
@@ -259,7 +269,13 @@ void mpi3_bounded_neighbor_all_to_all_v(
       continue;
     }
     auto const phase_rounds = static_cast<std::size_t>(phase_rounds_u64);
-    phase_round_counts[phase] = phase_rounds;
+    result.phases[phase] = mpi3_bounded_neighbor_phase{
+        .destination_index = destination_index,
+        .source_index = source_index,
+        .send_total = send_total,
+        .receive_total = receive_total,
+        .round_count = phase_rounds,
+    };
 
     auto ignored = std::size_t{0};
     if (phase_rounds != 0 &&
@@ -273,7 +289,7 @@ void mpi3_bounded_neighbor_all_to_all_v(
       auto const local_send_rounds = bounded_round_count(send_total, ceiling);
       if (!product_is_representable(local_send_rounds - 1, ceiling,
                                     last_chunk_offset) ||
-          !sum_is_representable(sends.offsets()[*destination_index],
+          !sum_is_representable(send_offsets[*destination_index],
                                 last_chunk_offset, last_storage_offset)) {
         local_capacity = with_fatal_capacity_issue(
             local_capacity, capacity_issue::bounded_round_arithmetic_overflow);
@@ -297,54 +313,96 @@ void mpi3_bounded_neighbor_all_to_all_v(
   static_cast<void>(resolve_capacity_collectively(
       local_capacity, communicator.native_handle(), graph.native_handle(),
       "neighbor_all_to_all_v bounded MPI-3 plan"));
+  return result;
+}
 
-  for (std::size_t phase = 0; phase < size; ++phase) {
-    auto const distance_to_wrap = size - rank;
-    auto const destination_rank =
-        phase >= distance_to_wrap ? phase - distance_to_wrap : rank + phase;
-    auto const source_rank =
-        rank >= phase ? rank - phase : size - (phase - rank);
-    auto const destination_index =
-        graph.destination_index(static_cast<int>(destination_rank));
-    auto const source_index = graph.source_index(static_cast<int>(source_rank));
-    auto const send_total = destination_index.has_value()
-                                ? sends.counts()[*destination_index]
-                                : std::size_t{0};
-    auto const receive_total = source_index.has_value()
-                                   ? receive_counts[*source_index]
-                                   : std::size_t{0};
+struct mpi3_bounded_neighbor_round final {
+  std::optional<std::size_t> destination_index;
+  std::optional<std::size_t> source_index;
+  std::optional<std::size_t> send_storage_offset;
+  std::optional<std::size_t> receive_storage_offset;
+  int send_count = 0;
+  int receive_count = 0;
+};
 
-    for (std::size_t round = 0; round < phase_round_counts[phase]; ++round) {
+[[nodiscard]] inline auto make_mpi3_bounded_neighbor_round(
+    mpi3_bounded_neighbor_plan const& plan,
+    std::size_t phase_index,
+    std::size_t round_index,
+    std::span<std::size_t const> send_offsets,
+    std::span<std::size_t const> receive_offsets) noexcept
+    -> mpi3_bounded_neighbor_round {
+  auto const& phase = plan.phases[phase_index];
+  auto const chunk_offset = round_index * plan.ceiling;
+  auto const send_chunk =
+      chunk_offset < phase.send_total
+          ? std::min(plan.ceiling, phase.send_total - chunk_offset)
+          : std::size_t{0};
+  auto const receive_chunk =
+      chunk_offset < phase.receive_total
+          ? std::min(plan.ceiling, phase.receive_total - chunk_offset)
+          : std::size_t{0};
+  return mpi3_bounded_neighbor_round{
+      .destination_index = phase.destination_index,
+      .source_index = phase.source_index,
+      .send_storage_offset =
+          send_chunk == 0
+              ? std::nullopt
+              : std::optional<std::size_t>{
+                    send_offsets[*phase.destination_index] + chunk_offset},
+      .receive_storage_offset =
+          receive_chunk == 0
+              ? std::nullopt
+              : std::optional<std::size_t>{
+                    receive_offsets[*phase.source_index] + chunk_offset},
+      .send_count = static_cast<int>(send_chunk),
+      .receive_count = static_cast<int>(receive_chunk),
+  };
+}
+
+template <typename T>
+void mpi3_bounded_neighbor_all_to_all_v(
+    segmented_buffer<T> const& sends,
+    std::span<T> receive_storage,
+    std::vector<std::size_t> const& receive_counts,
+    std::vector<std::size_t> const& receive_offsets,
+    MPI_Datatype datatype,
+    std::size_t ceiling,
+    distributed_graph const& graph,
+    communicator_view communicator) {
+  auto send_counts = std::vector<int>(graph.destinations().size(), 0);
+  auto receive_counts_i = std::vector<int>(graph.sources().size(), 0);
+  auto send_displacements = std::vector<int>(graph.destinations().size(), 0);
+  auto receive_displacements = std::vector<int>(graph.sources().size(), 0);
+  auto const plan = make_mpi3_bounded_neighbor_plan(
+      sends.counts(), sends.offsets(), receive_counts, receive_offsets, ceiling,
+      graph, communicator);
+
+  for (std::size_t phase = 0; phase < plan.phases.size(); ++phase) {
+    for (std::size_t round = 0; round < plan.phases[phase].round_count;
+         ++round) {
       std::ranges::fill(send_counts, 0);
       std::ranges::fill(receive_counts_i, 0);
-      auto const chunk_offset = round * ceiling;
-      auto const send_chunk = chunk_offset < send_total
-                                  ? std::min(ceiling, send_total - chunk_offset)
-                                  : std::size_t{0};
-      auto const receive_chunk =
-          chunk_offset < receive_total
-              ? std::min(ceiling, receive_total - chunk_offset)
-              : std::size_t{0};
+      auto const layout = make_mpi3_bounded_neighbor_round(
+          plan, phase, round, sends.offsets(), receive_offsets);
 
-      if (destination_index.has_value()) {
-        send_counts[*destination_index] =
-            checked_int(send_chunk, "MPI-3 bounded neighbor send chunk");
+      if (layout.destination_index.has_value()) {
+        send_counts[*layout.destination_index] = layout.send_count;
       }
-      if (source_index.has_value()) {
-        receive_counts_i[*source_index] =
-            checked_int(receive_chunk, "MPI-3 bounded neighbor receive chunk");
+      if (layout.source_index.has_value()) {
+        receive_counts_i[*layout.source_index] = layout.receive_count;
       }
 
-      auto const* send_buffer = sends.storage().data();
-      if (send_chunk != 0) {
-        auto const offset = sends.offsets()[*destination_index] + chunk_offset;
-        send_buffer += offset;
-      }
-      auto* receive_buffer = receive_storage.data();
-      if (receive_chunk != 0) {
-        auto const offset = receive_offsets[*source_index] + chunk_offset;
-        receive_buffer += offset;
-      }
+      auto const* send_buffer =
+          layout.send_storage_offset.has_value()
+              ? static_cast<void const*>(
+                    sends.storage().data() + *layout.send_storage_offset)
+              : static_cast<void const*>(send_counts.data());
+      auto* receive_buffer =
+          layout.receive_storage_offset.has_value()
+              ? static_cast<void*>(receive_storage.data() +
+                                   *layout.receive_storage_offset)
+              : static_cast<void*>(receive_counts_i.data());
 
       check_or_abort(MPI_Neighbor_alltoallv(
                          send_buffer, send_counts.data(),

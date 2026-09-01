@@ -1,5 +1,5 @@
 set(
-    MODIFIED_KAHIP_PRIVATE_INCLUDE_DIRS
+    MODIFIED_KAHIP_HEADER_BASE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/tools
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
@@ -8,9 +8,10 @@ set(
 )
 
 function(kahip_configure_modified_object target)
-    target_include_directories(
+    kahip_add_header_root_file_sets(
         ${target}
-        BEFORE PUBLIC ${MODIFIED_KAHIP_PRIVATE_INCLUDE_DIRS}
+        modified_header_root
+        ${MODIFIED_KAHIP_HEADER_BASE_DIRS}
     )
     target_link_libraries(
         ${target}
@@ -34,10 +35,6 @@ file(
     GLOB_RECURSE MODIFIED_KAHIP_COLLECTIVE_HEADERS
     CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/parallel_mh/*.h"
-)
-list(
-    APPEND MODIFIED_KAHIP_COLLECTIVE_HEADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/lib/tools/graph_communication.h"
 )
 
 set(LIBMODIFIED_KAFFPA_SOURCE_FILES
@@ -103,12 +100,21 @@ add_library(
     OBJECT
     ${LIBMODIFIED_KAFFPA_SOURCE_FILES}
 )
+kahip_configure_modified_object(modified_kahip_core_obj)
 kahip_add_private_header_set(
     modified_kahip_core_obj
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${MODIFIED_KAHIP_CORE_HEADERS}
 )
-kahip_configure_modified_object(modified_kahip_core_obj)
+target_sources(
+    modified_kahip_core_obj
+    PRIVATE
+        FILE_SET shared_bipartition_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+        FILES
+            "${PROJECT_SOURCE_DIR}/lib/partition/initial_partitioning/bipartition_candidate.h"
+)
 
 set(LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES
     lib/parallel_mh/parallel_mh_async.cpp
@@ -116,13 +122,13 @@ set(LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES
     lib/parallel_mh/galinier_combine/gal_combine.cpp
     lib/parallel_mh/galinier_combine/construct_partition.cpp
     lib/parallel_mh/exchange/exchanger.cpp
-    lib/tools/graph_communication.cpp
 )
 add_library(
     modified_kahip_collective_obj
     OBJECT
     ${LIBMODIFIED_KAFFPA_PARALLEL_SOURCE_FILES}
 )
+kahip_configure_modified_object(modified_kahip_collective_obj)
 kahip_add_private_header_set(
     modified_kahip_collective_obj
     "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -138,8 +144,24 @@ target_sources(
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_collectives.h"
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
 )
-kahip_configure_modified_object(modified_kahip_collective_obj)
 target_link_libraries(modified_kahip_collective_obj PRIVATE spdlog::spdlog)
+
+add_library(
+    modified_kahip_evolutionary_interface_obj
+    OBJECT
+    interface/kaHIP_evolutionary_interface.cpp
+)
+kahip_configure_modified_object(modified_kahip_evolutionary_interface_obj)
+kahip_add_private_header_set(
+    modified_kahip_evolutionary_interface_obj
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_interface.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_interface_internal.h"
+)
+target_link_libraries(
+    modified_kahip_evolutionary_interface_obj
+    PRIVATE spdlog::spdlog
+)
 
 add_library(libmodified_kahip_interface STATIC interface/kaHIP_interface.cpp)
 kahip_add_private_header_set(
@@ -149,9 +171,16 @@ kahip_add_private_header_set(
 )
 target_link_libraries(
     libmodified_kahip_interface
-    PRIVATE modified_kahip_core_obj modified_kahip_collective_obj
+    PRIVATE
+        modified_kahip_core_obj
+        modified_kahip_collective_obj
+        modified_kahip_evolutionary_interface_obj
 )
 target_link_libraries(libmodified_kahip_interface PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(libmodified_kahip_interface PRIVATE MPI::MPI_CXX)
 target_link_libraries(libmodified_kahip_interface PRIVATE kahip_options kahip_warnings)
-target_include_directories(libmodified_kahip_interface PUBLIC interface)
+kahip_add_header_root_file_sets(
+    libmodified_kahip_interface
+    modified_interface_header_root
+    "${CMAKE_CURRENT_SOURCE_DIR}/interface"
+)

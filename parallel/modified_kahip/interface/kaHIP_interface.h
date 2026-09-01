@@ -12,8 +12,12 @@
 
 #include <mpi.h>
 
+#define KAHIP_MODIFIED_NOEXCEPT noexcept
+
 extern "C"
 {
+#else
+#define KAHIP_MODIFIED_NOEXCEPT
 #endif
 
 const int FAST            = 0;
@@ -44,11 +48,14 @@ void kaffpaE(int* n, int* vwgt, int* xadj, int* adjcwgt,
                     bool graph_partitioned, int time_limit, int seed, 
                     int mode, 
                     MPI_Comm communicator, 
-                    int* edgecut, double* balance, int* part); 
+                    int* edgecut, double* balance, int* part)
+                    KAHIP_MODIFIED_NOEXCEPT;
 
 
 #ifdef __cplusplus
 }
 #endif
+
+#undef KAHIP_MODIFIED_NOEXCEPT
 
 #endif /* end of include guard: KAFFPA_INTERFACE_RYEEZ6WJ */

@@ -11,6 +11,10 @@
 #ifdef USE_OPENMP
 #include <omp.h>
 #endif
+#ifndef _WIN32
+#include <regex.h>
+#endif
+#include <cstring>
 #include <string>
 #include <sstream>
 #ifdef _WIN32
@@ -26,7 +30,12 @@ int parse_parameters(int argn, char **argv,
                      std::string & graph_filename, 
                      bool & is_graph_weighted, 
                      bool & suppress_program_output, 
-                     bool & recursive) {
+                     bool & recursive,
+                     bool *requested_early_exit = nullptr) {
+
+        if (requested_early_exit != nullptr) {
+                *requested_early_exit = false;
+        }
 
         const char *progname = argv[0];
 
@@ -359,6 +368,9 @@ int parse_parameters(int argn, char **argv,
         int nerrors = arg_parse(argn, argv, argtable);
 
         if (version->count > 0) {
+                if (requested_early_exit != nullptr) {
+                        *requested_early_exit = true;
+                }
                 std::cout <<  KAHIPVERSION  << std::endl;
                 arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
                 return 1;
@@ -366,6 +378,9 @@ int parse_parameters(int argn, char **argv,
 
         // Catch case that help was requested.
         if (help->count > 0) {
+                if (requested_early_exit != nullptr) {
+                        *requested_early_exit = true;
+                }
                 printf("Usage: %s", progname);
                 arg_print_syntax(stdout, argtable, "\n");
                 arg_print_glossary(stdout, argtable,"  %-40s %s\n");

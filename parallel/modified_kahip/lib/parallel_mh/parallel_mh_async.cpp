@@ -6,11 +6,16 @@
  *****************************************************************************/
 
 #include <algorithm>
-#include <fstream>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <mpi.h>
 #include <sstream>
-#include <stdio.h>
+#include <utility>
 
 #include "diversifyer.h"
 #include "exchange/exchanger.h"
@@ -23,45 +28,46 @@
 #include "quality_metrics.h"
 #include "random_functions.h"
 namespace kahip::modified {
-parallel_mh_async::parallel_mh_async(): MASTER(0), m_time_limit(0) {
-  m_communicator          = MPI_COMM_WORLD;
-  m_best_global_objective = std::numeric_limits<EdgeWeight>::max();
-  m_best_cycle_objective  = std::numeric_limits<EdgeWeight>::max();
-  m_rounds                = 0;
-  m_termination           = false;
-  MPI_Comm_rank( m_communicator, &m_rank);
-  MPI_Comm_size( m_communicator, &m_size);
-}
+parallel_mh_async::parallel_mh_async()
+    : parallel_mh_async(MPI_COMM_WORLD) {}
 
-parallel_mh_async::parallel_mh_async(MPI_Comm communicator) : MASTER(0), m_time_limit(0) {
-  m_best_global_objective = std::numeric_limits<EdgeWeight>::max();
-  m_best_cycle_objective  = std::numeric_limits<EdgeWeight>::max();
-  m_rounds                = 0;
-  m_termination           = false;
-  m_communicator          = communicator;
-  MPI_Comm_rank( m_communicator, &m_rank);
-  MPI_Comm_size( m_communicator, &m_size);
+parallel_mh_async::parallel_mh_async(MPI_Comm communicator)
+    : m_communicator(
+          std::make_unique<
+              ::kahip::parallel_mh::owned_evolutionary_communicator>(
+              communicator)),
+      m_rank(m_communicator->rank()),
+      m_size(m_communicator->size()) {}
 
-}
-
-parallel_mh_async::~parallel_mh_async() {
-  delete[] m_best_global_map;
-}
+parallel_mh_async::~parallel_mh_async() = default;
 
 void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_config, graph_access & G) {
-  m_time_limit      = partition_config.time_limit;
-  m_island          = new population(m_communicator, partition_config);
-  m_best_global_map = new PartitionID[G.number_of_nodes()];
+  m_time_limit = partition_config.time_limit;
+  m_rounds = 0;
+  m_island = std::make_unique<population>(m_communicator->native_handle(),
+                                          partition_config);
 
-  srand(partition_config.seed*m_size+m_rank);
-  random_functions::setSeed(partition_config.seed*m_size+m_rank);
+  auto const derived_seed =
+      static_cast<std::int64_t>(partition_config.seed) * m_size + m_rank;
+  if (!std::in_range<int>(derived_seed)) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator->native_handle(), "evolutionary random seed derivation",
+        "rank-derived random seed exceeds the int domain");
+  }
+  auto const local_seed = static_cast<int>(derived_seed);
+  std::srand(local_seed);
+  random_functions::setSeed(local_seed);
 
   PartitionConfig ini_working_config  = partition_config;
   initialize( ini_working_config, G);
 
   m_t.restart();
   if( !partition_config.ultra_fast_kaffpaE_interfacecall ) {
-    exchanger ex(m_communicator);
+    // Isend/Iprobe intentionally implement the paper's asynchronous
+    // evolutionary rumor spreading, not a collective-shaped redistribution.
+    // exchanger::finish still gives every request and payload an exact,
+    // collective teardown lifetime before this scope ends.
+    exchanger ex(m_communicator->native_handle());
     do {
       PartitionConfig working_config  = partition_config;
 
@@ -81,7 +87,8 @@ void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_c
 
       //push and recv
       if( m_t.elapsed() <= m_time_limit && m_size > 1) {
-        unsigned messages = ceil(log(m_size));
+        auto const messages =
+            static_cast<unsigned>(std::ceil(std::log(m_size)));
         for( unsigned i = 0; i < messages; i++) {
           ex.push_best( working_config, G, *m_island );
           ex.recv_incoming( working_config, G, *m_island );
@@ -90,6 +97,7 @@ void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_c
 
       m_rounds++;
     } while( m_t.elapsed() <= m_time_limit );
+    ex.finish(static_cast<std::size_t>(G.number_of_nodes()));
   }
 
   collect_best_partitioning(G, partition_config);
@@ -108,7 +116,7 @@ void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_c
     m_island->write_log(filename);
   }
 
-  delete m_island;
+  m_island.reset();
 }
 
 void parallel_mh_async::initialize(PartitionConfig & working_config, graph_access & G) {
@@ -140,12 +148,22 @@ void parallel_mh_async::initialize(PartitionConfig & working_config, graph_acces
   double fraction     = working_config.mh_initial_population_fraction;
 
   if( m_rank == ROOT ) {
-    double fraction_to_spend_for_IP = (double)m_time_limit / fraction;
-    population_size                 = ceil(fraction_to_spend_for_IP / time_spend);
+    auto const estimate = ::kahip::parallel_mh::estimate_population_size(
+        m_time_limit, fraction, time_spend,
+        working_config.mh_easy_construction);
+    if (!estimate.has_value()) {
+      ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+          m_communicator->native_handle(),
+          "evolutionary population-size estimation",
+          "time limit, initial fraction, and elapsed time must be finite and "
+          "within their valid domains");
+    }
+    population_size = *estimate;
   }
 
   population_size = ::kahip::parallel_mh::broadcast_population_size(
-      m_communicator, population_size, working_config.mh_easy_construction);
+      m_communicator->native_handle(), population_size,
+      working_config.mh_easy_construction);
   std::cout <<  "poolsize = " <<  population_size  << std::endl;
 
   //set S
@@ -176,7 +194,7 @@ NodeWeight max_domain_weight = 0;
 
   auto const best_global_objective =
       ::kahip::parallel_mh::select_and_broadcast_best_partition(
-          m_communicator, min_objective, max_domain_weight,
+          m_communicator->native_handle(), min_objective, max_domain_weight,
           config.upper_bound_partition, best_local_map.data(),
           best_local_map.size());
 

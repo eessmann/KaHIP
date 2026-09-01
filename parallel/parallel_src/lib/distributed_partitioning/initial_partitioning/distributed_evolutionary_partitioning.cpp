@@ -5,6 +5,10 @@
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
 
+#include <cstddef>
+#include <span>
+
+#include "communication/mpi_fixed_broadcast.h"
 #include "communication/mpi_tools.h"
 #include "distributed_evolutionary_partitioning.h"
 #include "kaHIP_interface.h"
@@ -42,7 +46,8 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
 
   int* partition_map = new int[n];
 
-  PEID rank; MPI_Comm_rank( communicator, &rank);
+  auto const mpi_communicator = mpi::communicator_view{communicator};
+  PEID const rank = mpi_communicator.rank();
 
   EdgeWeight prev_cut              = 0;
   NodeWeight prev_max_block_weight = 0;
@@ -59,9 +64,9 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
   }
 
   if( config.vcycle ) {
-    MPI_Bcast(partition_map, n, MPI_INT, ROOT, communicator);
-    MPI_Bcast(&prev_cut, 1 , MPI_LONG, ROOT, communicator);
-    MPI_Bcast(&prev_max_block_weight, 1 , MPI_LONG, ROOT, communicator);
+    mpi::broadcast_vcycle_state(
+        std::span<int>{partition_map, static_cast<std::size_t>(n)}, prev_cut,
+        prev_max_block_weight, ROOT, mpi_communicator);
   }
 
   double inbalance       = config.inbalance/100.0;

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+exec systemd-run --user --scope \
+  -p MemoryHigh=28G \
+  -p MemoryMax=30G \
+  -p MemorySwapMax=2G \
+  "$@"

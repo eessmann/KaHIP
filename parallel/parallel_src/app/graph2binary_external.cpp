@@ -5,48 +5,43 @@
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
 
-#include <stdio.h>
+#include <cstdlib>
 #include <iostream>
+#include <string>
+
+#include "communication/mpi_application.h"
 #include "io/parallel_graph_io.h"
 
-using namespace std;
+int main(int argument_count, char** argument_values) {
+  using namespace parhip;
+  mpi::application_runtime runtime{argument_count, argument_values,
+                                   "graph2binary_external executable"};
+  return runtime.execute([&](mpi::communicator_view communicator) -> int {
+    auto const rank = communicator.rank();
+    auto const size = communicator.size();
+    if (rank == ROOT) {
+      std::cout << "program converts a METIS graph file into a binary "
+                   "(distributed graph format) file.\n";
+    }
+    if (argument_count != 3) {
+      if (rank == ROOT) {
+        std::cout
+            << "usage: graph2binary_external metisfile outputfilename\n";
+      }
+      return EXIT_SUCCESS;
+    }
+    if (size != 1) {
+      if (rank == ROOT) {
+        std::cout << "currently only one process supported.\n";
+      }
+      return EXIT_SUCCESS;
+    }
 
-const long fileTypeVersionNumber = 2;
-const long header_count    = 3;
-
-int main(int argn, char **argv)
-{
-        using namespace parhip;
-        std::cout <<  "program converts a METIS graph file into a binary (distributed graph format) file. "  << std::endl;
-
-        MPI_Init(&argn, &argv);    /* starts MPI */
-
-        int rank, size;
-        MPI_Comm_rank( MPI_COMM_WORLD, &rank);
-        MPI_Comm_size( MPI_COMM_WORLD, &size);
-
-        if(argn != 3) {
-                if( rank == ROOT ) {
-                        std::cout <<  "usage: " ;
-                        std::cout <<  "graph2binary_external metisfile outputfilename"  << std::endl;
-                }
-                MPI_Finalize();
-                return 0;
-        }
-
-        if( size > 1 ) {
-                std::cout <<  "currently only one process supported."  << std::endl;
-                MPI_Finalize();
-                return 0;
-        }
-
-        string graph_filename(argv[1]);
-        string filename(argv[2]);
-
-        std::cout <<  "Reading and writing graph " << graph_filename  << std::endl;
-        parallel_graph_io::writeGraphExternallyBinary(graph_filename, filename);
-        
-        MPI_Finalize();
-        return 0;
+    auto const graph_filename = std::string{argument_values[1]};
+    auto const output_filename = std::string{argument_values[2]};
+    std::cout << "Reading and writing graph " << graph_filename << '\n';
+    parallel_graph_io::writeGraphExternallyBinary(graph_filename,
+                                                  output_filename);
+    return EXIT_SUCCESS;
+  });
 }
-

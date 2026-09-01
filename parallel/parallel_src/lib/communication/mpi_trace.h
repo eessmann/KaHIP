@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "communication/mpi_error.h"
+#include "communication/mpi_failure.h"
 #include "communication/mpi_handles.h"
 
 #ifndef KAHIP_ENABLE_MPI_TRACE
@@ -410,8 +410,9 @@ inline hierarchy_position hierarchy{
   auto length = rank == 0
                     ? static_cast<unsigned long long>(root_value.size())
                     : 0ULL;
-  check(MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, communicator),
-        "MPI_Bcast(trace string length)");
+  ::parhip::mpi::check_or_abort(
+      MPI_Bcast(&length, 1, MPI_UNSIGNED_LONG_LONG, 0, communicator),
+      communicator, "MPI_Bcast(trace string length)");
   if (length >
       static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
     throw std::runtime_error{"MPI trace run ID is too long"};
@@ -421,9 +422,10 @@ inline hierarchy_position hierarchy{
   if (rank == 0) {
     std::ranges::copy(root_value, bytes.begin());
   }
-  check(MPI_Bcast(bytes.data(), static_cast<int>(length), MPI_CHAR, 0,
-                  communicator),
-        "MPI_Bcast(trace string payload)");
+  ::parhip::mpi::check_or_abort(
+      MPI_Bcast(bytes.data(), static_cast<int>(length), MPI_CHAR, 0,
+                communicator),
+      communicator, "MPI_Bcast(trace string payload)");
   return {bytes.begin(), bytes.end()};
 }
 
@@ -431,12 +433,14 @@ inline hierarchy_position hierarchy{
     MPI_Comm communicator,
     char const* local_base_path) -> std::optional<std::string> {
   int rank = 0;
-  check(MPI_Comm_rank(communicator, &rank), "MPI_Comm_rank(trace path)");
+  ::parhip::mpi::check_or_abort(MPI_Comm_rank(communicator, &rank),
+                                communicator, "MPI_Comm_rank(trace path)");
 
   auto const local_present = local_base_path == nullptr ? 0 : 1;
   auto root_present = rank == 0 ? local_present : 0;
-  check(MPI_Bcast(&root_present, 1, MPI_INT, 0, communicator),
-        "MPI_Bcast(trace path presence)");
+  ::parhip::mpi::check_or_abort(
+      MPI_Bcast(&root_present, 1, MPI_INT, 0, communicator), communicator,
+      "MPI_Bcast(trace path presence)");
   auto const root_path = broadcast_string(
       communicator, rank,
       rank == 0 && local_base_path != nullptr ? local_base_path : "");
@@ -445,9 +449,10 @@ inline hierarchy_position hierarchy{
       (local_present != 0 && std::string_view{local_base_path} != root_path);
   auto mismatch = local_mismatch ? 1 : 0;
   auto any_mismatch = 0;
-  check(MPI_Allreduce(&mismatch, &any_mismatch, 1, MPI_INT, MPI_MAX,
-                      communicator),
-        "MPI_Allreduce(trace path agreement)");
+  ::parhip::mpi::check_or_abort(
+      MPI_Allreduce(&mismatch, &any_mismatch, 1, MPI_INT, MPI_MAX,
+                    communicator),
+      communicator, "MPI_Allreduce(trace path agreement)");
   if (any_mismatch != 0) {
     throw std::runtime_error{
         "MPI trace path differs across communicator ranks"};
@@ -484,9 +489,9 @@ inline hierarchy_position hierarchy{
   }
 
   int rank = 0;
-  if (MPI_Comm_rank(communicator, &rank) != MPI_SUCCESS) {
-    throw std::runtime_error{"MPI trace could not query rank"};
-  }
+  ::parhip::mpi::check_or_abort(MPI_Comm_rank(communicator, &rank),
+                                communicator,
+                                "MPI_Comm_rank(trace run ID)");
   auto root_run_id = detail::broadcast_string(
       communicator, rank,
       rank == 0 ? local_run_id.value_or(std::string{}) : std::string{});
@@ -494,10 +499,10 @@ inline hierarchy_position hierarchy{
       local_run_id ? *local_run_id != root_run_id : !root_run_id.empty();
   auto mismatch = local_mismatch ? 1 : 0;
   auto any_mismatch = 0;
-  if (MPI_Allreduce(&mismatch, &any_mismatch, 1, MPI_INT, MPI_MAX,
-                    communicator) != MPI_SUCCESS) {
-    throw std::runtime_error{"MPI trace run-ID validation failed"};
-  }
+  ::parhip::mpi::check_or_abort(
+      MPI_Allreduce(&mismatch, &any_mismatch, 1, MPI_INT, MPI_MAX,
+                    communicator),
+      communicator, "MPI_Allreduce(trace run-ID agreement)");
   if (any_mismatch != 0) {
     throw std::runtime_error{
         "MPI trace run ID differs across communicator ranks"};

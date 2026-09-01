@@ -11,24 +11,47 @@
 #include <math.h>
 #include <mpi.h>
 #include <sstream>
+#include <streambuf>
 
 #include "diversifyer.h"
 #include "galinier_combine/gal_combine.h"
 #include "graph_partitioner.h"
+#include "parallel_mh/evolutionary_collectives.h"
 #include "population.h"
 #include "quality_metrics.h"
 #include "random_functions.h"
 #include "timer.h"
 #include "uncoarsening/refinement/cycle_improvements/cycle_refinement.h"
 namespace kahip::modified {
-population::population( MPI_Comm communicator, const PartitionConfig & partition_config ) {
-  m_population_size    = partition_config.mh_pool_size;
-  m_no_partition_calls = 0;
-  m_num_NCs            = partition_config.mh_num_ncs_to_compute;
-  m_num_NCs_computed   = 0;
-  m_num_ENCs           = 0;
-  m_time_stamp         = 0;
-  m_communicator       = communicator;
+namespace {
+class null_streambuf final : public std::streambuf {
+ protected:
+  auto overflow(traits_type::int_type character)
+      -> traits_type::int_type override {
+    return traits_type::not_eof(character);
+  }
+};
+
+class scoped_output_suppression final {
+ public:
+  scoped_output_suppression() : previous_(std::cout.rdbuf(&sink_)) {}
+  ~scoped_output_suppression() { std::cout.rdbuf(previous_); }
+
+  scoped_output_suppression(scoped_output_suppression const&) = delete;
+  auto operator=(scoped_output_suppression const&)
+      -> scoped_output_suppression& = delete;
+
+ private:
+  null_streambuf sink_;
+  std::streambuf* previous_;
+};
+}  // namespace
+
+population::population(MPI_Comm communicator,
+                       PartitionConfig const& partition_config)
+    : m_population_size(partition_config.mh_pool_size),
+      m_num_NCs(partition_config.mh_num_ncs_to_compute),
+      m_communicator(communicator) {
   m_global_timer.restart();
 }
 
@@ -51,17 +74,9 @@ void population::createIndividuum(const PartitionConfig & config,
   graph_partitioner partitioner;
   quality_metrics qm;
 
-  std::ofstream ofs;
-  std::streambuf* backup = std::cout.rdbuf();
-  ofs.open("/dev/null");
-  std::cout.rdbuf(ofs.rdbuf());
-
-  timer t; t.restart();
-
   if(config.buffoon) { // graph is weighted -> no negative cycle detection yet
+    auto suppression = scoped_output_suppression{};
     partitioner.perform_partitioning(copy, G);
-    ofs.close();
-    std::cout.rdbuf(backup);
   } else {
     if(config.kabapE) {
       double real_epsilon        = config.imbalance/100.0;
@@ -70,10 +85,10 @@ void population::createIndividuum(const PartitionConfig & config,
       double epsilon             = random_functions::nextDouble(lb,ub);
       copy.upper_bound_partition = (1+epsilon)*ceil(config.largest_graph_weight/(double)config.k);
 
-      partitioner.perform_partitioning(copy, G);
-
-      ofs.close();
-      std::cout.rdbuf(backup);
+      {
+        auto suppression = scoped_output_suppression{};
+        partitioner.perform_partitioning(copy, G);
+      }
 
       complete_boundary boundary(&G);
       boundary.build();
@@ -86,9 +101,8 @@ void population::createIndividuum(const PartitionConfig & config,
       cycle_refinement cr;
       cr.perform_refinement(copy, G, boundary);
     } else {
+      auto suppression = scoped_output_suppression{};
       partitioner.perform_partitioning(copy, G);
-      ofs.close();
-      std::cout.rdbuf(backup);
     }
   }
 
@@ -244,45 +258,58 @@ void population::combine(const PartitionConfig & partition_config,
   std::cout <<  "objective mh " <<  output_ind.objective << std::endl;
 }
 
-void population::combine_cross(const PartitionConfig & partition_config,
-                graph_access & G,
-                Individuum & first_ind,
-                Individuum & output_ind) {
+void population::combine_cross(PartitionConfig const& partition_config,
+                               graph_access& G,
+                               Individuum& first_ind,
+                               Individuum& output_ind) {
+  if (partition_config.mh_cross_combine_original_k) {
+    auto communicator_size = 0;
+    ::kahip::parallel_mh::detail::check_mpi(
+        MPI_Comm_size(m_communicator, &communicator_size), m_communicator,
+        "MPI_Comm_size(evolutionary cross combine)");
+    if (communicator_size <= 0) {
+      ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+          m_communicator, "evolutionary cross combine",
+          "MPI returned an invalid evolutionary communicator size");
+    }
+    // Evolutionary workers enter combine_cross asynchronously. A conditional
+    // collective here cannot be matched by peers and therefore cannot be made
+    // safe without changing the algorithm's scheduling semantics.
+    if (communicator_size > 1) {
+      ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+          m_communicator, "evolutionary cross combine",
+          "original-k cross combine is incompatible with asynchronous "
+          "multi-rank entry");
+    }
+  }
 
   PartitionConfig config = partition_config;
   G.resizeSecondPartitionIndex(G.number_of_nodes());
 
   int lowerbound = config.k / 4;
-  lowerbound     = std::max(2, lowerbound);
-  int kfactor    = random_functions::nextInt(lowerbound,4*config.k);
-  kfactor = std::min( kfactor, (int)G.number_of_nodes());
+  lowerbound = std::max(2, lowerbound);
+  int kfactor = random_functions::nextInt(lowerbound, 4 * config.k);
+  kfactor = std::min(kfactor, (int)G.number_of_nodes());
 
-  if( config.mh_cross_combine_original_k ) {
-    MPI_Bcast(&kfactor, 1, MPI_INT, 0, m_communicator);
-  }
+  unsigned larger_imbalance = random_functions::nextInt(config.epsilon, 25);
+  double epsilon = larger_imbalance / 100.0;
 
-  unsigned larger_imbalance = random_functions::nextInt(config.epsilon,25);
-  double epsilon = larger_imbalance/100.0;
-
-
-  PartitionConfig cross_config                      = config;
-  cross_config.k                                    = kfactor;
+  PartitionConfig cross_config = config;
+  cross_config.k = kfactor;
   cross_config.kaffpa_perfectly_balanced_refinement = false;
-  cross_config.upper_bound_partition                = (1+epsilon)*ceil(partition_config.largest_graph_weight/(double)cross_config.k);
-  cross_config.refinement_scheduling_algorithm      = REFINEMENT_SCHEDULING_ACTIVE_BLOCKS;
-  cross_config.combine                              = false;
-  cross_config.graph_allready_partitioned           = false;
-
-  std::ofstream ofs;
-  std::streambuf* backup = std::cout.rdbuf();
-  ofs.open("/dev/null");
-  std::cout.rdbuf(ofs.rdbuf());
+  cross_config.upper_bound_partition =
+      (1 + epsilon) *
+      ceil(partition_config.largest_graph_weight / (double)cross_config.k);
+  cross_config.refinement_scheduling_algorithm =
+      REFINEMENT_SCHEDULING_ACTIVE_BLOCKS;
+  cross_config.combine = false;
+  cross_config.graph_allready_partitioned = false;
 
   graph_partitioner partitioner;
-  partitioner.perform_partitioning(cross_config, G);
-
-  ofs.close();
-  std::cout.rdbuf(backup);
+  {
+    auto suppression = scoped_output_suppression{};
+    partitioner.perform_partitioning(cross_config, G);
+  }
 
   forall_nodes(G, node) {
     G.setSecondPartitionIndex(node, G.getPartitionIndex(node));
@@ -298,7 +325,6 @@ void population::combine_cross(const PartitionConfig & partition_config,
             << " k "              << kfactor
             << " imbal "          << larger_imbalance
             << " impro "          << (first_ind.objective - output_ind.objective) << std::endl;
-
 }
 
 void population::mutate_random( const PartitionConfig & partition_config, graph_access & G, Individuum & first_ind) {
@@ -418,8 +444,10 @@ void population::apply_fittest( graph_access & G, EdgeWeight & objective ) {
 }
 
 void population::print() {
-  int rank;
-  MPI_Comm_rank( m_communicator, &rank);
+  auto rank = -1;
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Comm_rank(m_communicator, &rank), m_communicator,
+      "MPI_Comm_rank(evolutionary population print)");
 
   std::cout <<  "rank " <<  rank << " fingerprint ";
 

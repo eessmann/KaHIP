@@ -11,6 +11,8 @@
 #include "initial_partitioner.h"
 
 class bipartition : public initial_partitioner {
+        friend struct bipartition_invariant_test_access;
+
         public:
                 bipartition();
                 virtual ~bipartition();

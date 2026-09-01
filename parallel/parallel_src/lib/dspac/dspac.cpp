@@ -7,253 +7,400 @@
  *****************************************************************************/
 
 #include "dspac.h"
+
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <limits>
+#include <ranges>
+#include <span>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "communication/mpi_adapter.h"
+#include "communication/mpi_fixed_reduction.h"
+#include "communication/mpi_types.h"
+
 namespace parhip {
-dspac::dspac(parallel_graph_access &graph, MPI_Comm comm, EdgeWeight infinity)
-        : m_comm(comm), m_infinity(infinity), m_input_graph(graph) {
+namespace {
+[[nodiscard]] auto is_monotone(std::span<NodeID const> values) noexcept
+    -> bool {
+  return std::ranges::adjacent_find(values, std::greater<>{}) == values.end();
 }
 
-void dspac::construct(parallel_graph_access &split_graph) {
-  assert(assert_adjacency_lists_sorted());
-  MPI_Barrier(m_comm);
-  internal_construct(split_graph);
-  MPI_Barrier(m_comm);
+void require_collectively(bool local_condition,
+                          mpi::communicator_view communicator,
+                          std::string_view diagnostic) noexcept {
+  if (!mpi::detail::collective_predicate(local_condition, communicator)) {
+    mpi::abort_on_programming_error(communicator.native_handle(), diagnostic);
+  }
+}
+
+[[nodiscard]] auto arrays_agree_collectively(
+    std::span<NodeID const> values,
+    mpi::communicator_view communicator) -> bool {
+  auto minimum = std::vector<NodeID>(values.size());
+  auto maximum = std::vector<NodeID>(values.size());
+  mpi::all_reduce_bounded(
+      values, std::span<NodeID>{minimum}, mpi::reduction_kind::minimum,
+      communicator, "MPI_Allreduce(DSPAC range minimum)");
+  mpi::all_reduce_bounded(
+      values, std::span<NodeID>{maximum}, mpi::reduction_kind::maximum,
+      communicator, "MPI_Allreduce(DSPAC range maximum)");
+  return minimum == maximum;
+}
+
+[[nodiscard]] auto checked_split_edge_count(EdgeID directed_edges,
+                                            NodeID low_degree_vertices,
+                                            EdgeID& result) noexcept -> bool {
+  constexpr auto maximum = std::numeric_limits<EdgeID>::max();
+  if (low_degree_vertices > directed_edges) {
+    return false;
+  }
+  // 3m - 2c == m + 2(m - c), and every counted degree-one/two vertex
+  // contributes at least one directed edge.  This form admits every
+  // representable result without overflowing an intermediate expression.
+  auto const additional_edges = directed_edges - low_degree_vertices;
+  if (additional_edges > (maximum - directed_edges) / 2) {
+    return false;
+  }
+  result = directed_edges + EdgeID{2} * additional_edges;
+  return true;
+}
+}  // namespace
+
+dspac::dspac(parallel_graph_access& graph,
+             MPI_Comm comm,
+             EdgeWeight infinity,
+             mpi::collective_options collective_options)
+    : m_comm(comm),
+      m_infinity(infinity),
+      m_input_graph(graph),
+      m_collective_options(collective_options) {}
+
+void dspac::construct(parallel_graph_access& split_graph) {
+  auto operation_communicator =
+      mpi::communicator{mpi::communicator_view{m_comm}};
+  auto const communicator = operation_communicator.view();
+  mpi::check_or_abort(MPI_Barrier(communicator.native_handle()),
+                      communicator.native_handle(),
+                      "MPI_Barrier(before DSPAC construction)");
+  internal_construct(split_graph, communicator);
+  mpi::check_or_abort(MPI_Barrier(communicator.native_handle()),
+                      communicator.native_handle(),
+                      "MPI_Barrier(after DSPAC construction)");
   assert(assert_sanity_checks(split_graph));
 }
 
-void dspac::internal_construct(parallel_graph_access &split_graph) {
-  int size, rank;
-  MPI_Comm_size(m_comm, &size);
-  MPI_Comm_rank(m_comm, &rank);
-  const NodeID n = m_input_graph.number_of_global_nodes();
-#ifndef NDEBUG
-  const NodeID m = m_input_graph.number_of_global_edges();
-#endif
+void dspac::internal_construct(parallel_graph_access& split_graph,
+                               mpi::communicator_view communicator) {
+  auto const size = communicator.size();
+  auto const rank = communicator.rank();
 
-  timer construction_timer;
+  try {
+    auto const n = m_input_graph.number_of_global_nodes();
+    auto const global_input_edges = m_input_graph.number_of_global_edges();
+    auto const local_input_nodes = m_input_graph.number_of_local_nodes();
+    auto const local_input_edges = m_input_graph.number_of_local_edges();
+    auto const range_count = static_cast<std::size_t>(size) + 1;
+    auto const rank_index = static_cast<std::size_t>(rank);
 
-  // we construct the split nodes from..(to - 1) on this node
-  auto edge_range_array = m_input_graph.get_edge_range_array();
-  assert(assert_edge_range_array_ok(edge_range_array));
-  const std::size_t from = edge_range_array[rank]; // inclusive
-  const std::size_t to = edge_range_array[rank + 1]; // exclusive
-  assert(to <= m_input_graph.number_of_global_edges());
+    timer construction_timer;
 
-  // we need the number of vertices of degree 1 or 2 to calculate the dimension of the split graph
-  NodeID local_number_of_deg_1_or_2_vertices = 0;
-  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
-    EdgeID deg = m_input_graph.getNodeDegree(v);
-    if (deg == 1 || deg == 2) {
-      ++local_number_of_deg_1_or_2_vertices;
-    }
-  }
+    auto edge_range_array = m_input_graph.get_edge_range_array();
+    auto node_range_array = m_input_graph.get_range_array();
+    require_collectively(
+        edge_range_array.size() == range_count &&
+            node_range_array.size() == range_count,
+        communicator, "DSPAC range arrays must contain one entry per rank boundary");
 
-  NodeID global_number_of_deg_1_or_2_vertices = 0;
-  MPI_Allreduce(&local_number_of_deg_1_or_2_vertices, &global_number_of_deg_1_or_2_vertices, 1,
-                MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_comm);
-  if (rank == 0) {
-    std::cout << "[dspac::internal_construct()] Up to MPI_Allreduce() took "
-              << construction_timer.elapsed() << std::endl;
-    construction_timer.restart();
-  }
+    // The legacy loader may leave only this terminal value stale.
+    node_range_array.back() = n;
+    auto const ranges_are_locally_valid =
+        edge_range_array.front() == 0 &&
+        edge_range_array.back() == global_input_edges &&
+        node_range_array.front() == 0 && node_range_array.back() == n &&
+        is_monotone(edge_range_array) && is_monotone(node_range_array) &&
+        edge_range_array[rank_index + 1] - edge_range_array[rank_index] ==
+            local_input_edges &&
+        node_range_array[rank_index + 1] - node_range_array[rank_index] ==
+            local_input_nodes &&
+        std::ranges::all_of(node_range_array, [](NodeID value) {
+          return std::in_range<std::size_t>(value);
+        });
+    require_collectively(ranges_are_locally_valid, communicator,
+                         "DSPAC graph ranges are invalid");
+    require_collectively(
+        arrays_agree_collectively(edge_range_array, communicator) &&
+            arrays_agree_collectively(node_range_array, communicator),
+        communicator, "DSPAC graph ranges differ across ranks");
 
-  // calculate split graph dimensions
-  const NodeID local_number_of_split_nodes = m_input_graph.number_of_local_edges();
-  const EdgeID global_number_of_split_nodes = m_input_graph.number_of_global_edges();
+    auto const from = edge_range_array[rank_index];  // inclusive
+    auto const to = edge_range_array[rank_index + 1];  // exclusive
 
-  assert(3 * m_input_graph.number_of_local_edges() >= 2 * local_number_of_deg_1_or_2_vertices);
-  const EdgeID local_number_of_split_edges = 3 * m_input_graph.number_of_local_edges()
-          - 2 * local_number_of_deg_1_or_2_vertices;
-
-  assert(3 * m_input_graph.number_of_global_edges() >= 2 * global_number_of_deg_1_or_2_vertices);
-  const NodeID global_number_of_split_edges = 3 * m_input_graph.number_of_global_edges()
-          - 2 * global_number_of_deg_1_or_2_vertices;
-
-  // this array stores the distribution of nodes across PEs, namely PE i stores nodes
-  // node_range_array[i]..node_range_array[i + 1]-1
-  // the default loader sets a wrong value for node_range_array[size] though, so we need to fix that for our purposes
-  // here
-  auto node_range_array = m_input_graph.get_range_array();
-  node_range_array[size] = m_input_graph.number_of_global_nodes();
-  assert(assert_node_range_array_ok(node_range_array));
-
-  std::vector<std::vector<NodeID>> first_split_node_on(size);
-
-  // first, reserve memory for adjacent PEs
-  for (PEID pe = 0; pe < size; ++pe) {
-    if (m_input_graph.is_adjacent_PE(pe) || pe == rank) {
-      first_split_node_on[pe].resize(m_input_graph.number_of_local_nodes());
-    }
-  }
-
-  // then fill the reserved memory
-  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
-    PEID current_pe = -1;
-    for (EdgeID e = m_input_graph.get_first_edge(v); e < m_input_graph.get_first_invalid_edge(v); ++e) {
-      NodeID u = m_input_graph.getEdgeTarget(e);
-      PEID pe = m_input_graph.is_local_node(u) ? static_cast<PEID>(rank) : m_input_graph.getTargetPE(u);
-
-      if (pe != current_pe) {
-        assert(first_split_node_on[pe].size() == m_input_graph.number_of_local_nodes());
-        first_split_node_on[pe][v] = from + e;
-        current_pe = pe;
+    auto local_number_of_deg_1_or_2_vertices = NodeID{};
+    for (NodeID vertex = 0; vertex < local_input_nodes; ++vertex) {
+      auto const degree = m_input_graph.getNodeDegree(vertex);
+      if (degree == 1 || degree == 2) {
+        ++local_number_of_deg_1_or_2_vertices;
       }
     }
-  }
-
-  if (rank == 0) {
-    std::cout << "[dspac::internal_construct()] Preparation of first_split_node_on[] took "
-              << construction_timer.elapsed() << std::endl;
-    construction_timer.restart();
-  }
-
-  // once created, this array has the following semantic: say we have an edge vu in the original graph where
-  // v is on our PE and u is on any PE
-  // when we create the split graph, when need to connect one split vertex of v and one of u to represent the vu edge
-  // in the split graph
-  // so when we connect the split vertices of v, we use first_split_node[globalId(u)] as the split node id of u and
-  // then increment it by one, so that when need a split vertex of u again on this PE, we use the next one and so on
-  std::vector<NodeID> first_split_node(n); // contains global node ids
-
-  // receive the messages from adjacent PEs and place them at the right position in first_split_node: the messages
-  // from PE i should be placed starting at node_range_array[i]
-  std::vector<MPI_Request *> requests;
-
-  // send the messages to adjacent PEs
-  for (PEID pe = 0; pe < size; ++pe) {
-    if (m_input_graph.is_adjacent_PE(pe)) {
-      assert(rank != pe);
-
-      NodeID *buf = &first_split_node_on[pe][0];
-      const std::size_t count = first_split_node_on[pe].size();
-
-      assert(count == node_range_array[rank + 1] - node_range_array[rank]);
-      assert(count < std::numeric_limits<int>::max());
-
-      MPI_Request *request = new MPI_Request;
-      MPI_Isend(buf, static_cast<int>(count), MPI_UNSIGNED_LONG_LONG, pe, 0, m_comm, request);
-      requests.push_back(request);
-    }
-  }
-
-  // copy own data from first_split_node_on to first_split_node
-  assert(first_split_node_on[rank].size() == m_input_graph.number_of_local_nodes());
-  assert(first_split_node_on[rank].size() == node_range_array[rank + 1] - node_range_array[rank]);
-  assert(first_split_node.data() + node_range_array[rank] + m_input_graph.number_of_local_nodes()
-         <= (&first_split_node[n - 1]) + 1);
-  std::copy(first_split_node_on[rank].begin(), first_split_node_on[rank].end(),
-            first_split_node.begin() + node_range_array[rank]);
-
-  // receive messages from adjacent neighbors
-  for (PEID pe = 0; pe < size; ++pe) {
-    if (m_input_graph.is_adjacent_PE(pe)) {
-      assert(rank != pe);
-
-      NodeID *buf = &first_split_node[node_range_array[pe]];
-      const NodeID count = node_range_array[pe + 1] - node_range_array[pe];
-
-      assert(node_range_array[pe] + count <= first_split_node.size());
-      assert(count < std::numeric_limits<int>::max());
-
-      MPI_Recv(buf, static_cast<int>(count), MPI_UNSIGNED_LONG_LONG, pe, 0, m_comm, MPI_STATUS_IGNORE);
-    }
-  }
-
-  // wait for own messages to be received
-  for (MPI_Request *request : requests) {
-    MPI_Wait(request, MPI_STATUS_IGNORE);
-    delete request;
-  }
-
-  if (rank == 0) {
-    std::cout << "[dspac::internal_construct()] first_split_node[] communication took "
-              << construction_timer.elapsed() << std::endl;
-    construction_timer.restart();
-  }
-
-  // we no longer need first_split_node_on from now on since it's copied to first_split_node on each PE
-  first_split_node_on.clear();
-
-  // now we construct the split graph
-  split_graph.start_construction(local_number_of_split_nodes, local_number_of_split_edges,
-                                 global_number_of_split_nodes, global_number_of_split_edges);
-  split_graph.set_range_array(edge_range_array);
-  split_graph.set_range(from, to - 1);
-
-  NodeID nodes_created = 0;
-  EdgeID edges_created = 0;
-
-  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
-    EdgeID deg = m_input_graph.getNodeDegree(v);
-    if (deg == 0) { // explicitly skip isolated nodes
-      continue;
+    auto const global_number_of_deg_1_or_2_vertices = mpi::all_reduce_sum(
+        local_number_of_deg_1_or_2_vertices, communicator,
+        "MPI_Allreduce(DSPAC degree-one-or-two count)");
+    if (rank == 0) {
+      std::cout << "[dspac::internal_construct()] Up to MPI_Allreduce() took "
+                << construction_timer.elapsed() << std::endl;
+      construction_timer.restart();
     }
 
-    for (EdgeID e = m_input_graph.get_first_edge(v); e < m_input_graph.get_first_invalid_edge(v); ++e) {
-      NodeID u = m_input_graph.getEdgeTarget(e);
-      NodeID global_u = m_input_graph.getGlobalID(u);
+    auto const local_number_of_split_nodes = local_input_edges;
+    auto const global_number_of_split_nodes = global_input_edges;
+    auto local_number_of_split_edges = EdgeID{};
+    auto global_number_of_split_edges = EdgeID{};
+    require_collectively(
+        checked_split_edge_count(local_input_edges,
+                                 local_number_of_deg_1_or_2_vertices,
+                                 local_number_of_split_edges) &&
+            checked_split_edge_count(global_input_edges,
+                                     global_number_of_deg_1_or_2_vertices,
+                                     global_number_of_split_edges),
+        communicator, "DSPAC split-graph dimension arithmetic is invalid");
 
-      // create the split node
-      ++nodes_created;
-      NodeID split_node = split_graph.new_node();
-      assert(split_node == e);
-
-      split_graph.setNodeWeight(split_node, 1);
-      split_graph.setNodeLabel(split_node, from + split_node);
-      split_graph.setSecondPartitionIndex(split_node, 0);
-
-      // create dominant edge
-      ++edges_created;
-      assert(global_u < first_split_node.size());
-      NodeID target_node = first_split_node[global_u];
-      EdgeID dominant_edge = split_graph.new_edge(split_node, target_node);
-      ++first_split_node[global_u];
-      split_graph.setEdgeWeight(dominant_edge, m_infinity);
-
-      // create auxiliary edges
-      bool first = (e == m_input_graph.get_first_edge(v));
-      bool last = (e + 1 == m_input_graph.get_first_invalid_edge(v));
-
-      if (deg == 2) {
-        // degree 2: we create a path with a single edge in the split graph
-        ++edges_created;
-        int target_offset = first ? 1 : -1;
-        assert(0 <= split_node + target_offset && split_node + target_offset < local_number_of_split_nodes);
-        EdgeID auxiliary_edge = split_graph.new_edge(split_node, from + split_node + target_offset);
-        split_graph.setEdgeWeight(auxiliary_edge, 1);
-      } else if (deg > 2) {
-        // degree > 2: we create a cycle with all split nodes, thus we need a edge to the previous and one to
-        // the next node in the cycle
-        ++edges_created;
-        int next_offset = last ? -(static_cast<int>(deg) - 1) : 1;
-        NodeID global_next = from + split_node + next_offset;
-        assert(from == split_graph.get_from_range());
-        assert(split_graph.get_from_range() <= global_next && global_next <= split_graph.get_to_range());
-
-        EdgeID next_auxiliary_edge = split_graph.new_edge(split_node, global_next);
-        split_graph.setEdgeWeight(next_auxiliary_edge, 1);
-
-        ++edges_created;
-        int prev_offset = first ? static_cast<int>(deg) - 1 : -1;
-        NodeID global_prev = from + split_node + prev_offset;
-        assert(split_graph.get_from_range() <= global_prev && global_prev <= split_graph.get_to_range());
-        EdgeID prev_auxiliary_edge = split_graph.new_edge(split_node, global_prev);
-        split_graph.setEdgeWeight(prev_auxiliary_edge, 1);
-      } else {
-        assert(deg == 1);
-        // nothing to do for leaves
+    auto outgoing_ranks = std::vector<int>{};
+    auto adjacency_is_valid = true;
+    for (NodeID vertex = 0; vertex < local_input_nodes; ++vertex) {
+      auto previous_global_target = NodeID{};
+      auto has_previous_target = false;
+      for (auto edge = m_input_graph.get_first_edge(vertex),
+                end = m_input_graph.get_first_invalid_edge(vertex);
+           edge < end; ++edge) {
+        auto const target = m_input_graph.getEdgeTarget(edge);
+        auto const global_target = m_input_graph.getGlobalID(target);
+        auto const owner = m_input_graph.is_local_node(target)
+                               ? rank
+                               : m_input_graph.getTargetPE(target);
+        adjacency_is_valid =
+            adjacency_is_valid && global_target < n && owner >= 0 &&
+            owner < size &&
+            (!has_previous_target || previous_global_target <= global_target);
+        if (owner != rank && owner >= 0 && owner < size) {
+          outgoing_ranks.push_back(owner);
+        }
+        previous_global_target = global_target;
+        has_previous_target = true;
       }
     }
-  }
+    require_collectively(adjacency_is_valid, communicator,
+                         "DSPAC adjacency must be sorted and have valid owners");
+    std::ranges::sort(outgoing_ranks);
+    auto const unique_ranks = std::ranges::unique(outgoing_ranks);
+    outgoing_ranks.erase(unique_ranks.begin(), unique_ranks.end());
 
-  if (rank == 0) {
-    std::cout << "[dspac::internal_construct()] Local construction took "
-              << construction_timer.elapsed() << std::endl;
-    construction_timer.restart();
-  }
+    auto const local_node_count = static_cast<std::size_t>(local_input_nodes);
+    auto first_split_node_on = std::vector<std::vector<NodeID>>(
+        static_cast<std::size_t>(size));
+    first_split_node_on[rank_index].resize(local_node_count);
+    for (auto const destination : outgoing_ranks) {
+      first_split_node_on[static_cast<std::size_t>(destination)].resize(
+          local_node_count);
+    }
 
-  assert(nodes_created == local_number_of_split_nodes);
-  assert(edges_created == local_number_of_split_edges);
-  split_graph.finish_construction();
+    for (NodeID vertex = 0; vertex < local_input_nodes; ++vertex) {
+      auto current_owner = PEID{-1};
+      for (auto edge = m_input_graph.get_first_edge(vertex),
+                end = m_input_graph.get_first_invalid_edge(vertex);
+           edge < end; ++edge) {
+        auto const target = m_input_graph.getEdgeTarget(edge);
+        auto const owner = m_input_graph.is_local_node(target)
+                               ? rank
+                               : m_input_graph.getTargetPE(target);
+        if (owner != current_owner) {
+          first_split_node_on[static_cast<std::size_t>(owner)]
+                             [static_cast<std::size_t>(vertex)] = from + edge;
+          current_owner = owner;
+        }
+      }
+    }
+
+    if (rank == 0) {
+      std::cout << "[dspac::internal_construct()] Preparation of "
+                   "first_split_node_on[] took "
+                << construction_timer.elapsed() << std::endl;
+      construction_timer.restart();
+    }
+
+    auto first_split_node =
+        std::vector<NodeID>(static_cast<std::size_t>(n));
+    {
+      auto topology = mpi::distributed_graph{communicator, outgoing_ranks};
+      auto outgoing = std::vector<std::vector<NodeID>>{};
+      outgoing.reserve(topology.destinations().size());
+      for (auto const destination : topology.destinations()) {
+        outgoing.push_back(
+            first_split_node_on[static_cast<std::size_t>(destination)]);
+      }
+      auto received = mpi::neighbor_all_to_all_v(
+          mpi::segmented_buffer<NodeID>::from_segments(outgoing), topology,
+          m_collective_options);
+
+      auto received_shape_is_valid =
+          received.segment_count() == topology.sources().size();
+      if (received_shape_is_valid) {
+        for (std::size_t index = 0; index < topology.sources().size(); ++index) {
+          auto const source = topology.sources()[index];
+          auto const source_is_valid = source >= 0 && source < size;
+          received_shape_is_valid =
+              received_shape_is_valid && source_is_valid;
+          if (!source_is_valid) {
+            continue;
+          }
+          auto const source_index = static_cast<std::size_t>(source);
+          auto const expected = node_range_array[source_index + 1] -
+                                node_range_array[source_index];
+          received_shape_is_valid =
+              received_shape_is_valid &&
+              std::in_range<std::size_t>(expected) &&
+              received.segment(index).size() ==
+                  static_cast<std::size_t>(expected);
+        }
+      }
+      require_collectively(received_shape_is_valid, topology.view(),
+                           "DSPAC first-split source segment extent mismatch");
+
+      auto const own_offset =
+          static_cast<std::size_t>(node_range_array[rank_index]);
+      std::ranges::copy(first_split_node_on[rank_index],
+                        first_split_node.begin() + own_offset);
+      for (std::size_t index = 0; index < topology.sources().size(); ++index) {
+        auto const source_index =
+            static_cast<std::size_t>(topology.sources()[index]);
+        auto const offset =
+            static_cast<std::size_t>(node_range_array[source_index]);
+        std::ranges::copy(received.segment(index),
+                          first_split_node.begin() + offset);
+      }
+    }
+
+    if (rank == 0) {
+      std::cout << "[dspac::internal_construct()] first_split_node[] "
+                   "communication took "
+                << construction_timer.elapsed() << std::endl;
+      construction_timer.restart();
+    }
+
+    first_split_node_on.clear();
+
+    split_graph.start_construction(
+        local_number_of_split_nodes, local_number_of_split_edges,
+        global_number_of_split_nodes, global_number_of_split_edges);
+    split_graph.set_range_array(edge_range_array);
+    split_graph.set_range(from, from == to ? from : to - EdgeID{1});
+
+    auto nodes_created = NodeID{};
+    auto edges_created = EdgeID{};
+    for (NodeID vertex = 0; vertex < local_input_nodes; ++vertex) {
+      auto const degree = m_input_graph.getNodeDegree(vertex);
+      if (degree == 0) {
+        continue;
+      }
+
+      for (auto edge = m_input_graph.get_first_edge(vertex),
+                end = m_input_graph.get_first_invalid_edge(vertex);
+           edge < end; ++edge) {
+        auto const target = m_input_graph.getEdgeTarget(edge);
+        auto const global_target = m_input_graph.getGlobalID(target);
+        if (!std::in_range<std::size_t>(global_target) ||
+            static_cast<std::size_t>(global_target) >=
+                first_split_node.size()) {
+          mpi::abort_on_programming_error(
+              communicator.native_handle(),
+              "DSPAC dominant-edge target is outside the node domain");
+        }
+
+        ++nodes_created;
+        auto const split_node = split_graph.new_node();
+        if (split_node != edge) {
+          mpi::abort_on_programming_error(
+              communicator.native_handle(),
+              "DSPAC split-node construction order diverged");
+        }
+        split_graph.setNodeWeight(split_node, 1);
+        split_graph.setNodeLabel(split_node, from + split_node);
+        split_graph.setSecondPartitionIndex(split_node, 0);
+
+        auto& first_target =
+            first_split_node[static_cast<std::size_t>(global_target)];
+        if (first_target >= global_number_of_split_nodes) {
+          mpi::abort_on_programming_error(
+              communicator.native_handle(),
+              "DSPAC reciprocal split-node mapping is invalid");
+        }
+        ++edges_created;
+        auto const dominant_edge =
+            split_graph.new_edge(split_node, first_target);
+        ++first_target;
+        split_graph.setEdgeWeight(dominant_edge, m_infinity);
+
+        auto const first = edge == m_input_graph.get_first_edge(vertex);
+        auto const last = edge + 1 == end;
+        if (degree == 2) {
+          auto const auxiliary_local =
+              first ? split_node + NodeID{1} : split_node - NodeID{1};
+          if (auxiliary_local >= local_number_of_split_nodes) {
+            mpi::abort_on_programming_error(
+                communicator.native_handle(),
+                "DSPAC degree-two auxiliary edge is invalid");
+          }
+          ++edges_created;
+          auto const auxiliary_edge =
+              split_graph.new_edge(split_node, from + auxiliary_local);
+          split_graph.setEdgeWeight(auxiliary_edge, 1);
+        } else if (degree > 2) {
+          auto const span = degree - EdgeID{1};
+          auto const next_local =
+              last ? split_node - span : split_node + NodeID{1};
+          auto const previous_local =
+              first ? split_node + span : split_node - NodeID{1};
+          if (next_local >= local_number_of_split_nodes ||
+              previous_local >= local_number_of_split_nodes) {
+            mpi::abort_on_programming_error(
+                communicator.native_handle(),
+                "DSPAC cycle auxiliary edge is invalid");
+          }
+          ++edges_created;
+          auto const next_edge =
+              split_graph.new_edge(split_node, from + next_local);
+          split_graph.setEdgeWeight(next_edge, 1);
+          ++edges_created;
+          auto const previous_edge =
+              split_graph.new_edge(split_node, from + previous_local);
+          split_graph.setEdgeWeight(previous_edge, 1);
+        } else if (degree != 1) {
+          mpi::abort_on_programming_error(
+              communicator.native_handle(),
+              "DSPAC encountered an invalid nonzero degree");
+        }
+      }
+    }
+
+    if (rank == 0) {
+      std::cout << "[dspac::internal_construct()] Local construction took "
+                << construction_timer.elapsed() << std::endl;
+      construction_timer.restart();
+    }
+    if (nodes_created != local_number_of_split_nodes ||
+        edges_created != local_number_of_split_edges) {
+      mpi::abort_on_programming_error(
+          communicator.native_handle(),
+          "DSPAC local split-graph dimensions diverged");
+    }
+    split_graph.finish_construction();
+  } catch (...) {
+    mpi::abort_on_exception(communicator.native_handle(),
+                            "DSPAC split-graph construction failed");
+  }
 }
 
 /**
@@ -342,93 +489,158 @@ bool dspac::assert_sanity_checks(parallel_graph_access &split_graph) {
   return true;
 }
 
-/**
- * assert()'s that the adjacency lists of the input graph are sorted.
- * @return Pointless bool so that the method call can be used as expression.
- */
-bool dspac::assert_adjacency_lists_sorted() {
-#ifndef NDEBUG
-  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
-    if (m_input_graph.getNodeDegree(v) == 0) {
-      continue;
+std::vector<PartitionID> dspac::project_partition(
+    parallel_graph_access& split_graph,
+    std::vector<EdgeID> const& permutation) {
+  auto operation_communicator =
+      mpi::communicator{mpi::communicator_view{m_comm}};
+  auto const communicator = operation_communicator.view();
+  try {
+    auto const local_edges = m_input_graph.number_of_local_edges();
+    auto local_permutation_is_valid =
+        std::in_range<std::size_t>(local_edges) &&
+        split_graph.number_of_local_nodes() == local_edges;
+    auto local_edge_count = std::size_t{};
+    if (local_permutation_is_valid) {
+      local_edge_count = static_cast<std::size_t>(local_edges);
+      local_permutation_is_valid = permutation.size() == local_edge_count;
     }
 
-    NodeID local_first_neighbor = m_input_graph.getEdgeTarget(m_input_graph.get_first_edge(v));
-    auto global_first_neighbor = static_cast<NodeID>(m_input_graph.getGlobalID(local_first_neighbor));
-    NodeID cur = global_first_neighbor;
-    for (EdgeID e = m_input_graph.get_first_edge(v); e < m_input_graph.get_first_invalid_edge(v); ++e) {
-      NodeID u = m_input_graph.getEdgeTarget(e);
-      assert(cur <= m_input_graph.getGlobalID(u));
+    auto seen = std::vector<bool>{};
+    if (local_permutation_is_valid) {
+      seen.resize(local_edge_count);
+      for (auto const target : permutation) {
+        if (target >= local_edges ||
+            seen[static_cast<std::size_t>(target)]) {
+          local_permutation_is_valid = false;
+          break;
+        }
+        seen[static_cast<std::size_t>(target)] = true;
+      }
     }
-  }
-#endif
-  return true;
-}
+    require_collectively(
+        local_permutation_is_valid, communicator,
+        "DSPAC projection permutation must be a bijection over local edges");
 
-bool dspac::assert_edge_range_array_ok(const std::vector<NodeID> &edge_range_array) {
-  int size, rank;
-  MPI_Comm_size(m_comm, &size);
-  MPI_Comm_rank(m_comm, &rank);
-  assert(edge_range_array.size() == size + 1);
-  assert(edge_range_array[0] == 0);
-  assert(edge_range_array[size] == m_input_graph.number_of_global_edges());
-  assert(m_input_graph.number_of_local_edges() == edge_range_array[rank + 1] - edge_range_array[rank]);
-  for (std::size_t pe = 0; pe < (size_t)size; ++pe)
-    assert(edge_range_array[pe] <= edge_range_array[pe + 1]);
-  return true;
-}
-
-bool dspac::assert_node_range_array_ok(const std::vector<NodeID> &node_range_array) {
-  int size, rank;
-  MPI_Comm_size(m_comm, &size);
-  MPI_Comm_rank(m_comm, &rank);
-  assert(node_range_array.size() == size + 1);
-  assert(node_range_array[0] == 0);
-  assert(node_range_array[size] == m_input_graph.number_of_global_nodes());
-  assert(m_input_graph.number_of_local_nodes() == node_range_array[rank + 1] - node_range_array[rank]);
-  return true;
-}
-
-std::vector<PartitionID> dspac::project_partition(parallel_graph_access &split_graph, const std::vector<EdgeID> &permutation) {
-  std::vector<PartitionID> edge_partition(m_input_graph.number_of_local_edges());
-
-  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
-    for (EdgeID e = m_input_graph.get_first_edge(v); e < m_input_graph.get_first_invalid_edge(v); ++e) {
-      edge_partition[permutation[e]] = split_graph.getNodeLabel(e);
-    }
-  }
-
-  MPI_Barrier(m_comm);
-  return edge_partition;
-}
-
-EdgeWeight dspac::calculate_vertex_cut(PartitionID k, const std::vector<PartitionID> &edge_partition) {
-  EdgeWeight local_cost = 0;
-
-  std::vector<bool> counted(k);
-  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
-    if (m_input_graph.getNodeDegree(v) == 0) {
-      continue;
-    }
-
-    for (EdgeID e = m_input_graph.get_first_edge(v); e < m_input_graph.get_first_invalid_edge(v); ++e) {
-      PartitionID p = edge_partition[e];
-      if (!counted[p]) {
-        counted[p] = true;
-        ++local_cost;
+    auto edge_partition = std::vector<PartitionID>(local_edge_count);
+    for (NodeID vertex = 0;
+         vertex < m_input_graph.number_of_local_nodes(); ++vertex) {
+      for (auto edge = m_input_graph.get_first_edge(vertex),
+                end = m_input_graph.get_first_invalid_edge(vertex);
+           edge < end; ++edge) {
+        edge_partition[static_cast<std::size_t>(
+            permutation[static_cast<std::size_t>(edge)])] =
+            split_graph.getNodeLabel(edge);
       }
     }
 
-    counted.clear();
-    counted.resize(k);
+    mpi::check_or_abort(MPI_Barrier(communicator.native_handle()),
+                        communicator.native_handle(),
+                        "MPI_Barrier(after DSPAC projection)");
+    return edge_partition;
+  } catch (...) {
+    mpi::abort_on_exception(communicator.native_handle(),
+                            "DSPAC partition projection failed");
+  }
+}
 
-    assert(local_cost > 0);
-    --local_cost;
+EdgeWeight dspac::calculate_vertex_cut(
+    PartitionID k,
+    std::vector<PartitionID> const& edge_partition) {
+  mpi::require_live_intracommunicator(
+      mpi::communicator_view{m_comm},
+      "vertex cut validation requires a live intracommunicator");
+
+  auto minimum_k = PartitionID{};
+  auto maximum_k = PartitionID{};
+  mpi::check_or_abort(
+      MPI_Allreduce(&k, &minimum_k, 1, mpi::get_mpi_datatype<PartitionID>(),
+                    MPI_MIN, m_comm),
+      m_comm, "MPI_Allreduce(vertex cut k minimum)");
+  mpi::check_or_abort(
+      MPI_Allreduce(&k, &maximum_k, 1, mpi::get_mpi_datatype<PartitionID>(),
+                    MPI_MAX, m_comm),
+      m_comm, "MPI_Allreduce(vertex cut k maximum)");
+
+  constexpr auto zero_k = PartitionID{1} << 0;
+  constexpr auto unrepresentable_k = PartitionID{1} << 1;
+  constexpr auto mismatched_k = PartitionID{1} << 2;
+  constexpr auto mismatched_partition_extent = PartitionID{1} << 3;
+  constexpr auto out_of_range_label = PartitionID{1} << 4;
+
+  auto local_issues = PartitionID{};
+  if (k == 0) {
+    local_issues |= zero_k;
+  }
+  if (!std::in_range<std::size_t>(k)) {
+    local_issues |= unrepresentable_k;
+  }
+  if (minimum_k != maximum_k) {
+    local_issues |= mismatched_k;
+  }
+  auto const local_edge_count = m_input_graph.number_of_local_edges();
+  if (!std::in_range<std::size_t>(local_edge_count) ||
+      (std::in_range<std::size_t>(local_edge_count) &&
+       edge_partition.size() != static_cast<std::size_t>(local_edge_count))) {
+    local_issues |= mismatched_partition_extent;
+  }
+  if (std::ranges::any_of(edge_partition,
+                          [k](PartitionID label) { return label >= k; })) {
+    local_issues |= out_of_range_label;
   }
 
-  EdgeWeight global_cost;
-  MPI_Reduce(&local_cost, &global_cost, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, m_comm);
-  return global_cost;
+  auto global_issues = PartitionID{};
+  mpi::check_or_abort(
+      MPI_Allreduce(&local_issues, &global_issues, 1,
+                    mpi::get_mpi_datatype<PartitionID>(), MPI_BOR, m_comm),
+      m_comm, "MPI_Allreduce(vertex cut validation)");
+
+  if ((global_issues & zero_k) != 0) {
+    mpi::abort_on_programming_error(m_comm,
+                                    "vertex cut requires k greater than zero");
+  }
+  if ((global_issues & unrepresentable_k) != 0) {
+    mpi::abort_on_programming_error(
+        m_comm, "vertex cut k exceeds local size_t capacity");
+  }
+  if ((global_issues & mismatched_k) != 0) {
+    mpi::abort_on_programming_error(m_comm,
+                                    "vertex cut k differs across communicator");
+  }
+  if ((global_issues & mismatched_partition_extent) != 0) {
+    mpi::abort_on_programming_error(
+        m_comm, "vertex cut partition extent does not match local edge count");
+  }
+  if ((global_issues & out_of_range_label) != 0) {
+    mpi::abort_on_programming_error(
+        m_comm, "vertex cut partition label is outside [0, k)");
+  }
+
+  auto local_cost = EdgeWeight{};
+  auto counted = std::vector<bool>(static_cast<std::size_t>(k));
+
+  for (NodeID v = 0; v < m_input_graph.number_of_local_nodes(); ++v) {
+    if (m_input_graph.getNodeDegree(v) == 0) {
+      continue;
+    }
+
+    auto distinct_blocks = EdgeWeight{};
+    for (EdgeID e = m_input_graph.get_first_edge(v);
+         e < m_input_graph.get_first_invalid_edge(v); ++e) {
+      auto const p = edge_partition[static_cast<std::size_t>(e)];
+      if (!counted[p]) {
+        counted[p] = true;
+        ++distinct_blocks;
+      }
+    }
+
+    assert(distinct_blocks > 0);
+    local_cost += distinct_blocks - 1;
+    std::ranges::fill(counted, false);
+  }
+
+  return mpi::all_reduce_sum(local_cost, mpi::communicator_view{m_comm},
+                             "MPI_Allreduce(vertex cut)");
 }
 
 void dspac::fix_cut_dominant_edges(parallel_graph_access &split_graph) {
@@ -455,4 +667,4 @@ void dspac::fix_cut_dominant_edges(parallel_graph_access &split_graph) {
   }
   split_graph.update_block_weights();
 }
-}
+}  // namespace parhip

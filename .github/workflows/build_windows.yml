@@ -1,4 +1,4 @@
-name: Windows CI
+name: Windows serial CI
 
 on:
   push:
@@ -11,24 +11,62 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CMAKE_VERSION: "4.3.4"
+  VCPKG_BASELINE: "3f7b5a12ef0a55e7b59339b2b69cac4b56d6dbf9"
+  VCPKG_MAX_CONCURRENCY: "2"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  CTEST_PARALLEL_LEVEL: "2"
 
 jobs:
-  build:
-    runs-on: windows-latest
-    continue-on-error: true
-    timeout-minutes: 60
+  serial:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      VCPKG_ROOT: ${{ runner.temp }}/vcpkg
     steps:
-    - uses: actions/checkout@v5
-      with:
-        submodules: 'recursive'
-    - name: Configure
-      run: |
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DNOMPI=On
-    - name: Build
-      run: cmake --build build --config Release
-    - name: Test interface
-      run: |
-        cd build/Release
-        .\interface_test.exe
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja and pkg-config
+        run: choco install --no-progress -y ninja pkgconfiglite
+
+      - name: Install tested CMake 4.x
+        shell: pwsh
+        run: |
+          py -3 -m venv "$env:RUNNER_TEMP/cmake"
+          & "$env:RUNNER_TEMP/cmake/Scripts/python.exe" -m pip install `
+            --disable-pip-version-check "cmake==$env:CMAKE_VERSION"
+          Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP/cmake/Scripts"
+
+      - name: Bootstrap manifest-pinned vcpkg
+        shell: pwsh
+        run: ./ci/bootstrap-vcpkg.ps1
+
+      # Windows is the documented exception: systemd user scopes do not exist.
+      - name: Verify CMake version (Windows systemd exception)
+        shell: pwsh
+        run: |
+          $actual = cmake --version | Select-Object -First 1
+          if ($actual -ne "cmake version $env:CMAKE_VERSION") {
+              throw "Expected CMake $env:CMAKE_VERSION, found '$actual'"
+          }
+
+      - name: Configure (Windows systemd exception)
+        run: cmake --preset ci-windows-serial
+
+      - name: Build with at most two jobs (Windows systemd exception)
+        run: cmake --build --preset build-ci-windows-serial
+
+      - name: Run strict tests except large and performance (Windows systemd exception)
+        run: ctest --preset test-ci-windows-serial
+
+      - name: Verify staged install and pkg-config consumers (Windows systemd exception)
+        run: >-
+          ctest --test-dir out/build/ci-windows-serial
+          --output-on-failure --stop-on-failure --no-tests=error
+          -L install -LE "(large|performance)"

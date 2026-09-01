@@ -8,7 +8,10 @@
 #ifndef DISTRIBUTED_PARTITIONER_ZYL2XF6R
 #define DISTRIBUTED_PARTITIONER_ZYL2XF6R
 
+#include <cstddef>
 #include <vector>
+
+#include "communication/mpi_handles.h"
 #include "partition_config.h"
 #include "data_structure/parallel_graph_access.h"
 #include "stop_rule.h"
@@ -18,21 +21,22 @@ public:
         distributed_partitioner();
         virtual ~distributed_partitioner();
 
-        void perform_partitioning( PPartitionConfig & config, parallel_graph_access & G);
-        void perform_recursive_partitioning( PPartitionConfig & config, parallel_graph_access & G);
-
         void perform_partitioning( MPI_Comm comm, PPartitionConfig & partition_config, parallel_graph_access & G);
-        void perform_recursive_partitioning( MPI_Comm comm, PPartitionConfig & partition_config, parallel_graph_access & G);
 
         void check( MPI_Comm comm, PPartitionConfig & config, parallel_graph_access & G);
         void check_labels( MPI_Comm comm, PPartitionConfig & config, parallel_graph_access & G);
-        static void generate_random_choices( PPartitionConfig & config ) ;
+        static void generate_random_choices(
+            PPartitionConfig& config,
+            mpi::communicator_view communicator);
 private: 
-        void vcycle( MPI_Comm communicator, PPartitionConfig & config, parallel_graph_access & G );
+        void vcycle(
+            mpi::communicator_view communicator,
+            PPartitionConfig& config,
+            parallel_graph_access& G);
 
         stop_rule contraction_stop_decision;
         NodeWeight m_total_graph_weight;
-        NodeID m_cur_rnd_choice;
+        std::size_t m_cur_rnd_choice;
 
         static std::vector< NodeID > m_cf;
         static std::vector< NodeID > m_sf;

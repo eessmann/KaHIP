@@ -139,6 +139,7 @@ inline void configuration::standard(
         partition_config.permutation_quality                    = PERMUTATION_QUALITY_FAST;
         partition_config.graph_allready_partitioned             = false;
         partition_config.initial_partitioning                   = false;
+        partition_config.initial_partitioning_type              = INITIAL_PARTITIONING_RECPARTITION;
         partition_config.bipartition_tries                      = 9;
         partition_config.minipreps                              = 10;
         partition_config.enable_omp                             = false;

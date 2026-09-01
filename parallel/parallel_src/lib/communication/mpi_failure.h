@@ -120,8 +120,7 @@ void run_with_exception_barrier(Operation&& operation,
   try {
     std::invoke(std::forward<Operation>(operation));
   } catch (...) {
-    std::invoke(std::forward<OnFailure>(on_failure),
-                std::current_exception());
+    std::invoke(std::forward<OnFailure>(on_failure), std::current_exception());
   }
 }
 
@@ -136,9 +135,11 @@ void run_with_exception_barrier(Operation&& operation,
     std::string_view context,
     std::source_location location = std::source_location::current()) noexcept;
 
-[[noreturn]] void abort_on_programming_error(
-    MPI_Comm communicator,
-    std::string_view context) noexcept;
+[[noreturn]] void abort_on_backend_failure(MPI_Comm communicator,
+                                           std::string_view context) noexcept;
+
+[[noreturn]] void abort_on_programming_error(MPI_Comm communicator,
+                                             std::string_view context) noexcept;
 
 [[noreturn]] void abort_on_capacity_failure(
     MPI_Comm communicator,

@@ -38,6 +38,9 @@ enum class failure_mode {
   pre_init_error,
   semantic_factory_resource,
   error_string_secondary,
+  null_communicator,
+  intercommunicator,
+  null_distributed_graph,
   wrong_topology,
   capacity_resolver,
   dense_receive_offset_capacity,
@@ -127,6 +130,11 @@ void record_forbidden_datatype_attempt(char const* operation) noexcept {
         return "semantic";
       case failure_mode::error_string_secondary:
         return "backend";
+      case failure_mode::null_communicator:
+      case failure_mode::intercommunicator:
+        return "communicator-guard";
+      case failure_mode::null_distributed_graph:
+        return "graph-guard";
       case failure_mode::wrong_topology:
         return "topology";
       case failure_mode::capacity_resolver:
@@ -687,6 +695,49 @@ auto run_pre_initialization_control() -> int {
   returned_from_failure("wrong-topology");
 }
 
+[[noreturn]] void run_null_communicator_failure() {
+  std::fputs("injected null communicator construction\n", stderr);
+  injection_is_armed = true;
+  auto invalid =
+      parhip::mpi::communicator{parhip::mpi::communicator_view{MPI_COMM_NULL}};
+  static_cast<void>(invalid);
+  returned_from_failure("null-communicator");
+}
+
+[[noreturn]] void run_intercommunicator_failure() {
+  MPI_Comm local = MPI_COMM_NULL;
+  if (PMPI_Comm_split(MPI_COMM_WORLD, cached_rank, 0, &local) != MPI_SUCCESS) {
+    returned_from_failure("intercommunicator local split");
+  }
+
+  MPI_Comm intercommunicator = MPI_COMM_NULL;
+  auto const remote_leader = cached_rank == 0 ? 1 : 0;
+  if (PMPI_Intercomm_create(local, 0, MPI_COMM_WORLD, remote_leader, 71,
+                            &intercommunicator) != MPI_SUCCESS) {
+    returned_from_failure("intercommunicator creation");
+  }
+  if (PMPI_Comm_free(&local) != MPI_SUCCESS) {
+    returned_from_failure("intercommunicator local cleanup");
+  }
+
+  tracked_communicator = intercommunicator;
+  std::fputs("injected intercommunicator construction\n", stderr);
+  injection_is_armed = true;
+  auto invalid = parhip::mpi::communicator{
+      parhip::mpi::communicator_view{intercommunicator}};
+  static_cast<void>(invalid);
+  returned_from_failure("intercommunicator");
+}
+
+[[noreturn]] void run_null_distributed_graph_failure() {
+  std::fputs("injected null distributed graph construction\n", stderr);
+  injection_is_armed = true;
+  auto invalid = parhip::mpi::distributed_graph{
+      parhip::mpi::communicator_view{MPI_COMM_NULL}, {}};
+  static_cast<void>(invalid);
+  returned_from_failure("null-distributed-graph");
+}
+
 [[noreturn]] void run_capacity_resolver_failure() {
   auto affected =
       parhip::mpi::communicator{parhip::mpi::communicator_view{MPI_COMM_WORLD}};
@@ -779,6 +830,12 @@ int main(int argc, char* argv[]) {
     selected_mode = failure_mode::semantic_factory_resource;
   } else if (mode == "error-string-secondary") {
     selected_mode = failure_mode::error_string_secondary;
+  } else if (mode == "null-communicator") {
+    selected_mode = failure_mode::null_communicator;
+  } else if (mode == "intercommunicator") {
+    selected_mode = failure_mode::intercommunicator;
+  } else if (mode == "null-distributed-graph") {
+    selected_mode = failure_mode::null_distributed_graph;
   } else if (mode == "wrong-topology") {
     selected_mode = failure_mode::wrong_topology;
   } else if (mode == "capacity-resolver") {
@@ -820,6 +877,12 @@ int main(int argc, char* argv[]) {
       run_semantic_factory_resource_failure();
     case failure_mode::error_string_secondary:
       run_error_string_secondary_failure();
+    case failure_mode::null_communicator:
+      run_null_communicator_failure();
+    case failure_mode::intercommunicator:
+      run_intercommunicator_failure();
+    case failure_mode::null_distributed_graph:
+      run_null_distributed_graph_failure();
     case failure_mode::wrong_topology:
       run_wrong_topology_failure();
     case failure_mode::capacity_resolver:

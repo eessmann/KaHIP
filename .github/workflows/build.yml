@@ -1,4 +1,4 @@
-name: C/C++ CI
+name: Linux MPI CI
 
 on:
   push:
@@ -11,31 +11,103 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CMAKE_VERSION: "4.3.4"
+  VCPKG_BASELINE: "3f7b5a12ef0a55e7b59339b2b69cac4b56d6dbf9"
+  VCPKG_MAX_CONCURRENCY: "2"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  CTEST_PARALLEL_LEVEL: "2"
+  OMPI_MCA_rmaps_base_oversubscribe: "1"
+  OMPI_MCA_hwloc_base_binding_policy: none
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    continue-on-error: true
+  mpi:
+    name: ${{ matrix.compiler }} / ${{ matrix.mpi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
-        compiler:
-          - { name: Clang, cc: clang, cxx: clang++ }
-          - { name: GNU, cc: gcc, cxx: g++ }
-        argument: ["", "BUILDPYTHONMODULE", "-DDETERMINISTIC_PARHIP=On"]
-    timeout-minutes: 60
+        include:
+          - compiler: GNU
+            cc: gcc
+            cxx: g++
+            preset: ci-mpi-gcc
+            mpi: OpenMPI 4.1 (MPI 3.1 floor)
+            mpi_packages: libopenmpi-dev openmpi-bin
+            capability_profile: mpi3-floor
+          - compiler: Clang
+            cc: clang
+            cxx: clang++
+            preset: ci-mpi-clang
+            mpi: OpenMPI 4.1 (MPI 3.1 floor)
+            mpi_packages: libopenmpi-dev openmpi-bin
+            capability_profile: mpi3-floor
+          - compiler: GNU
+            cc: gcc
+            cxx: g++
+            preset: ci-mpi-gcc
+            mpi: MPICH 4 (MPI-4 capability)
+            mpi_packages: libmpich-dev mpich
+            capability_profile: mpi4
+          - compiler: Clang
+            cc: clang
+            cxx: clang++
+            preset: ci-mpi-clang
+            mpi: MPICH 4 (MPI-4 capability)
+            mpi_packages: libmpich-dev mpich
+            capability_profile: mpi4
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      VCPKG_ROOT: ${{ runner.temp }}/vcpkg
     steps:
-    - name: Install dependencies
-      run: sudo apt-get install -y libopenmpi-dev pybind11-dev
-    - uses: actions/checkout@v5
-      with:
-        submodules: 'recursive'
-    - name: Export compiler
-      run: |
-        echo CXX=${{ matrix.compiler.cxx }} >> $GITHUB_ENV
-        echo CC=${{ matrix.compiler.cc }} >> $GITHUB_ENV
-    - name: Build 
-      run: ./compile_withcmake.sh ${{ matrix.argument }}
-    - name: Test Python interface 
-      if: matrix.argument == 'BUILDPYTHONMODULE'
-      run: python3 ./deploy/callkahipfrompython.py
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build pkg-config python3-venv \
+            gcc g++ clang \
+            ${{ matrix.mpi_packages }}
+
+      - name: Install tested CMake 4.x
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/python" -m pip install \
+            --disable-pip-version-check "cmake==$CMAKE_VERSION"
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
+
+      - name: Verify the required systemd memory scope
+        run: |
+          ci/run-limited true
+          ci/run-limited bash -c \
+            '[[ "$(cmake --version | head -n 1)" == "cmake version ${CMAKE_VERSION}" ]]'
+
+      - name: Bootstrap manifest-pinned vcpkg
+        run: ci/run-limited ci/bootstrap-vcpkg.sh
+
+      - name: Configure
+        run: ci/run-limited cmake --preset "${{ matrix.preset }}"
+
+      - name: Verify MPI feature profile
+        run: |
+          ci/run-limited cmake \
+            "-DBUILD_DIR=$GITHUB_WORKSPACE/out/build/${{ matrix.preset }}" \
+            "-DPROFILE=${{ matrix.capability_profile }}" \
+            -P ci/verify-mpi-capabilities.cmake
+
+      - name: Build (at most two jobs)
+        run: ci/run-limited cmake --build --preset "build-${{ matrix.preset }}"
+
+      - name: Run strict tests except large and performance
+        run: ci/run-limited ctest --preset "test-${{ matrix.preset }}"
+
+      - name: Verify staged install and pkg-config consumers
+        run: |
+          ci/run-limited ctest \
+            --test-dir "out/build/${{ matrix.preset }}" \
+            --output-on-failure --stop-on-failure --no-tests=error \
+            -L install -LE "(large|performance)"

@@ -724,9 +724,9 @@ auto parallel_graph_access::ghost_plan() -> ghost_exchange_plan const& {
   auto const view = mpi::communicator_view{m_communicator};
   if (!mpi::detail::collective_predicate(
           m_graph_construction_complete && !m_building_graph, view)) {
-    throw mpi::mpi_error{
-        MPI_ERR_ARG,
-        "ghost exchange plan requires completed graph construction"};
+    mpi::throw_collectively_agreed_semantic_error(
+        m_communicator,
+        "ghost exchange plan requires completed graph construction");
   }
 
   auto const local_cache = m_ghost_exchange_plan == nullptr ? 0 : 1;

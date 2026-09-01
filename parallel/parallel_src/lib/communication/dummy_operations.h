@@ -8,13 +8,16 @@
 
 #ifndef DUMMY_OPERATIONS_UVZ6V6T7
 #define DUMMY_OPERATIONS_UVZ6V6T7
+
+#include "communication/mpi_handles.h"
+
 namespace parhip {
 class dummy_operations {
 public:
   dummy_operations();
   virtual ~dummy_operations();
 
-  void run_collective_dummy_operations();
+  void run_collective_dummy_operations(mpi::communicator_view communicator);
 };
 }
 

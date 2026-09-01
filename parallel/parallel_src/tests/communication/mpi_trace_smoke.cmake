@@ -5,6 +5,24 @@ if(NOT DEFINED PARHIP_EXECUTABLE OR NOT DEFINED MPIEXEC_EXECUTABLE OR
 endif()
 
 set(trace_run_id "smoke")
+set(work_directory "${TRACE_BASE}.work")
+set(partition_path "${work_directory}/tmppartition.txtp")
+get_filename_component(
+    repository_root
+    "${CMAKE_CURRENT_LIST_DIR}/../../../.."
+    ABSOLUTE
+)
+set(oracle_directory
+    "${repository_root}/.superpowers/sdd/kahip-collective-mpi-modernization"
+)
+set(oracle_manifest "${oracle_directory}/task-5-oracle-golden.txt")
+set(oracle_patch "${oracle_directory}/task-5-upstream-trace.patch")
+set(oracle_verifier
+    "${CMAKE_CURRENT_LIST_DIR}/verify_mpi_trace_oracle.cmake"
+)
+
+file(MAKE_DIRECTORY "${work_directory}")
+file(REMOVE "${partition_path}")
 file(GLOB stale_trace_files
     "${TRACE_BASE}.run-${trace_run_id}-*.rank*.trace"
 )
@@ -15,8 +33,12 @@ execute_process(
         "KAHIP_MPI_TRACE_PATH=${TRACE_BASE}"
         "KAHIP_MPI_TRACE_RUN_ID=${trace_run_id}"
         "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 2
-        "${PARHIP_EXECUTABLE}" "${GRAPH_PATH}"
-        --k=2 --preconfiguration=ultrafastmesh --seed=0
+        ${MPIEXEC_PREFLAGS}
+        "${PARHIP_EXECUTABLE}"
+        ${MPIEXEC_POSTFLAGS}
+        "${GRAPH_PATH}"
+        --k=2 --preconfiguration=ultrafastmesh --seed=0 --save_partition
+    WORKING_DIRECTORY "${work_directory}"
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_output
     ERROR_VARIABLE run_error
@@ -27,45 +49,28 @@ if(NOT run_result EQUAL 0)
     )
 endif()
 
-set(combined_trace "")
-set(common_trace_stem "")
-foreach(rank RANGE 0 1)
-    file(GLOB rank_trace_files
-        "${TRACE_BASE}.run-${trace_run_id}-*.rank${rank}.trace"
+execute_process(
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DMANIFEST_PATH=${oracle_manifest}"
+        "-DPATCH_PATH=${oracle_patch}"
+        "-DREPOSITORY_ROOT=${repository_root}"
+        "-DGRAPH_PATH=${GRAPH_PATH}"
+        "-DPARTITION_PATH=${partition_path}"
+        "-DTRACE_BASE=${TRACE_BASE}"
+        "-DTRACE_RUN_ID=${trace_run_id}"
+        "-DEXPECTED_RANKS=2"
+        "-DEXPECTED_K=2"
+        "-DEXPECTED_PRECONFIGURATION=ultrafastmesh"
+        "-DEXPECTED_SEED=0"
+        -P "${oracle_verifier}"
+    RESULT_VARIABLE verifier_result
+    OUTPUT_VARIABLE verifier_output
+    ERROR_VARIABLE verifier_error
+)
+if(NOT verifier_result EQUAL 0)
+    message(FATAL_ERROR
+        "exact MPI oracle verification failed (${verifier_result})\n"
+        "${verifier_output}${verifier_error}"
     )
-    list(LENGTH rank_trace_files rank_trace_file_count)
-    if(NOT rank_trace_file_count EQUAL 1)
-        message(FATAL_ERROR
-            "expected one trace file for rank ${rank}, found ${rank_trace_file_count}: ${rank_trace_files}"
-        )
-    endif()
-    list(GET rank_trace_files 0 trace_file)
-    string(REGEX REPLACE "\\.rank[0-9]+\\.trace$" "" trace_stem "${trace_file}")
-    if(common_trace_stem STREQUAL "")
-        set(common_trace_stem "${trace_stem}")
-    elseif(NOT trace_stem STREQUAL common_trace_stem)
-        message(FATAL_ERROR
-            "trace ranks did not resolve a common run ID: ${common_trace_stem};${trace_stem}"
-        )
-    endif()
-    file(READ "${trace_file}" rank_trace)
-    string(APPEND combined_trace "${rank_trace}")
-endforeach()
-
-foreach(required_stage
-        graph-distribution-node
-        graph-distribution-edge
-        contraction-label
-        quotient-node-weight
-        quotient-edge
-        projection-request
-        projection-reply
-        ghost-update
-        final-partition)
-    if(NOT combined_trace MATCHES
-       "${required_stage} cycle=[0-9]+ level=[0-9]+ epoch=[a-z-]+ iteration=[0-9]+ round=[0-9]+ global=")
-        message(FATAL_ERROR
-            "trace smoke is missing stage ${required_stage}"
-        )
-    endif()
-endforeach()
+endif()

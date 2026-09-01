@@ -1,7 +1,7 @@
 KaHIP v3.25
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![C++](https://img.shields.io/badge/C++-11/14-blue.svg)](https://isocpp.org/)
-[![CMake](https://img.shields.io/badge/CMake-3.10+-064F8C.svg)](https://cmake.org/)
+[![C++](https://img.shields.io/badge/C++-23-blue.svg)](https://isocpp.org/)
+[![CMake](https://img.shields.io/badge/CMake-4.0+-064F8C.svg)](https://cmake.org/)
 [![Build](https://github.com/KaHIP/KaHIP/actions/workflows/build.yml/badge.svg)](https://github.com/KaHIP/KaHIP/actions/workflows/build.yml)
 [![Windows CI](https://github.com/KaHIP/KaHIP/actions/workflows/build_windows.yml/badge.svg)](https://github.com/KaHIP/KaHIP/actions/workflows/build_windows.yml)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/9d0d08ba6b2d42699ab74fe5f9697bb9)](https://www.codacy.com/gh/KaHIP/KaHIP/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=KaHIP/KaHIP&amp;utm_campaign=Badge_Grade)
@@ -155,44 +155,48 @@ You can download KaHIP with the following command line:
 git clone https://github.com/KaHIP/KaHIP
 ```
 
-## Compiling KaHIP: 
-Before you can start, you need to install the following software packages:
+## Compiling KaHIP
 
-- if you want to use parallel algorithms contained within the framework (e.g. ParHIP), you need OpenMPI (https://www.open-mpi.org/). If you don't want to run ParHIP, you can easily get rid of this dependency.
+KaHIP requires a C++23 compiler and CMake 4.0 or newer. The checked-in vcpkg manifest supplies fmt, spdlog, Boost.Hana, Boost.MP11, and Catch2. MPI remains a system or HPC-environment dependency; MPI 3.1 is the portable minimum for ParHIP, while MPI 4 implementations enable additional collective paths when available.
 
-Once you installed the packages, just type 
+Set `VCPKG_ROOT` to your vcpkg checkout and use one of the checked-in configure, build, and strict test presets:
+
 ```console
-./compile_withcmake.sh 
+export VCPKG_ROOT="$HOME/Projects/vcpkg"
+cmake --preset unix-gcc-release
+cmake --build --preset build-unix-gcc-release --parallel 2
+ctest --preset test-unix-gcc-release
 ```
-In this case, all binaries, libraries and headers are in the folder ./deploy/ 
 
-Note that this script detects the amount of available cores on your machine and uses all of them for the compilation process. If you don't want that, set the variable NCORES to the number of cores that you would like to use for compilation. 
+Equivalent Clang debug and release presets are named `unix-clang-debug` and `unix-clang-release`. Build output is placed below `out/build/<preset>` and staged installs below `out/install/<preset>`. `CMakeUserPresets.json.example` shows a local vcpkg override; copy it to the ignored `CMakeUserPresets.json` only when local settings are useful.
 
-Alternatively use the standard cmake build process:
-```console 
-mkdir build
-cd build 
-cmake ../ -DCMAKE_BUILD_TYPE=Release     
-make 
-cd ..
+The ordinary CMake workflow remains supported for package builds and custom toolchains:
+
+```console
+cmake -S . -B out/build/release \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build out/build/release --parallel 2
+ctest --test-dir out/build/release --output-on-failure
 ```
-In this case, the binaries, libraries and headers are in the folder ./build as well as ./build/parallel/parallel_src/
 
-We also provide the option to link against TCMalloc. If you have it installed, run cmake with the additional option -DUSE_TCMALLOC=On. 
+Set `-DNOMPI=ON -DPARHIP=OFF` for a serial-only build. Tests follow standard CMake/CTest behavior and can be disabled with `-DBUILD_TESTING=OFF`.
+
+We also provide the option to link against TCMalloc. If you have it installed, configure with `-DUSE_TCMALLOC=ON`.
 
 By default node ordering programs are also compiled. If you have Metis installed, the build script also compiles a faster node ordering program that uses reductions before calling Metis ND. Note that Metis requires GKlib (https://github.com/KarypisLab/GKlib).
 
-If you use the option -DUSE_ILP=On and you have Gurobi installed, the build script compiles the ILP programs to improve a given partition *ilp_improve* and an exact solver *ilp_exact*. Alternatively, you can also pass these options to ./compile_withmake.sh for example:
+If you use the option `-DUSE_ILP=ON` and have Gurobi installed, CMake builds the ILP program *ilp_improve* and the exact solver *ilp_exact*:
 
 ```console 
-./compile_withcmake -DUSE_ILP=On
+cmake --preset unix-gcc-release -DUSE_ILP=ON
 ```
-We also provide an option to support 64-bit edges. In order to use this, compile KaHIP with the option -D64BITMODE=On. When enabled, the C interface uses `kahip_idx` (typedef for `int64_t`) instead of `int32_t` for all edge-related arrays and values (xadj, adjncy, adjcwgt, edgecut, infinity_edge_weight). Node-related parameters (n, vwgt, nparts, part) remain `int`. No additional flags are needed; `-D64BITMODE=On` enables both the internal 64-bit edge types and the public `kahip_idx` typedef.
+We also provide an option to support 64-bit edges. Configure with `-D64BITMODE=ON`. When enabled, the C interface uses `kahip_idx` (an `int64_t` typedef) instead of `int32_t` for all edge-related arrays and values (`xadj`, `adjncy`, `adjcwgt`, `edgecut`, and `infinity_edge_weight`). Node-related parameters (`n`, `vwgt`, `nparts`, and `part`) remain `int`.
 
 
-Lastly, we provide an option for determinism in ParHIP, e.g. two runs with the same seed will give you the same result. Note however that this option can reduce the quality of partitions, as initial partitioning algorithms do not use sophisticated memetic algorithms, but only multilevel algorithms to compute initial partitionings. ONLY use this option if you use ParHIP as a tool. Do not use this option if you want to make quality comparisons against ParHIP. To make use of this option, run 
+Lastly, we provide an option for determinism in ParHIP, e.g. two runs with the same seed will give you the same result. Note however that this option can reduce the quality of partitions, as initial partitioning algorithms do not use sophisticated memetic algorithms, but only multilevel algorithms to compute initial partitionings. ONLY use this option if you use ParHIP as a tool. Do not use this option if you want to make quality comparisons against ParHIP. To make use of this option, configure with:
 ```console 
-./compile_withcmake -DDETERMINISTIC_PARHIP=On
+cmake --preset unix-gcc-release -DDETERMINISTIC_PARHIP=ON
 ```
 
 Running Programs

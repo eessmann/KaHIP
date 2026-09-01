@@ -1,296 +1,441 @@
 /******************************************************************************
  * exchanger.cpp
- * *
+ *
  * Source of KaHIP -- Karlsruhe High Quality Partitioning.
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
 
+#include "exchanger.h"
+
 #include <mpi.h>
 
-#include "exchanger.h"
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <ranges>
+#include <vector>
+
 #include "parallel_mh/evolutionary_collectives.h"
+#include "parallel_mh/population_size_broadcast.h"
 #include "tools/quality_metrics.h"
 #include "tools/random_functions.h"
+
 namespace kahip::modified {
-exchanger::exchanger(MPI_Comm communicator) {
-  m_prev_best_objective = std::numeric_limits<EdgeWeight>::max();
-
-  m_communicator = communicator;
-
-  int rank, comm_size;
-  MPI_Comm_rank( m_communicator, &rank);
-  MPI_Comm_size( m_communicator, &comm_size);
-
-  m_cur_num_pushes = 0;
-  if(comm_size > 2) m_max_num_pushes = ceil(log2(comm_size));
-  else              m_max_num_pushes = 1;
-
-  std::cout <<  "max num pushes " <<  m_max_num_pushes  << std::endl;
-
-  m_allready_send_to.resize(comm_size);
-
-  for( unsigned i = 0; i < m_allready_send_to.size(); i++) {
-    m_allready_send_to[i] = false;
+auto exchanger::pending_send::operator=(pending_send&& other) noexcept
+    -> pending_send& {
+  if (this != &other) {
+    if (request != MPI_REQUEST_NULL) {
+      ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+          communicator, "evolutionary pending-send move assignment",
+          "live MPI request would lose its completion ownership");
+    }
+    payload = std::move(other.payload);
+    request = std::exchange(other.request, MPI_REQUEST_NULL);
+    communicator = std::exchange(other.communicator, MPI_COMM_NULL);
   }
-
-  m_allready_send_to[rank] = true;
+  return *this;
 }
 
-exchanger::~exchanger() {
-  MPI_Barrier( m_communicator );
-  int rank;
-  MPI_Comm_rank( m_communicator, &rank);
-
-  int flag; MPI_Status st;
-  MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &flag, &st);
-
-  while(flag) {
-    int message_length;
-    MPI_Get_count(&st, MPI_INT, &message_length);
-
-    int* partition_map = new int[message_length];
-    MPI_Status rst;
-    MPI_Recv( partition_map, message_length, MPI_INT, st.MPI_SOURCE, rank, m_communicator, &rst);
-
-    delete[] partition_map;
-    MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &flag, &st);
+exchanger::exchanger(MPI_Comm communicator)
+    : m_prev_best_objective(std::numeric_limits<EdgeWeight>::max()),
+      m_max_num_pushes(1),
+      m_rank(-1),
+      m_size(0),
+      m_communicator(communicator) {
+  if (!::kahip::parallel_mh::detail::mpi_runtime_is_active()) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_lifecycle(
+        "evolutionary exchange requires an active MPI runtime");
+  }
+  if (m_communicator == MPI_COMM_NULL) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        MPI_COMM_WORLD, "evolutionary exchange construction",
+        "exchange requires a live intracommunicator");
   }
 
-  MPI_Barrier( m_communicator );
-  for( unsigned i = 0; i < m_request_pointers.size(); i++) {
-    MPI_Cancel( m_request_pointers[i] );
+  auto is_intercommunicator = 0;
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Comm_test_inter(m_communicator, &is_intercommunicator),
+      m_communicator, "MPI_Comm_test_inter(evolutionary exchange)");
+  if (is_intercommunicator != 0) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, "evolutionary exchange construction",
+        "exchange requires an intracommunicator");
   }
 
-  for( unsigned i = 0; i < m_request_pointers.size(); i++) {
-    MPI_Status st;
-    MPI_Wait( m_request_pointers[i], & st );
-    delete[] m_partition_map_buffers[i];
-    delete   m_request_pointers[i];
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Comm_rank(m_communicator, &m_rank), m_communicator,
+      "MPI_Comm_rank(evolutionary exchange)");
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Comm_size(m_communicator, &m_size), m_communicator,
+      "MPI_Comm_size(evolutionary exchange)");
+  if (m_rank < 0 || m_rank >= m_size || m_size <= 0) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, "evolutionary exchange construction",
+        "MPI returned an invalid evolutionary communicator rank or size");
   }
 
+  m_max_num_pushes =
+      m_size > 2 ? static_cast<int>(std::ceil(std::log2(m_size))) : 1;
+  std::cout << "max num pushes " << m_max_num_pushes << std::endl;
+  m_already_sent_to.assign(static_cast<std::size_t>(m_size), false);
+  m_already_sent_to[static_cast<std::size_t>(m_rank)] = true;
+  m_issued_sends.assign(static_cast<std::size_t>(m_size), 0);
+  m_consumed_receives.assign(static_cast<std::size_t>(m_size), 0);
 }
 
-void exchanger::diversify_population( PartitionConfig & config, graph_access & G,  population & island, bool replace ) {
+exchanger::~exchanger() noexcept {
+  if (!m_finished) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, "evolutionary rumor exchange teardown",
+        "exchanger destroyed before explicit finish drained all messages");
+  }
+}
 
-  int rank, comm_size;
-  MPI_Comm_rank( m_communicator, &rank);
-  MPI_Comm_size( m_communicator, &comm_size);
+auto exchanger::observe_graph_order(std::size_t graph_order,
+                                    std::string_view operation) -> int {
+  if (m_finished) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, operation,
+        "evolutionary exchange used after explicit finish");
+  }
+  if (m_graph_order_observed && graph_order != m_graph_order) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, operation,
+        "evolutionary exchange graph order changed during its lifetime");
+  }
+  m_graph_order = graph_order;
+  m_graph_order_observed = true;
+  return ::kahip::parallel_mh::detail::checked_count(graph_order,
+                                                     m_communicator, operation);
+}
 
-  std::vector<unsigned> permutation(comm_size, 0);
+void exchanger::validate_partition_status(MPI_Status const& status,
+                                          int expected_source,
+                                          int expected_tag,
+                                          int expected_count,
+                                          std::string_view operation) const {
+  if (status.MPI_SOURCE != expected_source || expected_source < 0 ||
+      expected_source >= m_size) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, operation,
+        "rumor message source does not match the requested peer");
+  }
+  if (status.MPI_TAG != expected_tag) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, operation,
+        "rumor message tag does not match receiver rank");
+  }
+  auto received_count = 0;
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Get_count(&status, MPI_INT, &received_count), m_communicator,
+      "MPI_Get_count(evolutionary partition payload)");
+  if (received_count != expected_count) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, operation,
+        "rumor message count does not match the graph order");
+  }
+}
 
-  if( rank == ROOT ) {
+void exchanger::diversify_population(PartitionConfig& config,
+                                     graph_access& graph,
+                                     population& island,
+                                     bool replace) {
+  static_cast<void>(
+      observe_graph_order(static_cast<std::size_t>(graph.number_of_nodes()),
+                          "MPI_Sendrecv(evolutionary permutation exchange)"));
+  auto permutation = std::vector<unsigned>(static_cast<std::size_t>(m_size), 0);
+  if (m_rank == ROOT) {
     random_functions::circular_permutation(permutation);
   }
+  ::kahip::parallel_mh::broadcast_permutation(m_communicator, permutation,
+                                              ROOT);
 
-  ::kahip::parallel_mh::broadcast_permutation(
-      m_communicator, permutation, ROOT);
-
-  int from = 0;
-  int to   = permutation[rank];
-  for( unsigned i = 0; i < permutation.size(); i++) {
-    if( permutation[i] == (unsigned)rank ) {
-      from = (int)i;
-      break;
-    }
+  auto canonical = permutation;
+  std::ranges::sort(canonical);
+  auto expected = std::vector<unsigned>(canonical.size());
+  std::iota(expected.begin(), expected.end(), 0U);
+  if (canonical != expected) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, "MPI_Bcast(evolutionary permutation)",
+        "evolutionary permutation is not a bijection of communicator ranks");
   }
 
-  Individuum in;
-  Individuum out;
+  auto const destination =
+      static_cast<int>(permutation[static_cast<std::size_t>(m_rank)]);
+  auto const source_position =
+      std::ranges::find(permutation, static_cast<unsigned>(m_rank));
+  auto const source =
+      static_cast<int>(std::distance(permutation.begin(), source_position));
 
-  if(config.mh_diversify_best) {
-    island.get_best_individuum(in);
+  auto input = Individuum{};
+  auto output = Individuum{};
+  if (config.mh_diversify_best) {
+    island.get_best_individuum(input);
   } else {
-    island.get_random_individuum(in);
+    island.get_random_individuum(input);
   }
-  exchange_individum( config, G, from, rank, to, in, out);
-
-  if( replace ) {
-    island.replace( in, out );
+  exchange_individum(config, graph, source, destination, input, output);
+  if (replace) {
+    island.replace(input, output);
   } else {
-    island.insert( G, out );
-  }
-
-}
-
-void exchanger::quick_start( PartitionConfig & config, graph_access & G, population & island ) {
-  int comm_size;
-  MPI_Comm_size( m_communicator, &comm_size);
-
-  unsigned no_of_individuals = ceil(config.mh_pool_size / (double)comm_size) - 1;
-
-  std::cout <<  "creating " <<  no_of_individuals << std::endl;
-
-  for(unsigned i = 0; i < no_of_individuals; i++) {
-    PartitionConfig copy            = config;
-    copy.combine                    = false;
-    copy.graph_allready_partitioned = false;
-
-    Individuum ind;
-    island.createIndividuum(config, G, ind, true);
-    island.insert(G, ind);
-  }
-
-  int reps = config.mh_pool_size - no_of_individuals;
-  if(reps < 0) reps = 0;
-
-  PartitionConfig div_config   = config;
-  div_config.mh_diversify_best = false;
-  for( unsigned i = 0; i < (unsigned) reps; i++) {
-    diversify_population( div_config , G, island, false);
+    island.insert(graph, output);
   }
 }
 
+void exchanger::quick_start(PartitionConfig& config,
+                            graph_access& graph,
+                            population& island) {
+  static_cast<void>(
+      observe_graph_order(static_cast<std::size_t>(graph.number_of_nodes()),
+                          "evolutionary quick-start"));
+  auto const plan = ::kahip::parallel_mh::quick_start_population_plan(
+      config.mh_pool_size, m_size);
+  if (!plan.has_value()) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, "evolutionary quick-start",
+        "quick-start requires a positive communicator size");
+  }
+  std::cout << "creating " << plan->local_creations << std::endl;
+  for (auto index = 0U; index < plan->local_creations; ++index) {
+    auto individual = Individuum{};
+    island.createIndividuum(config, graph, individual, true);
+    island.insert(graph, individual);
+  }
 
-void exchanger::exchange_individum( const PartitionConfig & config,  graph_access & G,
-                                    int & from, int & rank, int & to,
-                                    Individuum & in, Individuum & out) {
-  //recv. edge cut, partition_map, cut_edges from "from"
-  //send in to "to"
-
-  int* partition_map = new int[G.number_of_nodes()];
-  out.partition_map  = partition_map;
-  out.cut_edges      = new std::vector<EdgeID>();
-
-  MPI_Status st;
-  MPI_Sendrecv( in.partition_map , G.number_of_nodes(), MPI_INT, to, 0,
-                out.partition_map, G.number_of_nodes(), MPI_INT, from, 0, m_communicator, &st);
-
-  //recompute cut edges and edge cut locally
-  forall_nodes(G, node) {
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if(partition_map[node] != partition_map[target]) {
-        out.cut_edges->push_back(e);
-      }
-    } endfor
-} endfor
-
-out.objective = m_qm.objective(config, G, partition_map);
+  auto diversify_config = config;
+  diversify_config.mh_diversify_best = false;
+  for (auto index = 0U; index < plan->diversifications; ++index) {
+    diversify_population(diversify_config, graph, island, false);
+  }
 }
 
+void exchanger::exchange_individum(PartitionConfig const& config,
+                                   graph_access& graph,
+                                   int source,
+                                   int destination,
+                                   Individuum& input,
+                                   Individuum& output) {
+  auto const graph_count =
+      observe_graph_order(static_cast<std::size_t>(graph.number_of_nodes()),
+                          "MPI_Sendrecv(evolutionary permutation exchange)");
+  if (source < 0 || source >= m_size || destination < 0 ||
+      destination >= m_size || input.partition_map == nullptr) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator, "MPI_Sendrecv(evolutionary permutation exchange)",
+        "permutation exchange arguments are invalid");
+  }
 
-//extended push protocol -- see paper for details
-void exchanger::push_best( PartitionConfig & config, graph_access & G, population & island ) {
-  int rank, size;
-  MPI_Comm_rank( m_communicator, &rank);
-  MPI_Comm_size( m_communicator, &size);
+  auto partition_map = std::make_unique<int[]>(
+      static_cast<std::size_t>(graph.number_of_nodes()));
+  auto cut_edges = std::make_unique<std::vector<EdgeID>>();
+  auto status = MPI_Status{};
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Sendrecv(input.partition_map, graph_count, MPI_INT, destination, 0,
+                   partition_map.get(), graph_count, MPI_INT, source, 0,
+                   m_communicator, &status),
+      m_communicator, "MPI_Sendrecv(evolutionary permutation exchange)");
+  validate_partition_status(status, source, 0, graph_count,
+                            "MPI_Sendrecv(evolutionary permutation exchange)");
 
-  Individuum best_ind;
-  island.get_best_individuum(best_ind);
+  forall_nodes(graph, node){forall_out_edges(
+      graph, edge, node){auto const target = graph.getEdgeTarget(edge);
+  if (partition_map[node] != partition_map[target]) {
+    cut_edges->push_back(edge);
+  }
+}
+endfor
+}  // namespace kahip::modified
+endfor output.objective = m_qm.objective(config, graph, partition_map.get());
+output.partition_map = partition_map.release();
+output.cut_edges = cut_edges.release();
+}
 
-  if( best_ind.objective < m_prev_best_objective) {
-    m_prev_best_objective = best_ind.objective;
-    for( unsigned i = 0; i < m_allready_send_to.size(); i++) {
-      m_allready_send_to[i] = false;
-    }
-
-    m_allready_send_to[rank] = true;
-    m_cur_num_pushes         = 0;
-
-    std::cout << "rank " <<  rank
+void exchanger::push_best(PartitionConfig& config,
+                          graph_access& graph,
+                          population& island) {
+  static_cast<void>(config);
+  auto const graph_count =
+      observe_graph_order(static_cast<std::size_t>(graph.number_of_nodes()),
+                          "MPI_Isend(evolutionary rumor)");
+  auto best = Individuum{};
+  island.get_best_individuum(best);
+  if (::kahip::parallel_mh::objective_improved(best.objective,
+                                               m_prev_best_objective)) {
+    m_prev_best_objective = best.objective;
+    std::ranges::fill(m_already_sent_to, false);
+    m_already_sent_to[static_cast<std::size_t>(m_rank)] = true;
+    m_cur_num_pushes = 0;
+    std::cout << "rank " << m_rank
               << ": pool improved *************************************** "
-              <<  best_ind.objective << std::endl;
+              << best.objective << std::endl;
   }
 
-  bool something_todo = false;
-  for( unsigned i = 0; i < m_allready_send_to.size(); i++) {
-    if(!m_allready_send_to[i]) {
-      something_todo = true;
-      break;
+  auto something_to_do =
+      std::ranges::any_of(m_already_sent_to, [](bool sent) { return !sent; });
+  if (m_cur_num_pushes > m_max_num_pushes)
+    something_to_do = false;
+  if (something_to_do) {
+    auto payload =
+        std::vector<int>(static_cast<std::size_t>(graph.number_of_nodes()));
+    forall_nodes(graph, node) {
+      payload[static_cast<std::size_t>(node)] = graph.getPartitionIndex(node);
     }
-  }
+    endfor
 
-  if( m_cur_num_pushes > m_max_num_pushes ) {
-    something_todo = false;
-  }
-
-  if(something_todo) {
-    int* partition_map = new int[G.number_of_nodes()];
-    forall_nodes(G, node) {
-      partition_map[node] = G.getPartitionIndex(node);
-    } endfor
-
-    int target = rank;
-    while( target == rank && m_allready_send_to[target]) target = random_functions::nextInt(0, size-1);
-
-    //MPI::Request* request = new MPI::Request;
-    //*request              = MPI::COMM_WORLD.Isend( partition_map, G.number_of_nodes(), MPI_INT, target, target);
-    MPI_Request* rq = new MPI_Request;
-    MPI_Isend( partition_map, G.number_of_nodes(), MPI_INT, target, target, m_communicator, rq);
-
-
-    m_cur_num_pushes++;
-
-    m_request_pointers.push_back( rq );
-    m_partition_map_buffers.push_back( partition_map );
-
-    m_allready_send_to[target] = true;
-  }
-
-  for( unsigned i = 0; i < m_request_pointers.size(); i++) {
-    int finished = 0;
-    MPI_Status st;
-    MPI_Test( m_request_pointers[i], &finished, &st);
-
-    if(finished) {
-      std::swap(m_request_pointers[i], m_request_pointers[m_request_pointers.size()-1]);
-      std::swap(m_partition_map_buffers[i], m_partition_map_buffers[m_request_pointers.size()-1]);
-
-      delete[] m_partition_map_buffers[m_partition_map_buffers.size() - 1];
-      delete   m_request_pointers[m_request_pointers.size() - 1];
-
-      m_partition_map_buffers.pop_back();
-      m_request_pointers.pop_back();
+    auto target = m_rank;
+    // Retain the paper's asynchronous rumor selection and exact draw order.
+    while (m_already_sent_to[static_cast<std::size_t>(target)]) {
+      target = random_functions::nextInt(0, m_size - 1);
     }
+    auto& issued = m_issued_sends[static_cast<std::size_t>(target)];
+    if (issued == std::numeric_limits<std::uint64_t>::max()) {
+      ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+          m_communicator, "MPI_Isend(evolutionary rumor)",
+          "evolutionary rumor send count exceeds uint64_t");
+    }
+    m_pending_sends.emplace_back(std::move(payload), MPI_REQUEST_NULL,
+                                 m_communicator);
+    auto& pending = m_pending_sends.back();
+    ::kahip::parallel_mh::detail::check_mpi(
+        MPI_Isend(pending.payload.data(), graph_count, MPI_INT, target, target,
+                  m_communicator, &pending.request),
+        m_communicator, "MPI_Isend(evolutionary rumor)");
+    ++issued;
+    ++m_cur_num_pushes;
+    m_already_sent_to[static_cast<std::size_t>(target)] = true;
+  }
+  retire_completed_sends();
+}
+
+void exchanger::retire_completed_sends() {
+  std::erase_if(m_pending_sends, [&](pending_send& pending) {
+    auto complete = 0;
+    ::kahip::parallel_mh::detail::check_mpi(
+        MPI_Test(&pending.request, &complete, MPI_STATUS_IGNORE),
+        m_communicator, "MPI_Test(evolutionary rumor)");
+    return complete != 0;
+  });
+}
+
+void exchanger::receive_available(PartitionConfig& config,
+                                  graph_access& graph,
+                                  population& island,
+                                  MPI_Status const& probe_status,
+                                  int graph_count) {
+  validate_partition_status(probe_status, probe_status.MPI_SOURCE, m_rank,
+                            graph_count, "MPI_Recv(evolutionary rumor)");
+  auto const source = probe_status.MPI_SOURCE;
+  auto partition_map = std::make_unique<int[]>(
+      static_cast<std::size_t>(graph.number_of_nodes()));
+  auto cut_edges = std::make_unique<std::vector<EdgeID>>();
+  auto receive_status = MPI_Status{};
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Recv(partition_map.get(), graph_count, MPI_INT, source, m_rank,
+               m_communicator, &receive_status),
+      m_communicator, "MPI_Recv(evolutionary rumor)");
+  validate_partition_status(receive_status, source, m_rank, graph_count,
+                            "MPI_Recv(evolutionary rumor)");
+
+  forall_nodes(graph, node){forall_out_edges(
+      graph, edge, node){auto const target = graph.getEdgeTarget(edge);
+  if (partition_map[node] != partition_map[target]) {
+    cut_edges->push_back(edge);
+  }
+}
+endfor
+}
+endfor auto output = Individuum{};
+output.objective = m_qm.objective(config, graph, partition_map.get());
+output.partition_map = partition_map.release();
+output.cut_edges = cut_edges.release();
+island.insert(graph, output);
+
+auto& consumed = m_consumed_receives[static_cast<std::size_t>(source)];
+if (consumed == std::numeric_limits<std::uint64_t>::max()) {
+  ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+      m_communicator, "MPI_Recv(evolutionary rumor)",
+      "evolutionary rumor receive count exceeds uint64_t");
+}
+++consumed;
+if (::kahip::parallel_mh::objective_improved(output.objective,
+                                             m_prev_best_objective)) {
+  m_prev_best_objective = output.objective;
+  std::cout << "rank " << m_rank
+            << ": pool improved (inc) "
+               "**************************************** "
+            << output.objective << std::endl;
+  std::ranges::fill(m_already_sent_to, false);
+  m_already_sent_to[static_cast<std::size_t>(m_rank)] = true;
+  m_cur_num_pushes = 0;
+}
+m_already_sent_to[static_cast<std::size_t>(source)] = true;
+}
+
+void exchanger::recv_incoming(PartitionConfig& config,
+                              graph_access& graph,
+                              population& island) {
+  auto const graph_count =
+      observe_graph_order(static_cast<std::size_t>(graph.number_of_nodes()),
+                          "MPI_Recv(evolutionary rumor)");
+  auto available = 0;
+  auto probe_status = MPI_Status{};
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &available,
+                 &probe_status),
+      m_communicator, "MPI_Iprobe(evolutionary rumor)");
+  while (available != 0) {
+    receive_available(config, graph, island, probe_status, graph_count);
+    ::kahip::parallel_mh::detail::check_mpi(
+        MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &available,
+                   &probe_status),
+        m_communicator, "MPI_Iprobe(evolutionary rumor)");
   }
 }
 
-void exchanger::recv_incoming( PartitionConfig & config, graph_access & G, population & island ) {
-  int rank;
-  MPI_Comm_rank( m_communicator, &rank);
+void exchanger::finish(std::size_t graph_order) {
+  auto const graph_count =
+      observe_graph_order(graph_order, "evolutionary rumor exchange finish");
+  auto incoming = std::vector<std::uint64_t>(static_cast<std::size_t>(m_size));
+  ::kahip::parallel_mh::detail::check_mpi(
+      MPI_Alltoall(m_issued_sends.data(), 1, MPI_UINT64_T, incoming.data(), 1,
+                   MPI_UINT64_T, m_communicator),
+      m_communicator, "MPI_Alltoall(evolutionary rumor counts)");
 
-  int flag; MPI_Status st;
-  MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &flag, &st);
-
-  while(flag) {
-    Individuum out;
-    int* partition_map = new int[G.number_of_nodes()];
-    out.partition_map  = partition_map;
-    out.cut_edges      = new std::vector<EdgeID>();
-
-    MPI_Status rst;
-    MPI_Recv( out.partition_map, G.number_of_nodes(), MPI_INT, st.MPI_SOURCE, rank, m_communicator, &rst);
-
-    //recompute cut edges and edge cut locally
-    forall_nodes(G, node) {
-      forall_out_edges(G, e, node) {
-        NodeID target = G.getEdgeTarget(e);
-        if(partition_map[node] != partition_map[target]) {
-          out.cut_edges->push_back(e);
-        }
-      } endfor
-} endfor
-
-out.objective = m_qm.objective(config, G, partition_map);
-    island.insert( G, out );
-
-    if( (unsigned)out.objective < (unsigned)m_prev_best_objective) {
-      m_prev_best_objective = out.objective;
-      std::cout << "rank " <<  rank
-                <<   ": pool improved (inc) **************************************** "
-                <<  out.objective << std::endl;
-
-      for( unsigned i = 0; i < m_allready_send_to.size(); i++) {
-        m_allready_send_to[i] = false;
-      }
-
-      m_allready_send_to[rank] = true;
-      m_cur_num_pushes         = 0;
+  for (auto source = 0; source < m_size; ++source) {
+    auto& consumed = m_consumed_receives[static_cast<std::size_t>(source)];
+    auto const expected = incoming[static_cast<std::size_t>(source)];
+    if (consumed > expected) {
+      ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+          m_communicator, "evolutionary rumor exchange finish",
+          "consumed rumor count exceeds the sender's issued count");
     }
-
-    m_allready_send_to[st.MPI_SOURCE] = true; // we dont need to send it back - saves us P * 1 messages of length n
-
-    MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &flag, &st);
+    while (consumed < expected) {
+      auto probe_status = MPI_Status{};
+      ::kahip::parallel_mh::detail::check_mpi(
+          MPI_Probe(source, MPI_ANY_TAG, m_communicator, &probe_status),
+          m_communicator, "MPI_Probe(evolutionary rumor drain)");
+      validate_partition_status(probe_status, source, m_rank, graph_count,
+                                "MPI_Recv(evolutionary rumor drain)");
+      auto payload = std::vector<int>(graph_order);
+      auto receive_status = MPI_Status{};
+      ::kahip::parallel_mh::detail::check_mpi(
+          MPI_Recv(payload.data(), graph_count, MPI_INT, source, m_rank,
+                   m_communicator, &receive_status),
+          m_communicator, "MPI_Recv(evolutionary rumor drain)");
+      validate_partition_status(receive_status, source, m_rank, graph_count,
+                                "MPI_Recv(evolutionary rumor drain)");
+      ++consumed;
+    }
   }
+
+  for (auto& pending : m_pending_sends) {
+    ::kahip::parallel_mh::detail::check_mpi(
+        MPI_Wait(&pending.request, MPI_STATUS_IGNORE), m_communicator,
+        "MPI_Wait(evolutionary rumor)");
+  }
+  m_pending_sends.clear();
+  m_finished = true;
 }
-}
+}  // namespace kahip::modified

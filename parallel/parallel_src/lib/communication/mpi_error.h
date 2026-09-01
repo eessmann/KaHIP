@@ -43,12 +43,4 @@ private:
   std::source_location location_;
 };
 
-inline void check(
-    int error_code,
-    std::string_view context,
-    std::source_location location = std::source_location::current()) {
-  if (error_code != MPI_SUCCESS) {
-    throw mpi_error{error_code, std::string{context}, location};
-  }
-}
 }  // namespace parhip::mpi

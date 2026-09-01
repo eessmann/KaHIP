@@ -1053,6 +1053,33 @@ TEST_CASE("forced MPI-3 bounded rounds preserve every element", "[unit][mpi]") {
   }
 }
 
+TEST_CASE("MPI-3 dense phase pairing is exact at the int rank limit",
+          "[unit][mpi][mpi3][bounded]") {
+  constexpr auto size =
+      static_cast<std::size_t>(std::numeric_limits<int>::max());
+  constexpr auto last = size - 1;
+
+  constexpr auto zero_phase =
+      parhip::mpi::detail::dense_phase_peers(last, size, 0);
+  STATIC_REQUIRE(zero_phase.destination == last);
+  STATIC_REQUIRE(zero_phase.source == last);
+
+  constexpr auto first_phase =
+      parhip::mpi::detail::dense_phase_peers(last, size, 1);
+  STATIC_REQUIRE(first_phase.destination == 0);
+  STATIC_REQUIRE(first_phase.source == size - 2);
+
+  constexpr auto last_phase =
+      parhip::mpi::detail::dense_phase_peers(last, size, last);
+  STATIC_REQUIRE(last_phase.destination == size - 2);
+  STATIC_REQUIRE(last_phase.source == 0);
+
+  constexpr auto rank_zero_last_phase =
+      parhip::mpi::detail::dense_phase_peers(0, size, last);
+  STATIC_REQUIRE(rank_zero_last_phase.destination == last);
+  STATIC_REQUIRE(rank_zero_last_phase.source == 1);
+}
+
 TEST_CASE("forced MPI-3 rounds preserve self-only source segments",
           "[unit][mpi]") {
   communicator_view const world{MPI_COMM_WORLD};

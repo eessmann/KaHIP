@@ -9,6 +9,7 @@
 #ifndef CONFIGURATION_3APG5V7ZA
 #define CONFIGURATION_3APG5V7ZA
 
+#include "communication/mpi_handles.h"
 #include "partition_config.h"
 namespace parhip {
 class configuration {
@@ -19,7 +20,10 @@ public:
         void standard( PPartitionConfig & config );
         void ultrafast( PPartitionConfig & config );
         void fast( PPartitionConfig & config );
-        void eco( PPartitionConfig & config );
+        void eco(
+            PPartitionConfig & config,
+            mpi::communicator_view communicator =
+                mpi::communicator_view{MPI_COMM_WORLD});
         void strong( PPartitionConfig & config );
 };
 
@@ -39,12 +43,14 @@ inline void configuration::fast( PPartitionConfig & partition_config ) {
         partition_config.stop_factor                     = 18000;
 }
 
-inline void configuration::eco( PPartitionConfig & partition_config ) {
+inline void configuration::eco(
+    PPartitionConfig & partition_config,
+    mpi::communicator_view communicator) {
         partition_config.initial_partitioning_algorithm  =
       InitialPartitioningAlgorithm::KAFFPAEFASTSNW;
         partition_config.no_refinement_in_last_iteration = true;
         partition_config.stop_factor                     = 18000;
-        int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
+        auto const size = communicator.size();
         partition_config.evolutionary_time_limit         = 2048/size;
         partition_config.eco                             = true;
         partition_config.num_vcycles                     = 6;

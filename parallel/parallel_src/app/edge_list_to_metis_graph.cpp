@@ -4,188 +4,184 @@
  * Source of KaHIP -- Karlsruhe High Quality Partitioning.
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
-#include <argtable3.h>
+
 #include <mpi.h>
+
+#include <algorithm>
 #include <charconv>
+#include <cstdlib>
 #include <filesystem>
-#include <format>
 #include <fstream>
-#include <iostream>
+#include <iterator>
+#include <optional>
+#include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
+#include "application_math.h"
+#include "communication/mpi_application.h"
 #include "data_structure/hashed_graph.h"
 #include "data_structure/parallel_graph_access.h"
 #include "io/parallel_graph_io.h"
-#include "parse_parameters.h"
-#include "partition_config.h"
 
+namespace {
 namespace fs = std::filesystem;
 
-int main(int argc, char** argv) {
+template <typename Value>
+[[nodiscard]] auto parse_number(std::string_view text) -> std::optional<Value> {
+  auto value = Value{};
+  auto const result =
+      std::from_chars(text.data(), text.data() + text.size(), value);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size()
+             ? std::optional<Value>{value}
+             : std::nullopt;
+}
+}  // namespace
+
+int main(int argument_count, char** argument_values) {
   using namespace parhip;
-  MPI_Init(&argc, &argv);
-
-  int rank = 0;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-  PPartitionConfig partition_config{};
-  std::string graph_filename;
-
-  if (argc != 2) {
-    if (rank == ROOT) {
-      std::cout << "usage: ";
-      std::cout << "edge_list_to_metis inputfilename" << std::endl;
-    }
-    MPI_Finalize();
-    return EXIT_FAILURE;
-  }
-  graph_filename = argv[1];
-
-  if (!fs::exists(graph_filename)) {
-    if (rank == 0) {
-      for (int i = 0; i < argc; ++i) {
-        std::cout << argv[i] << std::endl;
+  mpi::application_runtime runtime{argument_count, argument_values,
+                                   "edge-list converter executable"};
+  return runtime.execute([&](mpi::communicator_view communicator) -> int {
+    auto const rank = communicator.rank();
+    if (argument_count != 2) {
+      if (rank == ROOT) {
+        fmt::print("usage: edge_list_to_metis inputfilename\n");
       }
-      std::cerr << std::format("Error: File '{}' does not exist.\n",
-                               graph_filename);
+      return EXIT_FAILURE;
     }
-    MPI_Finalize();
-    return EXIT_FAILURE;
-  }
-
-  std::ifstream in_file(graph_filename);
-  if (!in_file.is_open()) {
-    if (rank == 0) {
-      std::cerr << std::format("Error: Could not open file '{}'.\n",
-                               graph_filename);
-    }
-    MPI_Finalize();
-    return EXIT_FAILURE;
-  }
-
-  if (rank == 0) {
-    std::cout << "Starting IO...\n";
-  }
-
-  std::unordered_map<NodeID, std::unordered_map<NodeID, int>> source_targets;
-  EdgeID selfloops = 0;
-
-  std::string line;
-  while (std::getline(in_file, line)) {
-    if (line.empty()) {
-      continue;
+    if (rank != ROOT) {
+      return EXIT_SUCCESS;
     }
 
-    std::string_view const line_view(line);
-    auto comma_pos = line_view.find(',');
+    auto const graph_filename = fs::path{argument_values[1]};
+    if (!fs::exists(graph_filename)) {
+      fmt::print(stderr, "Error: File '{}' does not exist.\n",
+                 graph_filename.string());
+      return EXIT_FAILURE;
+    }
+    auto input = std::ifstream{graph_filename};
+    if (!input.is_open()) {
+      fmt::print(stderr, "Error: Could not open file '{}'.\n",
+                 graph_filename.string());
+      return EXIT_FAILURE;
+    }
 
-    if (comma_pos == std::string_view::npos) {
-      if (rank == 0) {
-        std::cerr << std::format("Malformed line (missing comma): '{}'\n",
-                                 line);
+    fmt::print("Starting IO...\n");
+    auto source_targets =
+        std::unordered_map<NodeID, std::unordered_map<NodeID, EdgeID>>{};
+    auto self_loops = EdgeID{0};
+    auto line = std::string{};
+    while (std::getline(input, line)) {
+      if (line.empty()) {
+        continue;
       }
-      continue;
-    }
-
-    std::string_view const source_str = line_view.substr(0, comma_pos);
-    std::string_view const target_str = line_view.substr(comma_pos + 1);
-
-    NodeID source = 0;
-    NodeID target = 0;
-
-    auto source_result = std::from_chars(
-        source_str.data(), source_str.data() + source_str.size(), source);
-    auto target_result = std::from_chars(
-        target_str.data(), target_str.data() + target_str.size(), target);
-
-    if (source_result.ec != std::errc{} || target_result.ec != std::errc{}) {
-      if (rank == 0) {
-        std::cerr << std::format(
-            "Error parsing line '{}': invalid number format.\n", line);
+      auto const line_view = std::string_view{line};
+      auto const comma = line_view.find(',');
+      if (comma == std::string_view::npos) {
+        fmt::print(stderr, "Malformed line (missing comma): '{}'\n", line);
+        continue;
       }
-      continue;
+
+      auto const source = parse_number<NodeID>(line_view.substr(0, comma));
+      auto const target = parse_number<NodeID>(line_view.substr(comma + 1));
+      if (!source.has_value() || !target.has_value()) {
+        fmt::print(stderr, "Error parsing line '{}': invalid number format.\n",
+                   line);
+        continue;
+      }
+      if (*source == *target) {
+        if (!application::checked_add(self_loops, EdgeID{1})) {
+          mpi::abort_on_capacity_failure(
+              communicator.native_handle(), "edge-list converter executable",
+              "self-loop count exceeds the edge domain");
+        }
+        continue;
+      }
+      auto& forward = source_targets[*source][*target];
+      auto& reverse = source_targets[*target][*source];
+      if (!application::checked_add(forward, EdgeID{1}) ||
+          !application::checked_add(reverse, EdgeID{1})) {
+        mpi::abort_on_capacity_failure(
+            communicator.native_handle(), "edge-list converter executable",
+            "parallel-edge multiplicity exceeds the edge domain");
+      }
+    }
+    fmt::print("Self-loops detected: {}\nIO completed.\n", self_loops);
+
+    auto node_ids = std::vector<NodeID>{};
+    node_ids.reserve(source_targets.size());
+    std::ranges::transform(source_targets, std::back_inserter(node_ids),
+                           [](auto const& entry) { return entry.first; });
+    std::ranges::sort(node_ids);
+
+    auto node_mapping = std::unordered_map<NodeID, NodeID>{};
+    node_mapping.reserve(node_ids.size());
+    for (auto const [index, node_id] :
+         std::views::enumerate(std::span<NodeID const>{node_ids})) {
+      node_mapping.emplace(node_id, static_cast<NodeID>(index));
     }
 
-    if (source == target) {
-      ++selfloops;
-      continue;
+    auto edge_count = EdgeID{0};
+    for (auto const& [node_id, targets] : source_targets) {
+      static_cast<void>(node_id);
+      if (!std::in_range<EdgeID>(targets.size()) ||
+          !application::checked_add(
+              edge_count, static_cast<EdgeID>(targets.size()))) {
+        mpi::abort_on_capacity_failure(
+            communicator.native_handle(), "edge-list converter executable",
+            "converted edge count exceeds the edge domain");
+      }
     }
-
-    ++source_targets[source][target];
-    ++source_targets[target][source];
-  }
-
-  if (rank == 0) {
-    std::cout << std::format("Self-loops detected: {}\n", selfloops);
-    std::cout << "IO completed.\n";
-  }
-
-  // Map original node IDs to consecutive IDs
-  std::unordered_map<NodeID, NodeID> node_id_mapping;
-  NodeID consecutive_id = 0;
-
-  for (auto const& [node_id, _] : source_targets) {
-    node_id_mapping[node_id] = consecutive_id++;
-  }
-
-  EdgeID edge_counter = 0;
-  for (auto const& [_, targets] : source_targets) {
-    edge_counter += targets.size();
-  }
-
-  if (rank == 0) {
-    std::cout << "Starting graph construction...\n";
-  }
-
-  auto exit_status = EXIT_SUCCESS;
-  {
-  complete_graph_access G;
-  G.start_construction(consecutive_id, edge_counter, consecutive_id,
-                       edge_counter);
-  G.set_range(0, consecutive_id);
-
-  EdgeID total_edge_weight = 0;
-
-  for (auto const& [node_id, targets] : source_targets) {
-    NodeID const new_node = G.new_node();
-
-    for (auto const& [target_id, weight] : targets) {
-      G.new_edge(new_node, node_id_mapping[target_id]);
-      total_edge_weight += weight;
+    if (!std::in_range<NodeID>(node_ids.size())) {
+      mpi::abort_on_capacity_failure(
+          communicator.native_handle(), "edge-list converter executable",
+          "converted node count exceeds the node domain");
     }
-  }
+    auto const node_count = static_cast<NodeID>(node_ids.size());
 
-  G.finish_construction();
+    fmt::print("Starting graph construction...\n");
+    auto graph = complete_graph_access{};
+    graph.start_construction(node_count, edge_count, node_count, edge_count);
+    graph.set_range(0, node_count);
+    auto total_edge_weight = EdgeID{0};
+    for (auto const node_id : node_ids) {
+      auto const new_node = graph.new_node();
+      auto targets = std::vector<std::pair<NodeID, EdgeID>>{};
+      targets.reserve(source_targets.at(node_id).size());
+      std::ranges::copy(source_targets.at(node_id), std::back_inserter(targets));
+      std::ranges::sort(targets, {}, &std::pair<NodeID, EdgeID>::first);
+      for (auto const& [target_id, multiplicity] : targets) {
+        graph.new_edge(new_node, node_mapping.at(target_id));
+        if (!application::checked_add(total_edge_weight, multiplicity)) {
+          mpi::abort_on_capacity_failure(
+              communicator.native_handle(), "edge-list converter executable",
+              "total edge weight exceeds the edge domain");
+        }
+      }
+    }
+    graph.finish_construction();
 
-  if (rank == 0) {
-    std::cout << std::format("Total edge weight: {}\n", total_edge_weight);
-    std::cout << std::format(
-        "Adjusted edge count (accounting for self-loops): {}\n",
-        ((total_edge_weight / 2) + selfloops));
-  }
-
-  // Generate output filename by replacing the input file's extension with
-  // ".graph"
-  fs::path input_path(graph_filename);
-  input_path.replace_extension(".graph");
-  std::string output_filename = input_path.string();
-
-  if (rank == 0) {
-    int const write_status = parallel_graph_io::writeGraphSequentially(G, output_filename);
+    fmt::print("Total edge weight: {}\n", total_edge_weight);
+    fmt::print("Adjusted edge count (accounting for self-loops): {}\n",
+               total_edge_weight / 2 + self_loops);
+    auto output_filename = graph_filename;
+    output_filename.replace_extension(".graph");
+    auto const write_status = parallel_graph_io::writeGraphSequentially(
+        graph, output_filename.string());
     if (write_status != 0) {
-      std::cerr << std::format("Error writing graph to '{}'.\n",
-                               output_filename);
-      exit_status = EXIT_FAILURE;
-    } else {
-      std::cout << std::format("Graph successfully written to '{}'.\n",
-                               output_filename);
+      fmt::print(stderr, "Error writing graph to '{}'.\n",
+                 output_filename.string());
+      return EXIT_FAILURE;
     }
-  }
-  }
-
-  MPI_Finalize();
-  return exit_status;
+    fmt::print("Graph successfully written to '{}'.\n",
+               output_filename.string());
+    return EXIT_SUCCESS;
+  });
 }

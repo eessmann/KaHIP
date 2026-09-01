@@ -331,7 +331,6 @@ void parallel_contraction::get_nodes_to_cnodes_ghost_nodes(
 
   auto const& plan = G.ghost_plan();
   auto semantic_failure = std::string_view{};
-  auto semantic_error = std::exception_ptr{};
   try {
     auto outgoing =
         std::vector<std::vector<contraction::ghost_cnode_assignment>>(
@@ -471,17 +470,14 @@ void parallel_contraction::get_nodes_to_cnodes_ghost_nodes(
         }
       }
     }
-    if (!semantic_failure.empty()) {
-      semantic_error = std::make_exception_ptr(
-          mpi::mpi_error{MPI_ERR_ARG, std::string{semantic_failure}});
-    }
   } catch (...) {
     mpi::abort_on_exception(plan.topology().native_handle(),
                             "contraction ghost CNode exchange");
   }
 
-  if (semantic_error != nullptr) {
-    std::rethrow_exception(semantic_error);
+  if (!semantic_failure.empty()) {
+    mpi::throw_collectively_agreed_semantic_error(
+        plan.topology().native_handle(), semantic_failure);
   }
 }
 
@@ -877,18 +873,6 @@ void parallel_contraction::update_ghost_nodes_weights(
       "contraction ghost-weight global count agreement failed");
 
   auto const& plan = G.ghost_plan();
-  auto make_semantic_error = [&](std::string_view context) {
-    auto error = std::exception_ptr{};
-    try {
-      error = std::make_exception_ptr(
-          mpi::mpi_error{MPI_ERR_ARG, std::string{context}});
-    } catch (...) {
-      mpi::abort_on_exception(plan.topology().native_handle(),
-                              "contraction ghost-weight semantic error");
-    }
-    return error;
-  };
-
   auto outgoing = std::vector<std::vector<contraction::ghost_node_weight>>{};
   auto send_buffer = mpi::segmented_buffer<contraction::ghost_node_weight>{};
   auto outgoing_is_valid = true;
@@ -926,8 +910,9 @@ void parallel_contraction::update_ghost_nodes_weights(
   }
   if (!mpi::detail::collective_predicate(outgoing_is_valid,
                                          plan.topology().view())) {
-    std::rethrow_exception(make_semantic_error(
-        "contraction ghost-weight outgoing validation failed"));
+    mpi::throw_collectively_agreed_semantic_error(
+        plan.topology().native_handle(),
+        "contraction ghost-weight outgoing validation failed");
   }
 
   auto received =
@@ -976,8 +961,9 @@ void parallel_contraction::update_ghost_nodes_weights(
   }
   if (!mpi::detail::collective_predicate(received_is_valid,
                                          plan.topology().view())) {
-    std::rethrow_exception(make_semantic_error(
-        "contraction ghost-weight received validation failed"));
+    mpi::throw_collectively_agreed_semantic_error(
+        plan.topology().native_handle(),
+        "contraction ghost-weight received validation failed");
   }
 
   for (auto const& [global_id, source, local_id, weight] : pending) {

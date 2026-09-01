@@ -144,6 +144,10 @@ public:
                 to          = r;
         };
 
+        [[nodiscard]] bool contains_global_node(NodeID global_id) const noexcept {
+                return global_id >= from && global_id - from < m_num_local_nodes;
+        }
+
         NodeID get_from_range() {
                 return from;
         };
@@ -189,7 +193,7 @@ public:
                 ASSERT_TRUE(e < m_edges.size());
 
                 // build ghost nodes on the fly
-                if( from <= target && target <= to) {
+                if( contains_global_node(target) ) {
                         m_edges[e].local_target = target - from;
                 } else {
                         m_nodes_data[source].is_interface_node = true;
@@ -355,7 +359,7 @@ public:
         //input is a global id
         //output is the local id
         NodeID getLocalID(NodeID node) {
-                if( from <= node && node <= to ) {
+                if( contains_global_node(node) ) {
                         return node - from;
                 } else {
                         return m_global_to_local_id[node];
@@ -573,7 +577,7 @@ inline bool parallel_graph_access::is_interface_node(NodeID node) {
 }
 
 inline bool parallel_graph_access::is_local_node_from_global_id(NodeID node) {
-        return from <= node && node <= to;
+        return contains_global_node(node);
 }
 
 inline bool parallel_graph_access::is_local_node(NodeID node) {

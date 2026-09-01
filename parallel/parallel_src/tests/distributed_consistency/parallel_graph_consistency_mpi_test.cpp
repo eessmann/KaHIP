@@ -164,6 +164,40 @@ TEST_CASE("finish construction stays local including root-only graphs",
   require_common(local_finish_is_local);
 }
 
+TEST_CASE("leading zero-work ranges do not claim the first global vertex",
+          "[unit][mpi][graph-range][zero-local]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+
+  auto const leading_zero_work = size > 1 && rank == 0;
+  auto const local_nodes = leading_zero_work ? NodeID{0} : NodeID{1};
+  auto const first = size > 1 ? static_cast<NodeID>(std::max(rank - 1, 0))
+                              : NodeID{0};
+  auto const global_nodes =
+      size > 1 ? static_cast<NodeID>(size - 1) : NodeID{1};
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  graph.start_construction(local_nodes, 0, global_nodes, 0, false);
+  graph.set_range(first, first);
+  auto ranges = std::vector<NodeID>(static_cast<std::size_t>(size) + 1);
+  std::ranges::transform(
+      std::views::iota(0, size + 1), ranges.begin(), [size](auto boundary) {
+        return size > 1 ? static_cast<NodeID>(std::max(boundary - 1, 0))
+                        : static_cast<NodeID>(boundary);
+      });
+  graph.set_range_array(ranges);
+  if (!leading_zero_work) {
+    auto const node = graph.new_node();
+    graph.setNodeLabel(node, first);
+  }
+  graph.finish_construction();
+
+  REQUIRE(graph.is_local_node_from_global_id(first) == !leading_zero_work);
+  REQUIRE(graph.find_local_id(first).has_value() == !leading_zero_work);
+}
+
 TEST_CASE("lazy ghost plans preserve MPI order and rebuild transactionally",
           "[unit][mpi][ghost-plan][cache]") {
   int rank = 0;

@@ -5,54 +5,40 @@
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
 
-#include <stdio.h>
+#include <cstdlib>
 #include <iostream>
+#include <string>
+
+#include "communication/mpi_application.h"
+#include "configuration.h"
 #include "io/parallel_graph_io.h"
 #include "partition_config.h"
-#include "configuration.h"
 
-using namespace std;
+int main(int argument_count, char** argument_values) {
+  using namespace parhip;
+  mpi::application_runtime runtime{argument_count, argument_values,
+                                   "readbgf executable"};
+  return runtime.execute([&](mpi::communicator_view communicator) -> int {
+    auto const rank = communicator.rank();
+    auto const size = communicator.size();
+    if (argument_count != 2) {
+      if (rank == ROOT) {
+        std::cout << "usage: readbgf bgf_file\n";
+      }
+      return EXIT_SUCCESS;
+    }
+    if (rank == ROOT) {
+      std::cout << "program reads a BGF (binary graph format) file and prints "
+                   "it into dummy.\n";
+    }
 
-const long fileTypeVersionNumber = 3;
-const long header_count    = 3;
-
-int main(int argn, char **argv)
-{
-        using namespace parhip;
-        MPI_Init(&argn, &argv);    /* starts MPI */
-
-        int rank, size;
-        MPI_Comm_rank( MPI_COMM_WORLD, &rank);
-        MPI_Comm_size( MPI_COMM_WORLD, &size);
-
-        if(argn != 2) {
-                if( rank == ROOT ) {
-                        std::cout <<  "usage: " ;
-                        std::cout <<  "readbgf bfg_file"  << std::endl;
-                }
-                MPI_Finalize();
-                return 0;
-        }
-
-
-        if( rank == ROOT ) {
-                std::cout <<  "program reads a BGF (binary graph format) file and prints it into dummy. "  << std::endl;
-        }
-        string filename(argv[1]);
-
-        configuration cfg;
-        PPartitionConfig config;
-        cfg.standard(config);
-
-        {
-        parallel_graph_access G;
-        parallel_graph_io pgio;
-        pgio.readGraphBinary(config, G, filename, rank, size);
-
-        string output_filename("dummy");
-        parallel_graph_io::writeGraphParallelSimple(G, output_filename);
-        }
-
-        MPI_Finalize();
-        return 0;
+    auto config = PPartitionConfig{};
+    auto presets = configuration{};
+    presets.standard(config);
+    auto graph = parallel_graph_access{communicator.native_handle()};
+    auto graph_io = parallel_graph_io{};
+    graph_io.readGraphBinary(config, graph, argument_values[1], rank, size);
+    parallel_graph_io::writeGraphParallelSimple(graph, "dummy");
+    return EXIT_SUCCESS;
+  });
 }

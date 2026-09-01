@@ -5,8 +5,15 @@
  * Christian Schulz <christian.schulz.phone@gmail.com>
  *****************************************************************************/
 
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <stdexcept>
+#include <vector>
+
 #include "bipartition.h"
 #include "data_structure/priority_queues/maxNodeHeap.h"
+#include "partition/initial_partitioning/bipartition_candidate.h"
 #include "quality_metrics.h"
 #include "random_functions.h"
 #include "timer.h"
@@ -28,14 +35,39 @@ void bipartition::initial_partition( const PartitionConfig & config,
 
   timer t;
   t.restart();
-  unsigned iterations = config.bipartition_tries;
-  EdgeWeight best_cut = std::numeric_limits<EdgeWeight>::max();
-  int best_load       = std::numeric_limits<int>::max();
+  auto const targets =
+      kahip::initial_partitioning::validated_bipartition_targets(
+          config.target_weights);
+  if(!targets) {
+    throw std::invalid_argument(
+        "bipartition requires two nonnegative target weights");
+  }
+  if(config.bipartition_tries <= 0) {
+    throw std::invalid_argument(
+        "bipartition requires at least one candidate");
+  }
+  if(config.bipartition_algorithm != BIPARTITION_BFS &&
+     config.bipartition_algorithm != BIPARTITION_FM) {
+    throw std::invalid_argument(
+        "bipartition requires a valid growth algorithm");
+  }
+
+  if(G.number_of_nodes() == 0) {
+    G.set_partition_count(2);
+    PRINT(std::cout <<  "bipartition took " <<  t.elapsed()  << std::endl;)
+    return;
+  }
+
+  auto const iterations = static_cast<unsigned>(config.bipartition_tries);
+  auto const requires_two_nonempty_blocks = G.number_of_nodes() >= 2;
+  std::optional<kahip::initial_partitioning::bipartition_candidate>
+      best_candidate;
+  std::vector<int> best_partition(G.number_of_nodes());
 
   for( unsigned i = 0; i < iterations; i++) {
     if(config.bipartition_algorithm == BIPARTITION_BFS)  {
       grow_regions_bfs(config, G);
-    } else if( config.bipartition_algorithm == BIPARTITION_FM) {
+    } else {
       grow_regions_fm(config, G);
     }
 
@@ -46,31 +78,54 @@ void bipartition::initial_partition( const PartitionConfig & config,
     quality_metrics qm;
     EdgeWeight curcut = qm.edge_cut(G);
 
-    int lhs_block_weight = 0;
-    int rhs_block_weight = 0;
+    if(curcut < 0) {
+      throw std::logic_error("bipartition produced a negative edge cut");
+    }
+
+    std::uint64_t lhs_block_weight = 0;
+    std::uint64_t rhs_block_weight = 0;
+    std::uint64_t lhs_vertices = 0;
+    std::uint64_t rhs_vertices = 0;
+    bool partition_ids_are_valid = true;
 
     forall_nodes(G, node) {
       if(G.getPartitionIndex(node) == 0) {
         lhs_block_weight += G.getNodeWeight(node);
-      } else {
+        ++lhs_vertices;
+      } else if(G.getPartitionIndex(node) == 1) {
         rhs_block_weight += G.getNodeWeight(node);
+        ++rhs_vertices;
+      } else {
+        partition_ids_are_valid = false;
       }
     } endfor
 
-    int lhs_overload = std::max(lhs_block_weight - config.target_weights[0],0);
-    int rhs_overload = std::max(rhs_block_weight - config.target_weights[1],0);
-
-    if(curcut < best_cut || (curcut == best_cut && lhs_overload + rhs_block_weight < best_load) ) {
-      //store it
-      best_cut  = curcut;
-      best_load = lhs_overload + rhs_overload;
-
+    auto const candidate =
+        kahip::initial_partitioning::make_bipartition_candidate(
+            static_cast<std::uint64_t>(curcut),
+            lhs_block_weight,
+            rhs_block_weight,
+            *targets,
+            lhs_vertices,
+            rhs_vertices,
+            partition_ids_are_valid,
+            requires_two_nonempty_blocks,
+            i);
+    if(!best_candidate ||
+       kahip::initial_partitioning::is_better_bipartition_candidate(
+           candidate, *best_candidate)) {
+      best_candidate = candidate;
       forall_nodes(G, n) {
-        partition_map[n] =  G.getPartitionIndex(n);
+        best_partition[n] = G.getPartitionIndex(n);
       } endfor
-}
+    }
 
   }
+  if(!best_candidate || !best_candidate->valid_blocks) {
+    throw std::runtime_error(
+        "bipartition failed to produce two valid nonempty blocks");
+  }
+  std::ranges::copy(best_partition, partition_map);
   PRINT(std::cout <<  "bipartition took " <<  t.elapsed()  << std::endl;)
 }
 
@@ -158,7 +213,10 @@ void bipartition::grow_regions_bfs(const PartitionConfig & config, graph_access 
     G.setPartitionIndex(node, 1);
   } endfor
 
-  NodeID nodes_left = G.number_of_nodes()-1;
+  // The queued start vertex has not been assigned yet.  Count it until it is
+  // removed from the queue so a two-vertex graph still assigns one vertex to
+  // each side instead of leaving the initial all-one labeling unchanged.
+  NodeID nodes_left = G.number_of_nodes();
 
   //now perform a bfs to get a partition
   std::queue<NodeID>* bfsqueue = new std::queue<NodeID>;
@@ -236,7 +294,8 @@ void bipartition::grow_regions_fm(const PartitionConfig & config, graph_access &
     G.setPartitionIndex(node, 1);
   } endfor
 
-  NodeID nodes_left = G.number_of_nodes()-1;
+  // The queued start vertex has not been assigned yet; see grow_regions_bfs.
+  NodeID nodes_left = G.number_of_nodes();
 
   //now perform a pseudo dijkstra to get a partition
   maxNodeHeap* queue = new maxNodeHeap();

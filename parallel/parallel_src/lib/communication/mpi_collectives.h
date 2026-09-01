@@ -40,6 +40,26 @@ struct collective_options {
 };
 
 namespace detail {
+struct dense_phase_pair final {
+  std::size_t destination;
+  std::size_t source;
+};
+
+// Return (rank + phase) mod size and (rank - phase) mod size without ever
+// forming an intermediate larger than size. MPI communicator ranks are ints,
+// but doing the arithmetic in int can overflow for valid large communicators.
+[[nodiscard]] constexpr auto dense_phase_peers(
+    std::size_t rank,
+    std::size_t size,
+    std::size_t phase) noexcept -> dense_phase_pair {
+  auto const distance_to_wrap = size - rank;
+  return dense_phase_pair{
+      .destination =
+          phase >= distance_to_wrap ? phase - distance_to_wrap : rank + phase,
+      .source = rank >= phase ? rank - phase : size - (phase - rank),
+  };
+}
+
 inline auto collective_predicate(bool local_is_valid,
                                  communicator_view communicator) noexcept
     -> bool {
@@ -223,17 +243,15 @@ void mpi3_bounded_all_to_all_v(segmented_buffer<T> const& sends,
                                MPI_Datatype datatype,
                                std::size_t ceiling,
                                communicator_view communicator) {
-  auto const rank = communicator.rank();
-  auto const size = communicator.size();
-  std::vector<int> send_counts(static_cast<std::size_t>(size), 0);
-  std::vector<int> receive_counts_i(static_cast<std::size_t>(size), 0);
-  std::vector<int> displacements(static_cast<std::size_t>(size), 0);
+  auto const rank = static_cast<std::size_t>(communicator.rank());
+  auto const size = static_cast<std::size_t>(communicator.size());
+  std::vector<int> send_counts(size, 0);
+  std::vector<int> receive_counts_i(size, 0);
+  std::vector<int> displacements(size, 0);
 
-  for (int phase = 0; phase < size; ++phase) {
-    auto const destination = (rank + phase) % size;
-    auto const source = (rank - phase + size) % size;
-    auto const destination_index = static_cast<std::size_t>(destination);
-    auto const source_index = static_cast<std::size_t>(source);
+  for (std::size_t phase = 0; phase < size; ++phase) {
+    auto const [destination_index, source_index] =
+        dense_phase_peers(rank, size, phase);
     auto const send_total = sends.counts()[destination_index];
     auto const local_rounds = send_total == 0
                                   ? std::size_t{0}

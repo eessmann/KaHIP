@@ -1,10 +1,10 @@
 message(STATUS "Configuring Kahip")
 
-include(${CMAKE_SOURCE_DIR}/cmake/Cache.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/CompilerWarnings.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/Sanitizers.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/StaticAnalyzers.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/Utilities.cmake)
+include("${CMAKE_CURRENT_LIST_DIR}/Cache.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/CompilerWarnings.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/Sanitizers.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/StaticAnalyzers.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/Utilities.cmake")
 
 kahip_supports_sanitizers()
 
@@ -42,17 +42,17 @@ add_library(kahip_warnings INTERFACE)
 add_library(kahip_options INTERFACE)
 
 if(kahip_ENABLE_IPO)
-    if (${CMAKE_CXX_COMPILER_ID} MATCHES "Cray.*")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^Cray")
         message(VERBOSE "IPO: Cray compiler found")
         target_compile_options(kahip_options INTERFACE -flto)
         target_link_options(kahip_options INTERFACE -flto)
     else ()
-        include(${CMAKE_SOURCE_DIR}/cmake/InterproceduralOptimization.cmake)
+        include("${CMAKE_CURRENT_LIST_DIR}/InterproceduralOptimization.cmake")
         kahip_enable_ipo()
     endif ()
 endif()
 
-include(${CMAKE_SOURCE_DIR}/cmake/StandardProjectSettings.cmake)
+include("${CMAKE_CURRENT_LIST_DIR}/StandardProjectSettings.cmake")
 
 # tweak compiler flags
 target_compile_features(kahip_options INTERFACE cxx_std_23)
@@ -64,8 +64,9 @@ target_compile_options(
 )
 check_cxx_compiler_flag(-fno-stack-limit COMPILER_SUPPORTS_FNOSTACKLIMITS)
 target_compile_options(
-        kahip_options
-        INTERFACE $<$<BOOL:${COMPILER_SUPPORTS_FUNROLL_LOOPS}>:-funroll-loops>
+    kahip_options
+    INTERFACE
+        $<$<BOOL:${COMPILER_SUPPORTS_FNOSTACKLIMITS}>:-fno-stack-limit>
 )
 check_cxx_compiler_flag(-march=native COMPILER_SUPPORTS_MARCH_NATIVE)
 target_compile_options(
@@ -75,7 +76,7 @@ target_compile_options(
 )
 
 if(kahip_ENABLE_USER_LINKER)
-    include(${CMAKE_SOURCE_DIR}/cmake/Linker.cmake)
+    include("${CMAKE_CURRENT_LIST_DIR}/Linker.cmake")
     kahip_configure_linker(kahip_options)
 endif()
 

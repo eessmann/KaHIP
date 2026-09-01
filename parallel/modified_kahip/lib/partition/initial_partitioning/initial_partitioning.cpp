@@ -7,6 +7,8 @@
 
 #include <math.h>
 
+#include <stdexcept>
+
 #include "bipartition.h"
 #include "graph_partition_assertions.h"
 #include "graph_partitioner.h"
@@ -40,8 +42,8 @@ void initial_partitioning::perform_initial_partitioning(const PartitionConfig & 
     case INITIAL_PARTITIONING_BIPARTITION:
       partition = new bipartition();
     break;
-
-
+    default:
+      throw std::invalid_argument("unknown initial partitioning strategy");
   }
 
   quality_metrics qm;

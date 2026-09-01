@@ -8,6 +8,8 @@
 #ifndef PARTITION_ACCEPT_RULE_4RXUS4P9
 #define PARTITION_ACCEPT_RULE_4RXUS4P9
 
+#include <stdexcept>
+
 #include "partition_config.h"
 #include "random_functions.h"
 namespace kahip::modified {
@@ -50,7 +52,7 @@ private:
         NodeWeight difference;
 };
 
-normal_partition_accept_rule::normal_partition_accept_rule(PartitionConfig & config,
+inline normal_partition_accept_rule::normal_partition_accept_rule(PartitionConfig & config,
                 const EdgeWeight initial_cut,
                 const NodeWeight initial_lhs_part_weight,
                 const NodeWeight initial_rhs_part_weight) {
@@ -61,7 +63,7 @@ normal_partition_accept_rule::normal_partition_accept_rule(PartitionConfig & con
         difference          = abs((int)cur_lhs_part_weight - (int)cur_rhs_part_weight);
 }
 
-bool normal_partition_accept_rule::accept_partition(PartitionConfig & config,
+inline bool normal_partition_accept_rule::accept_partition(PartitionConfig & config,
                 const EdgeWeight edge_cut,
                 const NodeWeight lhs_part_weight,
                 const NodeWeight rhs_part_weight,
@@ -122,19 +124,25 @@ private:
         int cur_rhs_overload;
 };
 
-ip_partition_accept_rule::ip_partition_accept_rule(PartitionConfig & config,
+inline ip_partition_accept_rule::ip_partition_accept_rule(PartitionConfig & config,
                 const EdgeWeight initial_cut,
                 const NodeWeight initial_lhs_part_weight,
                 const NodeWeight initial_rhs_part_weight,
                 const PartitionID lhs,
                 const PartitionID rhs) {
 
+        if (lhs >= config.target_weights.size() ||
+            rhs >= config.target_weights.size()) {
+                throw std::invalid_argument(
+                    "initial bipartition refinement requires one target weight per block");
+        }
+
         best_cut            = initial_cut;
         cur_lhs_overload = std::max( (int)initial_lhs_part_weight - config.target_weights[lhs],0);
         cur_rhs_overload = std::max( (int)initial_rhs_part_weight - config.target_weights[rhs],0);
 }
 
-bool ip_partition_accept_rule::accept_partition(PartitionConfig & config,
+inline bool ip_partition_accept_rule::accept_partition(PartitionConfig & config,
                 const EdgeWeight edge_cut,
                 const NodeWeight lhs_part_weight,
                 const NodeWeight rhs_part_weight,

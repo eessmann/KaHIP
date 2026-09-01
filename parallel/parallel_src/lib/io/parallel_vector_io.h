@@ -8,12 +8,13 @@
 #ifndef PARALLEL_VECTOR_IO_BZVNZ570A
 #define PARALLEL_VECTOR_IO_BZVNZ570A
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <ostream>
-#include <stdio.h>
-#include <stdlib.h>
+#include <sstream>
 #include <vector>
 
 #include "parallel_graph_io.h"
@@ -68,15 +69,16 @@ void parallel_vector_io::readVectorSequentially(std::vector<vectortype> & vec, s
         }
 
         ULONG pos = 0;
-        std::getline(in, line);
-        while( !in.eof() ) {
-                if (line[0] == '%') { //Comment
-                        continue;
-                }
+        while (pos < vec.size() && std::getline(in, line)) {
+          if (line.empty() || line.front() == '%') {
+            continue;
+          }
 
-                vectortype value = (vectortype) atof(line.c_str());
-                vec[pos++] = value;
-                std::getline(in, line);
+          auto parser = std::istringstream{line};
+          auto value = vectortype{};
+          if (parser >> value) {
+            vec[static_cast<std::size_t>(pos++)] = value;
+          }
         }
 
         in.close();

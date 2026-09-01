@@ -13,110 +13,108 @@ namespace parhip {
 // Configuration for the partitioning.
 struct PPartitionConfig
 {
-	PPartitionConfig() {}
-
 	//=======================================
 	//============ Graph Gen=================
 	//=======================================
-	int log_num_verts;
+	int log_num_verts{};
 
-	long edge_factor;
+	long edge_factor{};
 
-	bool generate_rgg;
+	bool generate_rgg{};
 
-	bool generate_ba;
+	bool generate_ba{};
 
 	//=======================================
 	//============ Communication ============
 	//=======================================
 
-	ULONG comm_rounds;
+	ULONG comm_rounds{};
 
 	//=======================================
 	//============ Global Data===============
 	//=======================================
 
-	NodeID number_of_overall_nodes;
+	NodeID number_of_overall_nodes{};
 
 	//=======================================
 	//===============MISC====================
 	//=======================================
 
-	PermutationQuality permutation_quality;
+	PermutationQuality permutation_quality{};
 
-	unsigned int label_iterations;
+	unsigned int label_iterations{};
 
-	unsigned int label_iterations_coarsening;
+	unsigned int label_iterations_coarsening{};
 
-	unsigned int label_iterations_refinement;
+	unsigned int label_iterations_refinement{};
 
-	double cluster_coarsening_factor;
+	double cluster_coarsening_factor{};
 
-	double time_limit;
+	double time_limit{};
 
-	unsigned epsilon;
+	unsigned epsilon{};
 
-	unsigned inbalance;
+	unsigned inbalance{};
 
-	std::string input_partition;
+	std::string input_partition{};
 
-	int seed;
+	int seed{};
 
-	PartitionID k;
+	PartitionID k{};
 
-	std::string graph_filename;
+	std::string graph_filename{};
 
-	std::string input_partition_filename;
+	std::string input_partition_filename{};
 
-	int evolutionary_time_limit;
+	int evolutionary_time_limit{};
 
-	NodeWeight upper_bound_partition;
+	NodeWeight upper_bound_partition{};
 
-	NodeWeight upper_bound_cluster;
+	NodeWeight upper_bound_cluster{};
 
-	NodeID total_num_labels;
+	NodeID total_num_labels{};
 
-	InitialPartitioningAlgorithm initial_partitioning_algorithm;
+	InitialPartitioningAlgorithm initial_partitioning_algorithm{};
 
-	int stop_factor;
+	int stop_factor{};
 
-	bool vcycle;
+	bool vcycle{};
 
-	int num_vcycles;
+	int num_vcycles{};
 
-	int num_tries; // number of repetitions to perform
+	int num_tries{}; // number of repetitions to perform
 
-	NodeOrderingType node_ordering;
+	NodeOrderingType node_ordering{};
 
-	bool no_refinement_in_last_iteration;
+	bool no_refinement_in_last_iteration{};
 
-	double ht_fill_factor;
+	double ht_fill_factor{};
 
-	bool eco;
+	bool eco{};
 
-	int binary_io_window_size;
+	int binary_io_window_size{};
 
-	ULONG barabasi_albert_mindegree;
+	ULONG barabasi_albert_mindegree{};
 
-	bool compute_degree_sequence_ba;
+	bool compute_degree_sequence_ba{};
 
-	bool compute_degree_sequence_k_first;
+	bool compute_degree_sequence_k_first{};
 
-	bool kronecker_internal_only;
+	bool kronecker_internal_only{};
 
-	ULONG k_deg;
+	ULONG k_deg{};
 
-	bool generate_ba_32bit;
+	bool generate_ba_32bit{};
 
-	ULONG n;
+	ULONG n{};
 
-	bool save_partition;
+	bool save_partition{};
 
-	bool save_partition_binary;
+	bool save_partition_binary{};
 
-	bool vertex_degree_weights;
+	bool vertex_degree_weights{};
 
-	bool converter_evaluate;
+	bool converter_evaluate{};
 
 	//=======================================
 	//===============Shared Mem OMP==========

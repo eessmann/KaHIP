@@ -179,8 +179,8 @@ auto make_ghost_exchange_plan(parallel_graph_access const& graph)
 
   if (!mpi::detail::collective_predicate(local_structure_is_valid,
                                          graph_communicator)) {
-    throw mpi::mpi_error{MPI_ERR_ARG,
-                         "ghost exchange plan graph validation failed"};
+    mpi::throw_collectively_agreed_semantic_error(
+        graph.m_communicator, "ghost exchange plan graph validation failed");
   }
 
   auto semantic_failure = false;
@@ -291,8 +291,9 @@ auto make_ghost_exchange_plan(parallel_graph_access const& graph)
   }
 
   if (semantic_failure) {
-    throw mpi::mpi_error{MPI_ERR_ARG,
-                         "ghost exchange plan semantic validation failed"};
+    mpi::throw_collectively_agreed_semantic_error(
+        graph.m_communicator,
+        "ghost exchange plan semantic validation failed");
   }
   return result;
 }

@@ -1,17 +1,14 @@
-cmake_minimum_required(VERSION 3.10)
-project(parhip_example CXX)
+cmake_minimum_required(VERSION 4.0...4.3)
+project(parhip_example LANGUAGES CXX)
 
-find_package(MPI REQUIRED)
-
-# Adjust this path to where KaHIP was installed or built
-set(KAHIP_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../build" CACHE PATH "Path to KaHIP build directory")
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(
+    parhip
+    REQUIRED
+    IMPORTED_TARGET
+    parhip_interface
+)
 
 add_executable(parhip_test parhip_test.cpp)
-target_include_directories(parhip_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../parallel/parallel_src/interface
-    ${MPI_CXX_INCLUDE_DIRS}
-)
-target_link_libraries(parhip_test PRIVATE
-    ${KAHIP_BUILD_DIR}/parallel/parallel_src/libparhip_interface.so
-    ${MPI_CXX_LIBRARIES}
-)
+target_compile_features(parhip_test PRIVATE cxx_std_23)
+target_link_libraries(parhip_test PRIVATE PkgConfig::parhip)

@@ -108,6 +108,77 @@ foreach(region_index RANGE 0 ${last_region})
     endif()
 endforeach()
 
+# These graph algorithms enter semantic exits only after every rank has made
+# the same decision.  Keep their error construction behind the same
+# allocation-safe barrier as the communication adapter: constructing or
+# copying mpi_error must never let one rank unwind while its peers continue.
+set(
+    graph_exit_files
+    ghost_exchange_plan.cpp
+    ../data_structure/parallel_graph_access.cpp
+    ../distributed_partitioning/distributed_partitioner.cpp
+    ../parallel_contraction_projection/parallel_contraction.cpp
+    ../parallel_contraction_projection/parallel_block_down_propagation.cpp
+)
+set(
+    graph_exit_names
+    ghost-exchange-plan
+    parallel-graph-access
+    distributed-partitioner
+    parallel-contraction
+    parallel-block-down
+)
+set(graph_exit_helper_counts 2 2 2 3 3)
+
+list(LENGTH graph_exit_files graph_exit_file_count)
+math(EXPR last_graph_exit "${graph_exit_file_count} - 1")
+foreach(graph_exit_index RANGE 0 ${last_graph_exit})
+    list(GET graph_exit_files ${graph_exit_index} graph_exit_file)
+    list(GET graph_exit_names ${graph_exit_index} graph_exit_name)
+    list(GET graph_exit_helper_counts ${graph_exit_index} expected_helper_count)
+    file(READ "${COMMUNICATION_ROOT}/${graph_exit_file}" source)
+
+    string(REGEX REPLACE "[ \t\r\n]" "" normalized_source "${source}")
+    string(FIND "${normalized_source}" "throwmpi::mpi_error" direct_throw)
+    string(
+        FIND
+        "${normalized_source}"
+        "throwparhip::mpi::mpi_error"
+        qualified_direct_throw
+    )
+    string(FIND "${normalized_source}" "make_exception_ptr(" exception_copy)
+    if(
+        NOT direct_throw EQUAL -1
+        OR NOT qualified_direct_throw EQUAL -1
+        OR NOT exception_copy EQUAL -1
+    )
+        list(
+            APPEND
+            policy_violations
+            "${graph_exit_name}: semantic error construction bypasses central helper"
+        )
+    endif()
+
+    count_literal(
+        "${normalized_source}"
+        "throw_collectively_agreed_semantic_error("
+        direct_helper_count
+    )
+    count_literal(
+        "${normalized_source}"
+        "throw_collectively_agreed_semantic_error_from("
+        factory_helper_count
+    )
+    math(EXPR helper_count "${direct_helper_count} + ${factory_helper_count}")
+    if(NOT helper_count EQUAL expected_helper_count)
+        list(
+            APPEND
+            policy_violations
+            "${graph_exit_name}: expected ${expected_helper_count} central semantic helper calls, found ${helper_count}"
+        )
+    endif()
+endforeach()
+
 if(policy_violations)
     string(JOIN "\n  - " formatted_violations ${policy_violations})
     message(

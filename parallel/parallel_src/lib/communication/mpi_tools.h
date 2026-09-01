@@ -9,21 +9,63 @@
 #define MPI_TOOLS_HMESDXF2
 
 #include <algorithm>
-#include <functional>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <numeric>
 #include <ranges>
-#include <string>
+#include <type_traits>
+#include <vector>
 
-#include "data_structure/parallel_graph_access.h"
 #include "communication/mpi_adapter.h"
+#include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
 namespace parhip {
-class mpi_tools {
-public:
-  void collect_and_write_labels(MPI_Comm communicator,
-                                PPartitionConfig& config,
-                                parallel_graph_access& G);
+namespace mpi_tools_detail {
+struct complete_graph_node_record final {
+  std::uint64_t global_id;
+  std::uint64_t second_partition;
+  std::uint64_t weight;
+  std::uint64_t degree;
 
+  auto operator==(complete_graph_node_record const&) const -> bool = default;
+};
+
+struct complete_graph_edge_record final {
+  std::uint64_t target_global_id;
+  std::uint64_t weight;
+
+  auto operator==(complete_graph_edge_record const&) const -> bool = default;
+};
+
+static_assert(std::is_standard_layout_v<complete_graph_node_record>);
+static_assert(std::is_trivially_copyable_v<complete_graph_node_record>);
+static_assert(sizeof(complete_graph_node_record) == 4 * sizeof(std::uint64_t));
+static_assert(std::is_standard_layout_v<complete_graph_edge_record>);
+static_assert(std::is_trivially_copyable_v<complete_graph_edge_record>);
+static_assert(sizeof(complete_graph_edge_record) == 2 * sizeof(std::uint64_t));
+}  // namespace mpi_tools_detail
+
+namespace mpi {
+template <>
+struct wire_members<mpi_tools_detail::complete_graph_node_record> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &mpi_tools_detail::complete_graph_node_record::global_id,
+      &mpi_tools_detail::complete_graph_node_record::second_partition,
+      &mpi_tools_detail::complete_graph_node_record::weight,
+      &mpi_tools_detail::complete_graph_node_record::degree);
+};
+
+template <>
+struct wire_members<mpi_tools_detail::complete_graph_edge_record> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &mpi_tools_detail::complete_graph_edge_record::target_global_id,
+      &mpi_tools_detail::complete_graph_edge_record::weight);
+};
+}  // namespace mpi
+
+class mpi_tools {
+ public:
   void collect_parallel_graph_to_local_graph(MPI_Comm communicator,
                                              PPartitionConfig& config,
                                              parallel_graph_access& G,
@@ -47,7 +89,7 @@ struct mpi_packed_message {
 
 template <std::ranges::forward_range Input>
   requires std::ranges::forward_range<std::ranges::range_value_t<Input>>
-auto pack_messages(const Input& messages) -> mpi_packed_message<
+auto pack_messages(Input const& messages) -> mpi_packed_message<
     std::ranges::range_value_t<std::ranges::range_value_t<Input>>> {
   using InnerRange = std::ranges::range_value_t<Input>;
   using ElementType = std::ranges::range_value_t<InnerRange>;
@@ -60,9 +102,8 @@ auto pack_messages(const Input& messages) -> mpi_packed_message<
   // Calculating lengths of the inner ranges
   std::vector<std::size_t> lengths;
   lengths.reserve(std::ranges::distance(messages));
-  for (const auto& inner : messages) {
-    lengths.push_back(
-        static_cast<std::size_t>(std::ranges::distance(inner)));
+  for (auto const& inner : messages) {
+    lengths.push_back(static_cast<std::size_t>(std::ranges::distance(inner)));
   }
 
   // Calculating offsets using exclusive_scan
@@ -74,9 +115,9 @@ auto pack_messages(const Input& messages) -> mpi_packed_message<
 }
 
 template <typename Elem>
-auto unpack_messages(const mpi_packed_message<Elem>& packed_message)
+auto unpack_messages(mpi_packed_message<Elem> const& packed_message)
     -> std::vector<std::vector<Elem>> {
-  const auto& [recv_buf, recv_displs, recv_counts] = packed_message;
+  auto const& [recv_buf, recv_displs, recv_counts] = packed_message;
   std::size_t num_ranks = recv_counts.size();
 
   // Ensure recv_displs and recv_counts have the same size
@@ -131,9 +172,9 @@ auto all_to_all(Input const& sends, MPI_Comm communicator)
   using InnerRange = std::ranges::range_value_t<Input>;
   using ElementType = std::ranges::range_value_t<InnerRange>;
 
-  auto received = all_to_all_v(
-      segmented_buffer<ElementType>::from_segments(sends),
-      communicator_view{communicator});
+  auto received =
+      all_to_all_v(segmented_buffer<ElementType>::from_segments(sends),
+                   communicator_view{communicator});
   std::vector<std::vector<ElementType>> result;
   result.reserve(received.segment_count());
   for (std::size_t source = 0; source < received.segment_count(); ++source) {
@@ -143,5 +184,5 @@ auto all_to_all(Input const& sends, MPI_Comm communicator)
   return result;
 }
 }  // namespace mpi
-}
+}  // namespace parhip
 #endif /* end of include guard: MPI_TOOLS_HMESDXF2 */

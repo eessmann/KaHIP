@@ -39,6 +39,11 @@ enum class failure_mode {
   request_free,
   active_restart,
   inactive_test,
+  bounded_inactive_test,
+  bounded_inactive_wait,
+  bounded_later_init,
+  bounded_later_test,
+  bounded_later_wait,
   send_while_active,
   receive_while_active,
   post_finalize_active_request,
@@ -61,6 +66,7 @@ auto runtime_was_finalized = false;
 auto inject_initialized_query = false;
 auto inject_finalized_query = false;
 auto underlying_request_completed = false;
+auto bounded_init_attempts = 0;
 
 [[nodiscard]] auto mode_name() noexcept -> std::string_view {
   switch (selected_mode) {
@@ -86,6 +92,16 @@ auto underlying_request_completed = false;
       return "active-restart";
     case failure_mode::inactive_test:
       return "inactive-test";
+    case failure_mode::bounded_inactive_test:
+      return "bounded-inactive-test";
+    case failure_mode::bounded_inactive_wait:
+      return "bounded-inactive-wait";
+    case failure_mode::bounded_later_init:
+      return "bounded-later-init";
+    case failure_mode::bounded_later_test:
+      return "bounded-later-test";
+    case failure_mode::bounded_later_wait:
+      return "bounded-later-wait";
     case failure_mode::send_while_active:
       return "send-while-active";
     case failure_mode::receive_while_active:
@@ -184,7 +200,17 @@ extern "C" int MPI_Ineighbor_alltoallv(void const* send_buffer,
                                        MPI_Comm communicator,
                                        MPI_Request* request) {
   track_operation(communicator, send_datatype);
+  if (selected_mode == failure_mode::bounded_later_init ||
+      selected_mode == failure_mode::bounded_later_test ||
+      selected_mode == failure_mode::bounded_later_wait) {
+    ++bounded_init_attempts;
+  }
   if (selected_mode == failure_mode::immediate_init) {
+    announce_injection();
+    return injected_mpi_error;
+  }
+  if (selected_mode == failure_mode::bounded_later_init &&
+      bounded_init_attempts == 2) {
     announce_injection();
     return injected_mpi_error;
   }
@@ -300,6 +326,11 @@ extern "C" int MPI_Test(MPI_Request* request,
     announce_injection();
     return injected_mpi_error;
   }
+  if (tracked && selected_mode == failure_mode::bounded_later_test &&
+      bounded_init_attempts >= 2) {
+    announce_injection();
+    return injected_mpi_error;
+  }
   auto const result = PMPI_Test(request, complete, status);
   if (tracked && result == MPI_SUCCESS && *complete != 0 &&
       selected_mode == failure_mode::post_finalize_active_request) {
@@ -317,6 +348,11 @@ extern "C" int MPI_Wait(MPI_Request* request, MPI_Status* status) {
   if (tracked && (selected_mode == failure_mode::wait ||
                   selected_mode == failure_mode::destructor_wait ||
                   selected_mode == failure_mode::persistent_wait)) {
+    announce_injection();
+    return injected_mpi_error;
+  }
+  if (tracked && selected_mode == failure_mode::bounded_later_wait &&
+      bounded_init_attempts >= 2) {
     announce_injection();
     return injected_mpi_error;
   }
@@ -398,6 +434,7 @@ extern "C" int MPI_Finalized(int* flag) {
 
 namespace {
 using async_failure_support::wire_entry;
+using parhip::mpi::collective_options;
 using parhip::mpi::communicator_view;
 using parhip::mpi::context_options;
 using parhip::mpi::distributed_graph;
@@ -423,6 +460,11 @@ using parhip::mpi::start_neighbor_all_to_all_v;
   KAHIP_PARSE_MODE("request-free", request_free)
   KAHIP_PARSE_MODE("active-restart", active_restart)
   KAHIP_PARSE_MODE("inactive-test", inactive_test)
+  KAHIP_PARSE_MODE("bounded-inactive-test", bounded_inactive_test)
+  KAHIP_PARSE_MODE("bounded-inactive-wait", bounded_inactive_wait)
+  KAHIP_PARSE_MODE("bounded-later-init", bounded_later_init)
+  KAHIP_PARSE_MODE("bounded-later-test", bounded_later_test)
+  KAHIP_PARSE_MODE("bounded-later-wait", bounded_later_wait)
   KAHIP_PARSE_MODE("send-while-active", send_while_active)
   KAHIP_PARSE_MODE("receive-while-active", receive_while_active)
   KAHIP_PARSE_MODE("post-finalize-active-request", post_finalize_active_request)
@@ -494,8 +536,21 @@ void run_one_shot(distributed_graph const& graph) {
 void run_context(distributed_graph const& graph) {
   auto const policy = is_persistent_mode() ? persistence_policy::required
                                            : persistence_policy::disabled;
+  auto const bounded_mode =
+      selected_mode == failure_mode::bounded_inactive_test ||
+      selected_mode == failure_mode::bounded_inactive_wait ||
+      selected_mode == failure_mode::bounded_later_init ||
+      selected_mode == failure_mode::bounded_later_test ||
+      selected_mode == failure_mode::bounded_later_wait;
+  auto const options =
+      bounded_mode
+          ? context_options{
+                .collective = collective_options{.mpi3_round_ceiling = 2,
+                                                  .force_mpi3 = true},
+                .persistence = persistence_policy::disabled}
+          : context_options{.persistence = policy};
   neighbor_all_to_all_v_context<wire_entry> context{
-      graph, {1}, context_options{.persistence = policy}};
+      graph, {bounded_mode ? std::size_t{5} : std::size_t{1}}, options};
 
   switch (selected_mode) {
     case failure_mode::persistent_init:
@@ -508,6 +563,26 @@ void run_context(distributed_graph const& graph) {
       context.start();
       context.wait();
       static_cast<void>(context.test());
+      return;
+    case failure_mode::bounded_inactive_test:
+      context.start();
+      context.wait();
+      static_cast<void>(context.test());
+      return;
+    case failure_mode::bounded_inactive_wait:
+      context.start();
+      context.wait();
+      context.wait();
+      return;
+    case failure_mode::bounded_later_init:
+    case failure_mode::bounded_later_wait:
+      context.start();
+      context.wait();
+      return;
+    case failure_mode::bounded_later_test:
+      context.start();
+      while (!context.test()) {
+      }
       return;
     case failure_mode::send_while_active:
       context.start();

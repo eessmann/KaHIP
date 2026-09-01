@@ -6,6 +6,9 @@
 namespace parhip::mpi {
 distributed_graph::distributed_graph(communicator_view source,
                                      std::vector<int> outgoing_destinations) {
+  require_live_intracommunicator(
+      source,
+      "distributed graph construction requires a live intracommunicator");
   auto const rank = source.rank();
   auto const size = source.size();
   auto const local_destination_ranks_are_valid = std::ranges::all_of(
@@ -146,7 +149,10 @@ auto distributed_graph::find_index(std::span<rank_index const> lookup,
 }
 
 void distributed_graph::reset() noexcept {
-  if (communicator_ != MPI_COMM_NULL && runtime_is_active()) {
+  if (communicator_ != MPI_COMM_NULL) {
+    if (!runtime_is_active()) {
+      abort_on_inactive_mpi_ownership("distributed graph destruction");
+    }
     auto const free_result = MPI_Comm_free(&communicator_);
     if (free_result != MPI_SUCCESS) {
       abort_on_mpi_error(MPI_COMM_WORLD, free_result,

@@ -54,7 +54,6 @@ enum class failure_mode : std::uint8_t {
   one_shot_receive_byte,
   fixed_send_offset,
   fixed_send_byte,
-  fixed_direct_backend,
 };
 
 auto selected_mode = failure_mode::one_shot_receive_offset;
@@ -414,8 +413,6 @@ namespace {
     selected_mode = failure_mode::fixed_send_offset;
   } else if (mode == "fixed-send-byte") {
     selected_mode = failure_mode::fixed_send_byte;
-  } else if (mode == "fixed-direct-backend") {
-    selected_mode = failure_mode::fixed_direct_backend;
   } else {
     return false;
   }
@@ -461,33 +458,6 @@ namespace {
   returned_from_failure();
 }
 
-[[noreturn]] void run_direct_backend_failure() {
-  auto graph = parhip::mpi::distributed_graph{
-      parhip::mpi::communicator_view{MPI_COMM_WORLD}, {cached_rank}};
-  graph_communicator = graph.native_handle();
-  auto counts = std::vector<std::size_t>{
-      cached_rank == 0 ? std::numeric_limits<std::size_t>::max()
-                       : std::size_t{1}};
-  if (cached_rank == 0) {
-    std::fputs("armed rank-zero async direct backend capacity\n", stderr);
-  }
-  track_next_duplicate = true;
-  payload_allocation_watch = true;
-  parhip::mpi::neighbor_all_to_all_v_context<
-      async_capacity_probe::byte_wire_record>
-      context{
-          graph,
-          std::move(counts),
-          parhip::mpi::context_options{
-              .collective =
-                  parhip::mpi::collective_options{
-                      .force_mpi3 = true,
-                  },
-          },
-  };
-  static_cast<void>(context);
-  returned_from_failure();
-}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -505,10 +475,6 @@ int main(int argc, char* argv[]) {
     std::fputs("async capacity probe requires exactly two ranks\n", stderr);
     return 64;
   }
-  if (selected_mode == failure_mode::fixed_direct_backend) {
-    run_direct_backend_failure();
-  }
-
   auto graph = parhip::mpi::distributed_graph{
       parhip::mpi::communicator_view{MPI_COMM_WORLD}, {0, 1}};
   graph_communicator = graph.native_handle();

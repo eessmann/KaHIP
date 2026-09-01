@@ -35,6 +35,7 @@ struct context_options {
 
 namespace detail {
 enum class neighbor_direct_backend : std::uint8_t {
+  bounded_legacy,
   immediate_legacy,
   immediate_large_count,
   persistent_legacy,
@@ -245,7 +246,8 @@ struct large_count_neighbor_layout final {
 };
 
 using direct_neighbor_layout =
-    std::variant<legacy_neighbor_layout, large_count_neighbor_layout>;
+    std::variant<std::monostate, legacy_neighbor_layout,
+                 large_count_neighbor_layout>;
 
 static_assert(std::is_nothrow_move_constructible_v<direct_neighbor_layout>);
 static_assert(std::is_nothrow_move_assignable_v<direct_neighbor_layout>);
@@ -339,13 +341,20 @@ struct direct_neighbor_storage {
                           segmented_buffer<T> send_buffer,
                           segmented_buffer<T> receive_buffer,
                           direct_neighbor_layout layout,
-                          neighbor_direct_backend selected_backend) noexcept
+                          neighbor_direct_backend selected_backend,
+                          std::optional<mpi3_bounded_neighbor_plan>
+                              bounded_plan = std::nullopt)
       : communicator_(std::move(operation_communicator)),
         datatype_(std::move(operation_datatype)),
         sends_(std::move(send_buffer)),
         received_(std::move(receive_buffer)),
         layout_(std::move(layout)),
-        backend_(selected_backend) {}
+        backend_(selected_backend),
+        bounded_plan_(std::move(bounded_plan)),
+        bounded_send_counts_(sends_.segment_count(), 0),
+        bounded_receive_counts_(received_.segment_count(), 0),
+        bounded_send_displacements_(sends_.segment_count(), 0),
+        bounded_receive_displacements_(received_.segment_count(), 0) {}
 
   direct_neighbor_storage(direct_neighbor_storage const&) = delete;
   auto operator=(direct_neighbor_storage const&)
@@ -389,9 +398,115 @@ struct direct_neighbor_storage {
     return std::get_if<large_count_neighbor_layout>(&layout_);
   }
 
+  [[nodiscard]] auto is_bounded() const noexcept -> bool {
+    return backend_ == neighbor_direct_backend::bounded_legacy;
+  }
+
+  void seek_next_bounded_round() noexcept {
+    while (bounded_phase_ < bounded_plan_->phases.size() &&
+           bounded_round_ >=
+               bounded_plan_->phases[bounded_phase_].round_count) {
+      ++bounded_phase_;
+      bounded_round_ = 0;
+    }
+  }
+
+  [[nodiscard]] auto has_bounded_round() const noexcept -> bool {
+    return bounded_phase_ < bounded_plan_->phases.size();
+  }
+
+  void launch_bounded_round() noexcept {
+    std::ranges::fill(bounded_send_counts_, 0);
+    std::ranges::fill(bounded_receive_counts_, 0);
+    auto const round = make_mpi3_bounded_neighbor_round(
+        *bounded_plan_, bounded_phase_, bounded_round_, sends_.offsets(),
+        received_.offsets());
+    if (round.destination_index.has_value()) {
+      bounded_send_counts_[*round.destination_index] = round.send_count;
+    }
+    if (round.source_index.has_value()) {
+      bounded_receive_counts_[*round.source_index] = round.receive_count;
+    }
+    auto const* round_send_buffer =
+        round.send_storage_offset.has_value()
+            ? static_cast<void const*>(sends_.storage().data() +
+                                       *round.send_storage_offset)
+            : send_buffer();
+    auto* round_receive_buffer =
+        round.receive_storage_offset.has_value()
+            ? static_cast<void*>(received_.storage().data() +
+                                 *round.receive_storage_offset)
+            : receive_buffer();
+    check_or_abort(
+        MPI_Ineighbor_alltoallv(
+            round_send_buffer,
+            data_or_ignored(bounded_send_counts_, ignored_int_),
+            data_or_ignored(bounded_send_displacements_, ignored_int_),
+            datatype_.native_handle(), round_receive_buffer,
+            data_or_ignored(bounded_receive_counts_, ignored_int_),
+            data_or_ignored(bounded_receive_displacements_, ignored_int_),
+            datatype_.native_handle(), communicator_.native_handle(),
+            &request_),
+        communicator_.native_handle(),
+        "MPI_Ineighbor_alltoallv(MPI-3 bounded neighborhood round)");
+  }
+
+  void begin_bounded_generation() noexcept {
+    if (!bounded_plan_.has_value()) {
+      abort_on_programming_error(
+          communicator_.native_handle(),
+          "bounded neighborhood backend requires a bounded MPI-3 plan");
+    }
+    bounded_phase_ = 0;
+    bounded_round_ = 0;
+    seek_next_bounded_round();
+    if (!has_bounded_round()) {
+      active_ = false;
+      receive_ready_ = true;
+      return;
+    }
+    launch_bounded_round();
+  }
+
+  void advance_bounded_round() noexcept {
+    ++bounded_round_;
+    seek_next_bounded_round();
+    if (has_bounded_round()) {
+      launch_bounded_round();
+      return;
+    }
+    active_ = false;
+    receive_ready_ = true;
+  }
+
+  [[nodiscard]] auto test_bounded_generation() noexcept -> bool {
+    auto complete = 0;
+    check_or_abort(MPI_Test(&request_, &complete, MPI_STATUS_IGNORE),
+                   communicator_.native_handle(),
+                   "MPI_Test(MPI-3 bounded neighborhood round)");
+    if (complete == 0) {
+      return false;
+    }
+    advance_bounded_round();
+    return !active_;
+  }
+
+  void wait_bounded_generation() noexcept {
+    while (active_) {
+      check_or_abort(MPI_Wait(&request_, MPI_STATUS_IGNORE),
+                     communicator_.native_handle(),
+                     "MPI_Wait(MPI-3 bounded neighborhood round)");
+      advance_bounded_round();
+    }
+  }
+
   void initiate_immediate() noexcept {
     active_ = true;
     receive_ready_ = false;
+    if (is_bounded()) {
+      begin_bounded_generation();
+      return;
+    }
     if (backend_ == neighbor_direct_backend::immediate_legacy) {
       auto const* layout = legacy_layout();
       if (layout == nullptr) {
@@ -517,6 +632,9 @@ struct direct_neighbor_storage {
                                  "neighbor context test requires an active "
                                  "generation");
     }
+    if (is_bounded()) {
+      return test_bounded_generation();
+    }
     auto complete = 0;
     check_or_abort(MPI_Test(&request_, &complete, MPI_STATUS_IGNORE),
                    communicator_.native_handle(),
@@ -535,6 +653,10 @@ struct direct_neighbor_storage {
                                  "neighbor context wait requires an active "
                                  "generation");
     }
+    if (is_bounded()) {
+      wait_bounded_generation();
+      return;
+    }
     check_or_abort(MPI_Wait(&request_, MPI_STATUS_IGNORE),
                    communicator_.native_handle(),
                    "MPI_Wait(neighborhood exchange)");
@@ -545,6 +667,10 @@ struct direct_neighbor_storage {
   void complete_active_for_destruction() noexcept {
     require_active_runtime("neighborhood operation destruction");
     if (active_) {
+      if (is_bounded()) {
+        wait_bounded_generation();
+        return;
+      }
       check_or_abort(MPI_Wait(&request_, MPI_STATUS_IGNORE),
                      communicator_.native_handle(),
                      "MPI_Wait(active neighborhood destruction)");
@@ -604,6 +730,13 @@ struct direct_neighbor_storage {
   segmented_buffer<T> received_;
   direct_neighbor_layout layout_;
   neighbor_direct_backend backend_;
+  std::optional<mpi3_bounded_neighbor_plan> bounded_plan_;
+  std::vector<int> bounded_send_counts_;
+  std::vector<int> bounded_receive_counts_;
+  std::vector<int> bounded_send_displacements_;
+  std::vector<int> bounded_receive_displacements_;
+  std::size_t bounded_phase_ = 0;
+  std::size_t bounded_round_ = 0;
   MPI_Request request_ = MPI_REQUEST_NULL;
   bool active_ = false;
   bool receive_ready_ = false;
@@ -734,10 +867,7 @@ template <typename T>
                                      physical_legacy_representable,
                                      large_count_representable),
             collective_communicator);
-        if (common_backends.physical == 0) {
-          local_capacity = with_fatal_capacity_issue(
-              local_capacity, capacity_issue::direct_backend_not_representable);
-        } else if (common_backends.allowed == 0) {
+        if (common_backends.allowed == 0) {
           local_capacity = with_bounded_capacity_issue(
               local_capacity, capacity_issue::direct_backend_not_representable);
         }
@@ -747,12 +877,29 @@ template <typename T>
             collective_communicator.native_handle(),
             "direct neighborhood exchange");
         if (route == capacity_route::bounded) {
-          semantic_failure =
-              *agreed_persistence == persistence_policy::required
-                  ? "persistent neighborhood exchange requires a single "
-                    "representable payload"
-                  : "direct neighborhood exchange requires a single "
-                    "representable payload";
+          if (*agreed_persistence == persistence_policy::required) {
+            semantic_failure =
+                "persistent neighborhood exchange requires a single "
+                "representable payload";
+          } else {
+            auto bounded_plan = make_mpi3_bounded_neighbor_plan(
+                pending_sends.counts(), pending_sends.offsets(),
+                receive_count_exchange.counts, receive_layout.offsets,
+                *mpi3_ceiling, graph, collective_communicator);
+            auto sends = pending_sends.materialize();
+            auto received = segmented_buffer<T>::uninitialized(
+                receive_layout.element_count,
+                std::move(receive_count_exchange.counts),
+                std::move(receive_layout.offsets));
+            auto operation_datatype =
+                make_mpi_datatype<T>(collective_communicator.native_handle());
+            result = std::make_unique<direct_neighbor_storage<T>>(
+                std::move(operation_communicator),
+                std::move(operation_datatype), std::move(sends),
+                std::move(received), direct_neighbor_layout{std::monostate{}},
+                neighbor_direct_backend::bounded_legacy,
+                std::move(bounded_plan));
+          }
         } else if (auto const backend =
                        choose_direct_backend(common_backends.allowed);
                    backend.has_value()) {

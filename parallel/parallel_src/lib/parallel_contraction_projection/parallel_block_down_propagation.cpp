@@ -135,18 +135,6 @@ void parallel_block_down_propagation::propagate_block_down(
                              "block-down local update validation failed");
 
   auto const& plan = Q.ghost_plan();
-  auto make_semantic_error = [&](std::string_view context) {
-    auto error = std::exception_ptr{};
-    try {
-      error = std::make_exception_ptr(
-          mpi::mpi_error{MPI_ERR_ARG, std::string{context}});
-    } catch (...) {
-      mpi::abort_on_exception(plan.topology().native_handle(),
-                              "block-down semantic error construction");
-    }
-    return error;
-  };
-
   auto dense_sends = mpi::segmented_buffer<block_down::block_update>{};
   try {
     auto updates_by_destination =
@@ -219,8 +207,9 @@ void parallel_block_down_propagation::propagate_block_down(
   }
   if (!mpi::detail::collective_predicate(dense_received_is_valid,
                                          plan.topology().view())) {
-    std::rethrow_exception(
-        make_semantic_error("block-down dense received validation failed"));
+    mpi::throw_collectively_agreed_semantic_error(
+        plan.topology().native_handle(),
+        "block-down dense received validation failed");
   }
 
   auto neighbor_sends = mpi::segmented_buffer<block_down::block_update>{};
@@ -269,8 +258,9 @@ void parallel_block_down_propagation::propagate_block_down(
   }
   if (!mpi::detail::collective_predicate(neighbor_outgoing_is_valid,
                                          plan.topology().view())) {
-    std::rethrow_exception(
-        make_semantic_error("block-down neighbor outgoing validation failed"));
+    mpi::throw_collectively_agreed_semantic_error(
+        plan.topology().native_handle(),
+        "block-down neighbor outgoing validation failed");
   }
 
   auto neighbor_received =
@@ -362,8 +352,9 @@ void parallel_block_down_propagation::propagate_block_down(
   }
   if (!mpi::detail::collective_predicate(neighbor_received_is_valid,
                                          plan.topology().view())) {
-    std::rethrow_exception(
-        make_semantic_error("block-down neighbor received validation failed"));
+    mpi::throw_collectively_agreed_semantic_error(
+        plan.topology().native_handle(),
+        "block-down neighbor received validation failed");
   }
 
   try {

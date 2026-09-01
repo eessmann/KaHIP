@@ -6,6 +6,7 @@
  *****************************************************************************/
 
 #include <stdio.h>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -14,6 +15,7 @@
 #include <argtable3.h>
 #include "partition_config.h"
 #include "parse_parameters.h"
+#include "communication/mpi_application.h"
 #include "data_structure/hashed_graph.h"
 #include "data_structure/parallel_graph_access.h"
 #include "io/parallel_graph_io.h"
@@ -23,17 +25,23 @@ using namespace std;
 int main(int argn, char **argv)
 {
         using namespace parhip;
-        MPI_Init(&argn, &argv);    /* starts MPI */
+        mpi::application_runtime runtime{argn, argv, "friendster converter executable"};
+        return runtime.execute([&](mpi::communicator_view communicator) -> int {
         PPartitionConfig partition_config;
         std::string graph_filename;
 
-        int ret_code = parse_parameters(argn, argv, 
-                                        partition_config, 
-                                        graph_filename); 
+        auto const ret_code = parse_parameters(argn, argv,
+                                               partition_config,
+                                               graph_filename,
+                                               communicator);
 
-        if(ret_code) {
-                MPI_Finalize();
-                return 0;
+        if(ret_code != parse_outcome::continue_execution) {
+                return ret_code == parse_outcome::early_success ? EXIT_SUCCESS
+                                                                : EXIT_FAILURE;
+        }
+
+        if(communicator.rank() != ROOT) {
+                return EXIT_SUCCESS;
         }
 
  
@@ -129,5 +137,6 @@ int main(int argn, char **argv)
         parallel_graph_io::writeGraphSequentially(G, outputfilename);
 
 
-        return 0;
+        return EXIT_SUCCESS;
+        });
 }

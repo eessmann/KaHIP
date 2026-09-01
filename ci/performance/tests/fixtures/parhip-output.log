@@ -1,0 +1,19 @@
+running collective dummy operations took 0.125
+Reading binary graph ...
+version: 3 n: 1000 m: 5400
+took 0.400
+log>cycle: 0 level: 1 parallel label compression took 1.0e-1
+log>cycle: 0 level: 1 contraction took 0.20
+log>cycle: 0 level: 2 parallel label compression took 0.15
+log>cycle: 0 level: 2 contraction took 0.30
+log>cycle: 0 coarsening took  0.75
+log>cycle: 0 initial partitioning took 0.50
+log>cycle: 0 level: 2 projection took 0.11
+log>cycle: 0 level: 2 label compression refinement took 0.12
+log>cycle: 0 level: 1 projection took 0.13
+log>cycle: 0 level: 1 label compression refinement took 0.14
+log>cycle: 0 uncoarsening took 1.70
+log>cycle: 0 k 4 cut 41 balance 1.02 time 2.40
+log>total partitioning time elapsed 2.5
+log>final edge cut 41
+log>final balance 1.02

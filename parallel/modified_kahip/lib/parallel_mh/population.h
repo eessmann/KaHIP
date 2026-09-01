@@ -16,9 +16,9 @@
 #include "timer.h"
 namespace kahip::modified {
 struct Individuum {
-        int* partition_map;
-        EdgeWeight objective;
-        std::vector<EdgeID>* cut_edges; //sorted
+        int* partition_map = nullptr;
+        EdgeWeight objective = 0;
+        std::vector<EdgeID>* cut_edges = nullptr; //sorted
 };
 
 struct ENC {
@@ -81,18 +81,18 @@ public:
 
 private:
 
-        unsigned                m_no_partition_calls;
-        unsigned 		m_population_size;
+        unsigned                m_no_partition_calls = 0;
+	unsigned 		m_population_size = 0;
         std::vector<Individuum> m_internal_population;
         std::vector< std::vector< unsigned int > > m_vertex_ENCs;
         std::vector< ENC > m_ENCs;
 
-        int m_num_NCs;
-        int m_num_NCs_computed;
-        int m_num_ENCs;
-        int m_time_stamp;
+        int m_num_NCs = 0;
+        int m_num_NCs_computed = 0;
+        int m_num_ENCs = 0;
+        int m_time_stamp = 0;
 
-        MPI_Comm m_communicator;
+        MPI_Comm m_communicator = MPI_COMM_NULL;
 
         std::stringstream m_filebuffer_string;
         timer   	  m_global_timer;

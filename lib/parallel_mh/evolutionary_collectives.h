@@ -24,6 +24,25 @@ struct evolutionary_broadcast_options final {
 };
 
 namespace detail {
+inline void flush_evolutionary_diagnostics() noexcept {
+  try {
+    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
+      logger->flush();
+    }
+  } catch (...) {
+    // Diagnostics must not replace communicator-scoped termination.
+  }
+}
+
+[[nodiscard]] inline auto active_rank(MPI_Comm communicator) noexcept -> int {
+  auto rank = -1;
+  if (communicator != MPI_COMM_NULL &&
+      PMPI_Comm_rank(communicator, &rank) == MPI_SUCCESS) {
+    return rank;
+  }
+  return -1;
+}
+
 template <typename T>
 using unqualified_t = std::remove_cv_t<std::remove_reference_t<T>>;
 
@@ -58,16 +77,32 @@ template <evolutionary_mpi_scalar T>
     MPI_Comm communicator,
     std::string_view operation,
     std::string_view diagnostic) noexcept {
+  auto const rank = active_rank(communicator);
   try {
-    spdlog::critical("MPI evolutionary collective failure in {}: {}", operation,
-                     diagnostic);
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
+    if (rank >= 0) {
+      spdlog::critical(
+          "MPI evolutionary collective failure in {} on rank {}: {}",
+          operation, rank, diagnostic);
+    } else {
+      spdlog::critical("MPI evolutionary collective failure in {}: {}",
+                       operation, diagnostic);
     }
   } catch (...) {
     // Diagnostics are secondary to communicator-scoped termination.
   }
+  flush_evolutionary_diagnostics();
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
+  std::abort();
+}
+
+[[noreturn]] inline void abort_evolutionary_lifecycle(
+    std::string_view diagnostic) noexcept {
+  try {
+    spdlog::critical("MPI evolutionary lifecycle failure: {}", diagnostic);
+  } catch (...) {
+    // No MPI operation is safe when the runtime lifecycle is invalid.
+  }
+  flush_evolutionary_diagnostics();
   std::abort();
 }
 
@@ -75,15 +110,20 @@ template <evolutionary_mpi_scalar T>
     MPI_Comm communicator,
     int error_code,
     std::string_view operation) noexcept {
+  auto const rank = active_rank(communicator);
   try {
-    spdlog::critical("MPI backend failure: {} returned raw error {}", operation,
-                     error_code);
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
+    if (rank >= 0) {
+      spdlog::critical(
+          "MPI backend failure: {} returned raw error {} on rank {}",
+          operation, error_code, rank);
+    } else {
+      spdlog::critical("MPI backend failure: {} returned raw error {}",
+                       operation, error_code);
     }
   } catch (...) {
     // Diagnostics are secondary to communicator-scoped termination.
   }
+  flush_evolutionary_diagnostics();
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
   std::abort();
 }
@@ -94,6 +134,23 @@ inline void check_mpi(int result,
   if (result != MPI_SUCCESS) {
     abort_evolutionary_mpi_error(communicator, result, operation);
   }
+}
+
+[[nodiscard]] inline auto mpi_runtime_is_active() noexcept -> bool {
+  auto initialized = 0;
+  auto finalized = 0;
+  auto const initialized_result = MPI_Initialized(&initialized);
+  if (initialized_result != MPI_SUCCESS) {
+    abort_evolutionary_lifecycle("MPI_Initialized failed");
+  }
+  if (initialized == 0) {
+    return false;
+  }
+  auto const finalized_result = MPI_Finalized(&finalized);
+  if (finalized_result != MPI_SUCCESS) {
+    abort_evolutionary_lifecycle("MPI_Finalized failed");
+  }
+  return finalized == 0;
 }
 
 [[nodiscard]] inline auto checked_count(std::size_t count,
@@ -187,6 +244,100 @@ void broadcast_partition_payload(
   }
 }
 }  // namespace detail
+
+class owned_evolutionary_communicator final {
+ public:
+  explicit owned_evolutionary_communicator(MPI_Comm source) noexcept {
+    if (!detail::mpi_runtime_is_active()) {
+      detail::abort_evolutionary_lifecycle(
+          "communicator ownership requires an active MPI runtime");
+    }
+    if (source == MPI_COMM_NULL) {
+      detail::abort_evolutionary_collective(
+          MPI_COMM_WORLD, "MPI_Comm_dup(evolutionary communicator)",
+          "communicator ownership requires a live intracommunicator");
+    }
+
+    auto is_intercommunicator = 0;
+    detail::check_mpi(MPI_Comm_test_inter(source, &is_intercommunicator),
+                      source, "MPI_Comm_test_inter(evolutionary communicator)");
+    if (is_intercommunicator != 0) {
+      detail::abort_evolutionary_collective(
+          source, "MPI_Comm_dup(evolutionary communicator)",
+          "communicator ownership requires an intracommunicator");
+    }
+
+    detail::check_mpi(MPI_Comm_dup(source, &communicator_), source,
+                      "MPI_Comm_dup(evolutionary communicator)");
+    detail::check_mpi(MPI_Comm_set_errhandler(communicator_, MPI_ERRORS_RETURN),
+                      communicator_,
+                      "MPI_Comm_set_errhandler(evolutionary communicator)");
+  }
+
+  ~owned_evolutionary_communicator() noexcept { reset(); }
+
+  owned_evolutionary_communicator(owned_evolutionary_communicator const&) =
+      delete;
+  auto operator=(owned_evolutionary_communicator const&)
+      -> owned_evolutionary_communicator& = delete;
+
+  owned_evolutionary_communicator(
+      owned_evolutionary_communicator&& other) noexcept
+      : communicator_(std::exchange(other.communicator_, MPI_COMM_NULL)) {}
+
+  auto operator=(owned_evolutionary_communicator&& other) noexcept
+      -> owned_evolutionary_communicator& {
+    if (this != &other) {
+      reset();
+      communicator_ = std::exchange(other.communicator_, MPI_COMM_NULL);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] auto native_handle() const noexcept -> MPI_Comm {
+    return communicator_;
+  }
+
+  [[nodiscard]] auto rank() const noexcept -> int {
+    auto result = -1;
+    detail::check_mpi(MPI_Comm_rank(communicator_, &result), communicator_,
+                      "MPI_Comm_rank(evolutionary communicator)");
+    return result;
+  }
+
+  [[nodiscard]] auto size() const noexcept -> int {
+    auto result = 0;
+    detail::check_mpi(MPI_Comm_size(communicator_, &result), communicator_,
+                      "MPI_Comm_size(evolutionary communicator)");
+    return result;
+  }
+
+ private:
+  void reset() noexcept {
+    if (communicator_ == MPI_COMM_NULL) {
+      return;
+    }
+    if (!detail::mpi_runtime_is_active()) {
+      detail::abort_evolutionary_lifecycle(
+          "owned communicator outlived the active MPI runtime");
+    }
+    auto communicator = std::exchange(communicator_, MPI_COMM_NULL);
+    auto const result = MPI_Comm_free(&communicator);
+    if (result != MPI_SUCCESS) {
+      detail::abort_evolutionary_mpi_error(
+          MPI_COMM_WORLD, result, "MPI_Comm_free(evolutionary communicator)");
+    }
+  }
+
+  MPI_Comm communicator_ = MPI_COMM_NULL;
+};
+
+template <std::totally_ordered Objective>
+[[nodiscard]] constexpr auto objective_improved(Objective candidate,
+                                                Objective incumbent) noexcept
+    -> bool {
+  return candidate < incumbent;
+}
 
 inline void broadcast_permutation(MPI_Comm communicator,
                                   std::span<unsigned> permutation,

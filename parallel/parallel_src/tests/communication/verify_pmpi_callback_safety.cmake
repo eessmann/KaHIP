@@ -164,6 +164,205 @@ elseif(PROFILE STREQUAL "evolutionary-failure")
         [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::valid_allreduce *\([^)]*\) *\) *\) *[;]]=]
         [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
     )
+elseif(PROFILE STREQUAL "fixed-broadcast")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+record\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *fixed_broadcast_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *fixed_broadcast_probe::record *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "fixed-broadcast-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+valid_broadcast\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *fixed_broadcast_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *fixed_broadcast_failure_probe::valid_broadcast *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *fixed_broadcast_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *fixed_broadcast_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "vertex-cut")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+record\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *vertex_cut_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *vertex_cut_probe::record *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "vertex-cut-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+valid_all_reduce\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *vertex_cut_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *vertex_cut_failure_probe::valid_all_reduce *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *vertex_cut_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *vertex_cut_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "quality-metrics")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+record\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *quality_metrics_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *quality_metrics_probe::record *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "quality-metrics-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+valid_control\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[auto[ \t\r\n]+valid_payload\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *quality_metrics_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *quality_metrics_failure_probe::valid_control *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *quality_metrics_failure_probe::valid_payload *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *quality_metrics_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *quality_metrics_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "dspac-first-split")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+record_legacy_payload\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *dspac_first_split_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *dspac_first_split_probe::record_legacy_payload *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "dspac-first-split-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *dspac_first_split_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *dspac_first_split_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *dspac_first_split_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "balance-refinement-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+write_abort_marker\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *balance_refinement_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *balance_refinement_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *balance_refinement_failure_probe::write_abort_marker *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *balance_refinement_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "parhip-interface-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+expects_duplicate\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *parhip_interface_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *parhip_interface_failure_probe::expects_duplicate *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *parhip_interface_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *parhip_interface_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "evolutionary-lifetime")
+    set(
+        required_noexcept_patterns
+        [=[auto[ \t\r\n]+checksum\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+record_send\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+observe_completion\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+finalize_observation\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *evolutionary_lifetime_probe::checksum *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_lifetime_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_lifetime_probe::record_send *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_lifetime_probe::observe_completion *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_lifetime_probe::finalize_observation *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "evolutionary-lifetime-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "edge-balanced-graph-io-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *edge_balanced_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *edge_balanced_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "distributed-partitioner-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+labels_are_untouched\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *distributed_partitioner_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *distributed_partitioner_failure_probe::labels_are_untouched *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *distributed_partitioner_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "kaffpae-runtime-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[operation_communicator_matches]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *operation_communicator_matches *\([^)]*\) *\) *\) *[;]]=]
+    )
 else()
     message(FATAL_ERROR "unknown PMPI callback audit PROFILE: ${PROFILE}")
 endif()

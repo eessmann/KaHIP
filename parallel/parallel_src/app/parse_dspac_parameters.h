@@ -17,15 +17,18 @@
 #endif
 #endif
 #include "configuration.h"
+#include "parse_outcome.h"
 namespace parhip {
 struct DspacConfig {
     EdgeWeight infinity;
     PartitionID k;
 };
 
-int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_config, DspacConfig &dspac_config,
-                           std::string &graph_filename, std::string &out_partition_filename) {
+parse_outcome parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_config, DspacConfig &dspac_config,
+                           std::string &graph_filename, std::string &out_partition_filename,
+                           mpi::communicator_view communicator) {
     const char *progname = argv[0];
+    auto const rank = communicator.rank();
 
     struct arg_lit *help = arg_lit0(NULL, "help", "Print help.");
     struct arg_str *filename = arg_str1(NULL, NULL, "FILE", "Path to graph file to partition.");
@@ -50,34 +53,36 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
 
     // Catch case that help was requested.
     if(help->count > 0) {
-        int rank;
-        MPI_Comm_rank( MPI_COMM_WORLD, &rank);
-
         if( rank == ROOT ) {
             printf("Usage: %s", progname);
             arg_print_syntax(stdout, argtable, "\n");
             arg_print_glossary(stdout, argtable,"  %-40s %s\n");
             printf("This is the experimental parallel SPAC program.\n");
-            arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
         }
-        return 1;
+        arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+        return parse_outcome::early_success;
     }
 
     if (nerrors > 0) {
-        int rank;
-        MPI_Comm_rank( MPI_COMM_WORLD, &rank);
         if( rank == ROOT ) {
             arg_print_errors(stderr, end, progname);
             printf("Try '%s --help' for more information.\n",progname);
-            arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
         }
-        return 1;
+        arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+        return parse_outcome::invalid_arguments;
     }
 
     configuration cfg;
     cfg.standard(partition_config);
 
     if (k->count > 0) {
+        if (k->ival[0] <= 0) {
+            if (rank == ROOT) {
+                fprintf(stderr, "Number of blocks must be positive.\n");
+            }
+            arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+            return parse_outcome::invalid_arguments;
+        }
         partition_config.k = k->ival[0];
         dspac_config.k = k->ival[0];
     }
@@ -99,13 +104,13 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
 
     if(preconfiguration->count > 0) {
         if (strcmp("ecosocial", preconfiguration->sval[0]) == 0) {
-            cfg.eco(partition_config);
+            cfg.eco(partition_config, communicator);
         } else if (strcmp("fastsocial", preconfiguration->sval[0]) == 0) {
             cfg.fast(partition_config);
         } else if (strcmp("ultrafastsocial", preconfiguration->sval[0]) == 0) {
             cfg.ultrafast(partition_config);
         } else if (strcmp("ecomesh", preconfiguration->sval[0]) == 0) {
-            cfg.eco(partition_config);
+            cfg.eco(partition_config, communicator);
             partition_config.cluster_coarsening_factor = 20000;
         } else if (strcmp("fastmesh", preconfiguration->sval[0]) == 0) {
             cfg.fast(partition_config);
@@ -114,8 +119,11 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
             cfg.ultrafast(partition_config);
             partition_config.cluster_coarsening_factor = 20000;
         } else {
-            fprintf(stderr, "Invalid preconfconfiguration variant: \"%s\"\n", preconfiguration->sval[0]);
-            exit(0);
+            if (rank == ROOT) {
+                fprintf(stderr, "Invalid preconfconfiguration variant: \"%s\"\n", preconfiguration->sval[0]);
+            }
+            arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+            return parse_outcome::invalid_arguments;
         }
     }
 
@@ -133,12 +141,20 @@ int parse_dspac_parameters(int argn, char **argv, PPartitionConfig &partition_co
     }
 
     if (infinity->count > 0) {
+        if (infinity->ival[0] <= 0) {
+            if (rank == ROOT) {
+                fprintf(stderr, "Infinity edge weight must be positive.\n");
+            }
+            arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+            return parse_outcome::invalid_arguments;
+        }
         dspac_config.infinity = infinity->ival[0];
     } else {
         dspac_config.infinity = 1000000;
     }
 
-    return 0;
+    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+    return parse_outcome::continue_execution;
 }
 }
 #endif // KAHIP_PARSE_DSPAC_PARAMETERS_H

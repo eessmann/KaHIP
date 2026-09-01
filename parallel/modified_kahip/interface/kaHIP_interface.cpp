@@ -14,51 +14,14 @@
 #include "../lib/tools/quality_metrics.h"
 #include "../lib/tools/macros_assertions.h"
 #include "../lib/tools/random_functions.h"
-#include "../lib/parallel_mh/parallel_mh_async.h"
 #include "../lib/partition/partition_config.h"
 #include "../lib/partition/graph_partitioner.h"
 #include "../lib/partition/uncoarsening/separator/vertex_separator_algorithm.h"
 #include "../app/configuration.h"
+#include "kaHIP_interface_internal.h"
 
 using namespace std;
 namespace kahip::modified {
-void internal_build_graph( PartitionConfig & partition_config,
-                           int* n, 
-                           int* vwgt, 
-                           int* xadj, 
-                           int* adjcwgt, 
-                           int* adjncy,
-                           graph_access & G) {
-  G.build_from_metis(*n, xadj, adjncy);
-  G.set_partition_count(partition_config.k);
-
-  srand(partition_config.seed);
-  random_functions::setSeed(partition_config.seed);
-
-  if(vwgt != NULL) {
-    forall_nodes(G, node) {
-      G.setNodeWeight(node, vwgt[node]);
-    } endfor
-}
-
-  if(adjcwgt != NULL) {
-    forall_edges(G, e) {
-      G.setEdgeWeight(e, adjcwgt[e]);
-    } endfor
-}
-
-  partition_config.largest_graph_weight = 0;
-  forall_nodes(G, node) {
-    partition_config.largest_graph_weight += G.getNodeWeight(node);
-  } endfor
-
-  double epsilon = partition_config.imbalance/100;
-  partition_config.upper_bound_partition = ceil((1+epsilon)*partition_config.largest_graph_weight/(double)partition_config.k);
-  partition_config.graph_allready_partitioned = false;
-
-}
-
-
 void internal_kaffpa_call(PartitionConfig & partition_config,
                           bool suppress_output,
                           int* n,
@@ -240,91 +203,4 @@ void node_separator(int* n,
 
   internal_nodeseparator_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, num_separator_vertices, separator);
 }
-
-
-void kaffpaE(int* n,
-                   int* vwgt,
-                   int* xadj,
-                   int* adjcwgt,
-                   int* adjncy,
-                   int* nparts,
-                   double* imbalance,
-                   bool suppress_output,
-                   bool graph_partitioned,
-                   int time_limit,
-                   int seed,
-                   int mode, // 0 == strong, 1 == eco, 2 == fast
-                   MPI_Comm communicator,
-                   int* edgecut,
-                   double* balance,
-                   int* part) {
-  using namespace kahip::modified;
-  configuration cfg;
-  PartitionConfig partition_config;
-  partition_config.k = *nparts;
-  cfg.standard(partition_config);
-
-  switch( mode ) {
-    case FAST:
-      cfg.fast(partition_config);
-    break;
-    case ECO:
-      cfg.eco(partition_config);
-    break;
-    case STRONG:
-      cfg.strong(partition_config);
-    break;
-    case FASTSOCIAL:
-      cfg.fastsocial(partition_config);
-    break;
-    case ULTRAFASTSOCIAL:
-      cfg.fastsocial(partition_config);
-    partition_config.ultra_fast_kaffpaE_interfacecall = true;
-    break;
-    case ECOSOCIAL:
-      cfg.ecosocial(partition_config);
-    break;
-    case STRONGSOCIAL:
-      cfg.strongsocial(partition_config);
-    break;
-    default:
-      cfg.eco(partition_config);
-    break;
-  }
-
-  partition_config.seed      = seed;
-  partition_config.k         = *nparts;
-  partition_config.imbalance = 100*(*imbalance);
-  partition_config.time_limit = time_limit;
-  partition_config.kabapE = false;
-
-  graph_access G;
-  internal_build_graph( partition_config, n, vwgt, xadj, adjcwgt, adjncy, G);
-
-  partition_config.kway_adaptive_limits_beta  = log(partition_config.largest_graph_weight);
-
-  if(graph_partitioned) {
-    forall_nodes(G, node) {
-      G.setPartitionIndex(node, part[node]);
-    } endfor
-}
-
-  partition_config.graph_allready_partitioned  = graph_partitioned;
-  partition_config.no_new_initial_partitioning = graph_partitioned;
-
-  parallel_mh_async mh(communicator);
-  mh.perform_partitioning(partition_config, G);
-
-  forall_nodes(G, node) {
-    part[node] = G.getPartitionIndex(node);
-  } endfor
-
-  quality_metrics qm;
-  *edgecut = qm.edge_cut(G);
-  *balance = qm.balance(G);
-
-  //ofs.close();
-  //cout.rdbuf(backup);
-}
-
 

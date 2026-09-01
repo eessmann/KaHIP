@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -630,6 +631,17 @@ using parhip::mpi::persistence_policy;
 using parhip::mpi::segmented_buffer;
 using parhip::mpi::start_neighbor_all_to_all_v;
 
+static_assert(!std::is_nothrow_constructible_v<
+              parhip::mpi::detail::direct_neighbor_storage<int>,
+              parhip::mpi::communicator, parhip::mpi::datatype,
+              parhip::mpi::segmented_buffer<int>,
+              parhip::mpi::segmented_buffer<int>,
+              parhip::mpi::detail::direct_neighbor_layout,
+              parhip::mpi::detail::neighbor_direct_backend,
+              std::optional<parhip::mpi::detail::mpi3_bounded_neighbor_plan>>,
+              "allocating direct-neighbor storage must propagate allocation "
+              "failures to the communicator-scoped fail-fast boundary");
+
 template <typename Operation>
 void require_exact_common_mpi_error(Operation&& operation,
                                     std::string_view expected_context,
@@ -685,6 +697,26 @@ auto ring_segments(distributed_graph const& graph,
   return segments;
 }
 
+void require_default_immediate_backend(int expected_calls) {
+#if KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 0);
+  REQUIRE(async_protocol_probe::immediate_payload_c_calls == expected_calls);
+#else
+  REQUIRE(async_protocol_probe::immediate_payload_calls == expected_calls);
+  REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
+#endif
+}
+
+void require_default_persistent_backend(int expected_calls) {
+#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
+  REQUIRE(async_protocol_probe::persistent_init_calls == 0);
+  REQUIRE(async_protocol_probe::persistent_init_c_calls == expected_calls);
+#else
+  REQUIRE(async_protocol_probe::persistent_init_calls == expected_calls);
+  REQUIRE(async_protocol_probe::persistent_init_c_calls == 0);
+#endif
+}
+
 TEST_CASE("Task 7B MPI capabilities match independent generated probes",
           "[unit][mpi][neighbor][async][capability]") {
 #if !defined(KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV) ||     \
@@ -729,9 +761,7 @@ TEST_CASE("one-shot zero-degree initiation is immediate and owns completion",
   async_protocol_probe::active = true;
   auto request = start_neighbor_all_to_all_v(std::move(sends), graph);
   REQUIRE(async_protocol_probe::count_exchange_calls == 1);
-  REQUIRE(async_protocol_probe::immediate_payload_calls +
-              async_protocol_probe::immediate_payload_c_calls ==
-          1);
+  require_default_immediate_backend(1);
   REQUIRE(async_protocol_probe::blocking_payload_calls == 0);
   REQUIRE(async_protocol_probe::blocking_payload_c_calls == 0);
   REQUIRE(async_protocol_probe::test_calls == 0);
@@ -767,9 +797,7 @@ TEST_CASE("one-shot preserves an explicit empty destination segment",
   REQUIRE(received.segment_count() == 1);
   REQUIRE(received.segment(0).empty());
   REQUIRE(async_protocol_probe::count_exchange_calls == 1);
-  REQUIRE(async_protocol_probe::immediate_payload_calls +
-              async_protocol_probe::immediate_payload_c_calls ==
-          1);
+  require_default_immediate_backend(1);
   REQUIRE(async_protocol_probe::point_to_point_calls == 0);
   REQUIRE(async_protocol_probe::hidden_completion_calls == 0);
   REQUIRE(async_protocol_probe::cancel_calls == 0);
@@ -810,9 +838,7 @@ TEST_CASE("active one-shot request survives moves and source graph destruction",
 
   REQUIRE(async_protocol_probe::first_test_was_forced);
   REQUIRE(async_protocol_probe::count_exchange_calls == 1);
-  REQUIRE(async_protocol_probe::immediate_payload_calls +
-              async_protocol_probe::immediate_payload_c_calls ==
-          1);
+  require_default_immediate_backend(1);
   REQUIRE(async_protocol_probe::wait_calls == 0);
   REQUIRE(async_protocol_probe::request_free_calls == 0);
   REQUIRE(async_protocol_probe::tracked_type_free_calls == 1);
@@ -828,8 +854,8 @@ TEST_CASE("active one-shot request survives moves and source graph destruction",
   }
 }
 
-TEST_CASE("one-shot direct API commonly rejects bounded MPI-3 layouts",
-          "[unit][mpi][neighbor][async][bounded][failure]") {
+TEST_CASE("one-shot MPI-3 fallback advances deterministic bounded rounds",
+          "[unit][mpi][neighbor][async][bounded]") {
   communicator_view const world{MPI_COMM_WORLD};
   distributed_graph graph{world, {world.rank()}};
   auto const element_count =
@@ -840,23 +866,75 @@ TEST_CASE("one-shot direct API commonly rejects bounded MPI-3 layouts",
       collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true};
 
   async_protocol_probe::reset();
+  async_protocol_probe::force_first_test_incomplete = true;
   async_protocol_probe::active = true;
-  require_collective_semantic_error(
-      [&] {
-        static_cast<void>(start_neighbor_all_to_all_v(
-            segmented_buffer<int>::from_segments(segments), graph, options));
-      },
-      "direct neighborhood exchange requires a single representable payload",
-      world);
-  REQUIRE(async_protocol_probe::count_exchange_calls == 1);
-  REQUIRE(async_protocol_probe::immediate_payload_calls == 0);
-  REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
-
-  auto received = neighbor_all_to_all_v(
+  auto request = start_neighbor_all_to_all_v(
       segmented_buffer<int>::from_segments(segments), graph, options);
+  REQUIRE(async_protocol_probe::count_exchange_calls == 1);
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 1);
+  REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
+  REQUIRE(async_protocol_probe::blocking_payload_calls == 0);
+  REQUIRE_FALSE(request.test());
+  auto complete = false;
+  for (int attempt = 0; attempt < 10'000 && !complete; ++attempt) {
+    complete = request.test();
+  }
+  REQUIRE(complete);
+  auto received = std::move(request).wait();
   async_protocol_probe::active = false;
   REQUIRE(std::ranges::equal(received.segment(0), segments[0]));
-  REQUIRE(async_protocol_probe::blocking_payload_calls > 0);
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 3);
+  REQUIRE(async_protocol_probe::first_test_was_forced);
+  REQUIRE(async_protocol_probe::test_calls >= 4);
+  REQUIRE(async_protocol_probe::wait_calls == 0);
+  REQUIRE(async_protocol_probe::point_to_point_calls == 0);
+}
+
+TEST_CASE("bounded MPI-3 star phases retain zero-count participants",
+          "[unit][mpi][neighbor][async][bounded][asymmetric][sparse]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() < 2) {
+    return;
+  }
+
+  auto outgoing = std::vector<int>{};
+  if (world.rank() == 0) {
+    outgoing.resize(static_cast<std::size_t>(world.size() - 1));
+    std::ranges::iota(outgoing, 1);
+  }
+  distributed_graph graph{world, std::move(outgoing)};
+  auto const counts = std::vector<std::size_t>(graph.destinations().size(), 5);
+
+  async_protocol_probe::reset();
+  async_protocol_probe::active = true;
+  {
+    neighbor_all_to_all_v_context<int> context{
+        graph,
+        counts,
+        context_options{
+            .collective = collective_options{.mpi3_round_ceiling = 2,
+                                              .force_mpi3 = true}}};
+    for (std::size_t index = 0; index < graph.destinations().size(); ++index) {
+      std::ranges::fill(context.send_segment(index),
+                        graph.destinations()[index]);
+    }
+    context.start();
+    context.wait();
+    if (world.rank() == 0) {
+      REQUIRE(graph.sources().empty());
+    } else {
+      REQUIRE(std::ranges::equal(graph.sources(), std::array{0}));
+      REQUIRE(std::ranges::equal(
+          context.received_segment(0),
+          std::vector<int>(5, world.rank())));
+    }
+  }
+  async_protocol_probe::active = false;
+
+  REQUIRE(async_protocol_probe::immediate_payload_calls ==
+          3 * (world.size() - 1));
+  REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
+  REQUIRE(async_protocol_probe::point_to_point_calls == 0);
 }
 
 TEST_CASE("one-shot options are validated collectively before count exchange",
@@ -1055,9 +1133,7 @@ TEST_CASE("default reusable context exchanges three fresh generations",
   async_protocol_probe::active = false;
 
   REQUIRE(async_protocol_probe::count_exchange_calls == 1);
-  REQUIRE(async_protocol_probe::immediate_payload_calls +
-              async_protocol_probe::immediate_payload_c_calls ==
-          3);
+  require_default_immediate_backend(3);
   REQUIRE(async_protocol_probe::blocking_payload_calls == 0);
   REQUIRE(async_protocol_probe::blocking_payload_c_calls == 0);
   REQUIRE(async_protocol_probe::request_free_calls == 0);
@@ -1196,9 +1272,7 @@ TEST_CASE("persistent context uses guarded init start wait and inactive free",
         graph,
         {1},
         context_options{.persistence = persistence_policy::required}};
-    REQUIRE(async_protocol_probe::persistent_init_calls +
-                async_protocol_probe::persistent_init_c_calls ==
-            1);
+    require_default_persistent_backend(1);
     for (std::uint64_t generation = 1; generation <= 3; ++generation) {
       context.send_segment(0)[0] =
           wire_entry{generation, world.rank(), world.rank()};
@@ -1271,8 +1345,71 @@ TEST_CASE("forced MPI-3 disables every MPI-4 persistent backend",
   async_protocol_probe::active = false;
 }
 
-TEST_CASE("direct reusable context rejects bounded layouts collectively",
-          "[unit][mpi][neighbor][async][context][bounded][failure]") {
+TEST_CASE("reusable context restarts the bounded MPI-3 state machine",
+          "[unit][mpi][neighbor][async][context][bounded]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+  async_protocol_probe::reset();
+  async_protocol_probe::active = true;
+  {
+    neighbor_all_to_all_v_context<int> context{
+        graph,
+        {5},
+        context_options{
+            .collective = collective_options{.mpi3_round_ceiling = 2,
+                                              .force_mpi3 = true},
+            .persistence = persistence_policy::prefer}};
+    for (auto generation : std::array{7, 11}) {
+      std::ranges::fill(context.send_segment(0), world.rank() + generation);
+      context.start();
+      context.wait();
+      REQUIRE(std::ranges::equal(
+          context.received_segment(0),
+          std::vector<int>(5, world.rank() + generation)));
+    }
+  }
+  async_protocol_probe::active = false;
+  REQUIRE(async_protocol_probe::count_exchange_calls == 1);
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 6);
+  REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
+  REQUIRE(async_protocol_probe::persistent_init_calls == 0);
+  REQUIRE(async_protocol_probe::persistent_init_c_calls == 0);
+  REQUIRE(async_protocol_probe::wait_calls == 6);
+  REQUIRE(async_protocol_probe::point_to_point_calls == 0);
+}
+
+TEST_CASE("bounded context destruction drains every active round",
+          "[unit][mpi][neighbor][async][context][bounded][destructor]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+  async_protocol_probe::reset();
+  async_protocol_probe::active = true;
+  {
+    neighbor_all_to_all_v_context<wire_entry> context{
+        graph,
+        {5},
+        context_options{
+            .collective = collective_options{.mpi3_round_ceiling = 2,
+                                              .force_mpi3 = true}}};
+    std::ranges::fill(
+        context.send_segment(0),
+        wire_entry{0, world.rank(), world.rank()});
+    context.start();
+  }
+  async_protocol_probe::active = false;
+
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 3);
+  REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
+  REQUIRE(async_protocol_probe::wait_calls == 3);
+  REQUIRE(async_protocol_probe::tracked_type_free_calls == 1);
+  REQUIRE(async_protocol_probe::tracked_communicator_free_calls == 1);
+  REQUIRE(async_protocol_probe::point_to_point_calls == 0);
+}
+
+TEST_CASE("required persistence rejects a layout that needs bounded rounds",
+          "[unit][mpi][neighbor][async][context][bounded][persistent]") {
+#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT && \
+    !KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
   communicator_view const world{MPI_COMM_WORLD};
   distributed_graph graph{world, {world.rank()}};
   require_collective_semantic_error(
@@ -1280,12 +1417,15 @@ TEST_CASE("direct reusable context rejects bounded layouts collectively",
         neighbor_all_to_all_v_context<int> context{
             graph,
             {5},
-            context_options{.collective = collective_options{
-                                .mpi3_round_ceiling = 2, .force_mpi3 = true}}};
+            context_options{
+                .collective = collective_options{.mpi3_round_ceiling = 2},
+                .persistence = persistence_policy::required}};
         static_cast<void>(context);
       },
-      "direct neighborhood exchange requires a single representable payload",
+      "persistent neighborhood exchange requires a single representable "
+      "payload",
       world);
+#endif
 }
 
 TEST_CASE("asymmetric backend masks select one common backend collectively",
