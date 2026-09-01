@@ -300,6 +300,7 @@ template <mpi_datatype T>
                                          collective_options options = {})
     -> segmented_buffer<T> {
   auto semantic_failure = std::string_view{};
+  auto deferred_capacity_failure = std::string_view{};
   auto result = std::optional<segmented_buffer<T>>{};
   {
     auto owned_communicator = communicator{graph.view()};
@@ -340,7 +341,7 @@ template <mpi_datatype T>
                   receive_storage_size.has_value(),
               collective_communicator);
           if (!receive_layout_is_valid) {
-            semantic_failure =
+            deferred_capacity_failure =
                 "neighbor_all_to_all_v receive layout validation failed";
           } else {
             auto received = segmented_buffer<T>::uninitialized(
@@ -447,8 +448,14 @@ template <mpi_datatype T>
     }
   }
 
+  // KAHIP_SEMANTIC_EXIT_BEGIN(sync-neighbor)
   if (!semantic_failure.empty()) {
-    throw mpi_error{MPI_ERR_ARG, std::string{semantic_failure}};
+    throw_collectively_agreed_semantic_error(graph.native_handle(),
+                                             semantic_failure);
+  }
+  // KAHIP_SEMANTIC_EXIT_END(sync-neighbor)
+  if (!deferred_capacity_failure.empty()) {
+    throw mpi_error{MPI_ERR_ARG, std::string{deferred_capacity_failure}};
   }
   return std::move(*result);
 }

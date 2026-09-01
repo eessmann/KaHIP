@@ -12,6 +12,7 @@
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -117,6 +118,32 @@ void track_operation(MPI_Comm communicator,
   tracked_request_active = request_is_active;
 }
 }  // namespace async_protocol_probe
+
+namespace semantic_error_protocol_probe {
+inline bool active = false;
+inline int error_string_calls = 0;
+
+class activation final {
+ public:
+  activation() noexcept {
+    error_string_calls = 0;
+    active = true;
+  }
+  ~activation() noexcept { active = false; }
+
+  activation(activation const&) = delete;
+  auto operator=(activation const&) -> activation& = delete;
+};
+}  // namespace semantic_error_protocol_probe
+
+extern "C" int MPI_Error_string(int error_code,
+                                char* error_text,
+                                int* error_text_length) {
+  if (semantic_error_protocol_probe::active) {
+    ++semantic_error_protocol_probe::error_string_calls;
+  }
+  return PMPI_Error_string(error_code, error_text, error_text_length);
+}
 
 extern "C" int MPI_Neighbor_alltoall(void const* send_buffer,
                                      int send_count,
@@ -573,23 +600,45 @@ using parhip::mpi::segmented_buffer;
 using parhip::mpi::start_neighbor_all_to_all_v;
 
 template <typename Operation>
-void require_common_mpi_error(Operation&& operation,
-                              std::string_view expected_context,
-                              communicator_view communicator) {
+void require_exact_common_mpi_error(Operation&& operation,
+                                    std::string_view expected_context,
+                                    communicator_view communicator) {
   auto caught = 0;
+  auto exact_dynamic_type = 0;
+  auto raw_code_matches = 0;
   auto context_matches = 0;
-  try {
-    std::invoke(std::forward<Operation>(operation));
-  } catch (parhip::mpi::mpi_error const& error) {
-    caught = 1;
-    context_matches =
-        error.context().find(expected_context) != std::string_view::npos;
+  auto error_string_calls = 0;
+  {
+    semantic_error_protocol_probe::activation observation{};
+    try {
+      std::invoke(std::forward<Operation>(operation));
+    } catch (parhip::mpi::mpi_error const& error) {
+      caught = 1;
+      exact_dynamic_type =
+          typeid(error) == typeid(parhip::mpi::mpi_error) ? 1 : 0;
+      raw_code_matches = error.error_code() == MPI_ERR_ARG ? 1 : 0;
+      context_matches = error.context() == expected_context ? 1 : 0;
+    } catch (...) {
+      caught = 1;
+    }
+    error_string_calls = semantic_error_protocol_probe::error_string_calls;
   }
-  auto local = std::array{caught, context_matches};
-  auto global = std::array{0, 0};
-  REQUIRE(MPI_Allreduce(local.data(), global.data(), 2, MPI_INT, MPI_SUM,
-                        communicator.native_handle()) == MPI_SUCCESS);
-  REQUIRE(global == std::array{communicator.size(), communicator.size()});
+  auto local = std::array{caught, exact_dynamic_type, raw_code_matches,
+                          context_matches, error_string_calls};
+  auto global = std::array{0, 0, 0, 0, 0};
+  REQUIRE(PMPI_Allreduce(local.data(), global.data(),
+                         static_cast<int>(local.size()), MPI_INT, MPI_SUM,
+                         communicator.native_handle()) == MPI_SUCCESS);
+  REQUIRE(global == std::array{communicator.size(), communicator.size(),
+                               communicator.size(), communicator.size(), 0});
+}
+
+template <typename Operation>
+void require_collective_semantic_error(Operation&& operation,
+                                       std::string_view expected_context,
+                                       communicator_view communicator) {
+  require_exact_common_mpi_error(std::forward<Operation>(operation),
+                                 expected_context, communicator);
 }
 
 auto ring_segments(distributed_graph const& graph,
@@ -761,7 +810,7 @@ TEST_CASE("one-shot direct API commonly rejects bounded MPI-3 layouts",
 
   async_protocol_probe::reset();
   async_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         static_cast<void>(start_neighbor_all_to_all_v(
             segmented_buffer<int>::from_segments(segments), graph, options));
@@ -793,7 +842,7 @@ TEST_CASE("one-shot options are validated collectively before count exchange",
     }
     async_protocol_probe::reset();
     async_protocol_probe::active = true;
-    require_common_mpi_error(
+    require_collective_semantic_error(
         [&] {
           static_cast<void>(start_neighbor_all_to_all_v(
               segmented_buffer<int>::from_segments(
@@ -805,6 +854,20 @@ TEST_CASE("one-shot options are validated collectively before count exchange",
     REQUIRE(async_protocol_probe::immediate_payload_calls == 0);
     REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
     async_protocol_probe::active = false;
+  }
+
+  if (world.size() == 1) {
+    async_protocol_probe::reset();
+    async_protocol_probe::active = true;
+    semantic_error_protocol_probe::activation observation{};
+    auto request = start_neighbor_all_to_all_v(
+        segmented_buffer<int>::from_segments(
+            std::vector<std::vector<int>>{{world.rank()}}),
+        graph, collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
+    auto received = std::move(request).wait();
+    async_protocol_probe::active = false;
+    REQUIRE(std::ranges::equal(received.segment(0), std::array{world.rank()}));
+    REQUIRE(semantic_error_protocol_probe::error_string_calls == 0);
   }
 }
 
@@ -819,7 +882,7 @@ TEST_CASE("one-shot rejects a rank-local malformed segment layout commonly",
 
   async_protocol_probe::reset();
   async_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         static_cast<void>(start_neighbor_all_to_all_v(std::move(sends), graph));
       },
@@ -834,6 +897,17 @@ TEST_CASE("reusable persistence policy is collectively identical",
           "[unit][mpi][neighbor][async][context][options][failure]") {
   communicator_view const world{MPI_COMM_WORLD};
   if (world.size() == 1) {
+    distributed_graph graph{world, {world.rank()}};
+    async_protocol_probe::reset();
+    async_protocol_probe::active = true;
+    semantic_error_protocol_probe::activation observation{};
+    neighbor_all_to_all_v_context<int> context{
+        graph,
+        {1},
+        context_options{.persistence = persistence_policy::disabled}};
+    async_protocol_probe::active = false;
+    REQUIRE(context.send_segment(0).size() == 1);
+    REQUIRE(semantic_error_protocol_probe::error_string_calls == 0);
     return;
   }
   distributed_graph graph{world, {world.rank()}};
@@ -842,7 +916,7 @@ TEST_CASE("reusable persistence policy is collectively identical",
 
   async_protocol_probe::reset();
   async_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         neighbor_all_to_all_v_context<int> context{
             graph, {1}, context_options{.persistence = policy}};
@@ -853,6 +927,50 @@ TEST_CASE("reusable persistence policy is collectively identical",
   REQUIRE(async_protocol_probe::immediate_payload_calls == 0);
   REQUIRE(async_protocol_probe::persistent_init_calls == 0);
   async_protocol_probe::active = false;
+}
+
+TEST_CASE("reusable context rejects fixed send-count cardinality collectively",
+          "[unit][mpi][neighbor][async][context][layout][failure]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+  auto counts = world.rank() == 0 ? std::vector<std::size_t>{}
+                                  : std::vector<std::size_t>{1};
+
+  async_protocol_probe::reset();
+  async_protocol_probe::active = true;
+  require_collective_semantic_error(
+      [&] {
+        neighbor_all_to_all_v_context<int> context{graph, std::move(counts)};
+        static_cast<void>(context);
+      },
+      "fixed neighborhood send layout validation failed", world);
+  async_protocol_probe::active = false;
+  REQUIRE(async_protocol_probe::count_exchange_calls == 0);
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 0);
+  REQUIRE(async_protocol_probe::persistent_init_calls == 0);
+}
+
+TEST_CASE("reusable persistence policy rejects an invalid value collectively",
+          "[unit][mpi][neighbor][async][context][options][failure]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+
+  async_protocol_probe::reset();
+  async_protocol_probe::active = true;
+  require_collective_semantic_error(
+      [&] {
+        neighbor_all_to_all_v_context<int> context{
+            graph,
+            {1},
+            context_options{.persistence =
+                                static_cast<persistence_policy>(0xff)}};
+        static_cast<void>(context);
+      },
+      "direct neighborhood exchange options must agree collectively", world);
+  async_protocol_probe::active = false;
+  REQUIRE(async_protocol_probe::count_exchange_calls == 0);
+  REQUIRE(async_protocol_probe::immediate_payload_calls == 0);
+  REQUIRE(async_protocol_probe::persistent_init_calls == 0);
 }
 
 TEST_CASE("default reusable context exchanges three fresh generations",
@@ -1074,7 +1192,7 @@ TEST_CASE("persistent context uses guarded init start wait and inactive free",
   REQUIRE(request_free < type_free);
   REQUIRE(type_free < comm_free);
 #else
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         neighbor_all_to_all_v_context<int> context{
             graph,
@@ -1109,7 +1227,7 @@ TEST_CASE("forced MPI-3 disables every MPI-4 persistent backend",
   REQUIRE(async_protocol_probe::immediate_payload_calls == 1);
   REQUIRE(async_protocol_probe::immediate_payload_c_calls == 0);
 
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         neighbor_all_to_all_v_context<int> context{
             graph,
@@ -1126,7 +1244,7 @@ TEST_CASE("direct reusable context rejects bounded layouts collectively",
           "[unit][mpi][neighbor][async][context][bounded][failure]") {
   communicator_view const world{MPI_COMM_WORLD};
   distributed_graph graph{world, {world.rank()}};
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         neighbor_all_to_all_v_context<int> context{
             graph,

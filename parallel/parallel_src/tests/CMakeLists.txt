@@ -627,6 +627,16 @@ foreach(mpi_ranks RANGE 1 5)
     )
 endforeach()
 
+add_test(
+    NAME unit-mpi-semantic-exit-policy
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DCOMMUNICATION_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/../lib/communication"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_semantic_exit_policy.cmake"
+)
+set_tests_properties(unit-mpi-semantic-exit-policy PROPERTIES TIMEOUT 5)
+
 add_executable(
     mpi_failure_policy_probe
     communication/mpi_failure_policy_probe.cpp

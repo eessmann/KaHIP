@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -404,6 +405,7 @@ extern "C" int MPI_Waitall(int count,
 }
 
 namespace {
+using parhip::mpi::agree_collectively;
 using parhip::mpi::all_to_all_v;
 using parhip::mpi::collective_options;
 using parhip::mpi::communicator;
@@ -416,32 +418,57 @@ using parhip::mpi::run_with_exception_barrier;
 using parhip::mpi::runtime_is_active;
 using parhip::mpi::segmented_buffer;
 using parhip::mpi::topology;
+using parhip::mpi::validate_collectively;
 
 template <typename Operation>
-void require_common_mpi_error(Operation&& operation,
-                              std::string_view expected_context,
-                              communicator_view communicator) {
+void require_exact_common_mpi_error(Operation&& operation,
+                                    std::string_view expected_context,
+                                    communicator_view communicator) {
   auto caught = 0;
-  auto structured = 0;
+  auto exact_dynamic_type = 0;
+  auto raw_code_matches = 0;
   auto context_matches = 0;
-  try {
-    std::invoke(std::forward<Operation>(operation));
-  } catch (parhip::mpi::mpi_error const& error) {
-    caught = 1;
-    structured = 1;
-    context_matches =
-        error.context().find(expected_context) != std::string_view::npos;
-  } catch (...) {
-    caught = 1;
+  auto error_string_calls = 0;
+  {
+    semantic_error_protocol_probe::activation observation{};
+    try {
+      std::invoke(std::forward<Operation>(operation));
+    } catch (parhip::mpi::mpi_error const& error) {
+      caught = 1;
+      exact_dynamic_type =
+          typeid(error) == typeid(parhip::mpi::mpi_error) ? 1 : 0;
+      raw_code_matches = error.error_code() == MPI_ERR_ARG ? 1 : 0;
+      context_matches = error.context() == expected_context ? 1 : 0;
+    } catch (...) {
+      caught = 1;
+    }
+    error_string_calls = semantic_error_protocol_probe::error_string_calls;
   }
 
-  auto totals = std::array{caught, structured, context_matches};
-  auto global_totals = std::array{0, 0, 0};
-  REQUIRE(MPI_Allreduce(totals.data(), global_totals.data(),
-                        static_cast<int>(totals.size()), MPI_INT, MPI_SUM,
-                        communicator.native_handle()) == MPI_SUCCESS);
+  auto totals = std::array{caught, exact_dynamic_type, raw_code_matches,
+                           context_matches, error_string_calls};
+  auto global_totals = std::array{0, 0, 0, 0, 0};
+  REQUIRE(PMPI_Allreduce(totals.data(), global_totals.data(),
+                         static_cast<int>(totals.size()), MPI_INT, MPI_SUM,
+                         communicator.native_handle()) == MPI_SUCCESS);
   auto const size = communicator.size();
-  REQUIRE(global_totals == std::array{size, size, size});
+  REQUIRE(global_totals == std::array{size, size, size, size, 0});
+}
+
+template <typename Operation>
+void require_collective_semantic_error(Operation&& operation,
+                                       std::string_view expected_context,
+                                       communicator_view communicator) {
+  require_exact_common_mpi_error(std::forward<Operation>(operation),
+                                 expected_context, communicator);
+}
+
+template <typename Operation>
+void require_deferred_capacity_mpi_error(Operation&& operation,
+                                         std::string_view expected_context,
+                                         communicator_view communicator) {
+  require_exact_common_mpi_error(std::forward<Operation>(operation),
+                                 expected_context, communicator);
 }
 
 TEST_CASE("contiguous ownership uses exact integer boundaries",
@@ -729,9 +756,6 @@ TEST_CASE("zero-local-work ranks still participate in dense exchange",
 
 TEST_CASE("dense validation failure propagates to every rank", "[unit][mpi]") {
   communicator_view const world{MPI_COMM_WORLD};
-  if (world.size() == 1) {
-    return;
-  }
 
   std::vector<std::size_t> counts(static_cast<std::size_t>(world.size()), 0);
   std::vector<std::size_t> offsets(static_cast<std::size_t>(world.size()), 0);
@@ -740,17 +764,81 @@ TEST_CASE("dense validation failure propagates to every rank", "[unit][mpi]") {
   }
   segmented_buffer<int> malformed{{}, std::move(counts), std::move(offsets)};
 
-  bool threw = false;
-  try {
-    static_cast<void>(all_to_all_v(std::move(malformed), world));
-  } catch (parhip::mpi::mpi_error const& error) {
-    threw = true;
-    REQUIRE(error.error_code() == MPI_ERR_ARG);
-    REQUIRE(error.context().find("collective input validation") !=
-            std::string_view::npos);
-    REQUIRE(error.location().line() > 0);
+  require_collective_semantic_error(
+      [&] { static_cast<void>(all_to_all_v(std::move(malformed), world)); },
+      "all_to_all_v collective input validation failed", world);
+}
+
+TEST_CASE("collective validation helper throws one exact common semantic error",
+          "[unit][mpi][failure-policy][semantic][validation]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  require_collective_semantic_error(
+      [&] {
+        validate_collectively(world.rank() != 0, world,
+                              "adapter collective validation failed");
+      },
+      "adapter collective validation failed", world);
+}
+
+TEST_CASE("collective value agreement is exact or succeeds at one rank",
+          "[unit][mpi][failure-policy][semantic][agreement]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() == 1) {
+    semantic_error_protocol_probe::activation observation{};
+    REQUIRE(agree_collectively(17, world, "adapter value agreement failed") ==
+            17);
+    REQUIRE(semantic_error_protocol_probe::error_string_calls == 0);
+    return;
   }
-  REQUIRE(threw);
+
+  require_collective_semantic_error(
+      [&] {
+        static_cast<void>(agree_collectively(world.rank(), world,
+                                             "adapter value agreement failed"));
+      },
+      "adapter value agreement failed", world);
+}
+
+TEST_CASE("dense options reject zero ceiling collectively", "[unit][mpi]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto segments =
+      std::vector<std::vector<int>>(static_cast<std::size_t>(world.size()));
+  require_collective_semantic_error(
+      [&] {
+        static_cast<void>(all_to_all_v(
+            segmented_buffer<int>::from_segments(segments), world,
+            collective_options{.mpi3_round_ceiling = 0, .force_mpi3 = true}));
+      },
+      "all_to_all_v collective options must match and use a nonzero MPI-3 "
+      "ceiling",
+      world);
+}
+
+TEST_CASE("dense options agree or reject rank skew collectively",
+          "[unit][mpi]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto segments =
+      std::vector<std::vector<int>>(static_cast<std::size_t>(world.size()));
+  if (world.size() == 1) {
+    semantic_error_protocol_probe::activation observation{};
+    auto received = all_to_all_v(
+        segmented_buffer<int>::from_segments(segments), world,
+        collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
+    REQUIRE(received.storage().empty());
+    REQUIRE(semantic_error_protocol_probe::error_string_calls == 0);
+    return;
+  }
+
+  auto const options = collective_options{
+      .mpi3_round_ceiling = world.rank() == 0 ? 1U : 2U, .force_mpi3 = true};
+  require_collective_semantic_error(
+      [&] {
+        static_cast<void>(all_to_all_v(
+            segmented_buffer<int>::from_segments(segments), world, options));
+      },
+      "all_to_all_v collective options must match and use a nonzero MPI-3 "
+      "ceiling",
+      world);
 }
 
 TEST_CASE("forced MPI-3 bounded rounds preserve every element", "[unit][mpi]") {
@@ -1028,12 +1116,12 @@ TEST_CASE(
 
   neighborhood_protocol_probe::reset();
   neighborhood_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         distributed_graph invalid{world, outgoing};
         static_cast<void>(invalid);
       },
-      "distributed graph destination validation", world);
+      "distributed graph destination validation failed", world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::dist_graph_create_calls == 0);
 }
@@ -1243,12 +1331,12 @@ TEST_CASE(
 
   neighborhood_protocol_probe::reset();
   neighborhood_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         static_cast<void>(neighbor_all_to_all_v(
             segmented_buffer<int>::from_segments(segments), graph));
       },
-      "neighbor_all_to_all_v collective input validation", world);
+      "neighbor_all_to_all_v collective input validation failed", world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
@@ -1269,12 +1357,12 @@ TEST_CASE("neighborhood receive offset overflow is common and pre-payload",
   neighborhood_protocol_probe::reset();
   neighborhood_protocol_probe::inject_receive_count_overflow = true;
   neighborhood_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_deferred_capacity_mpi_error(
       [&] {
         static_cast<void>(neighbor_all_to_all_v(
             segmented_buffer<int>::from_segments(segments), graph));
       },
-      "neighbor_all_to_all_v receive layout validation", world);
+      "neighbor_all_to_all_v receive layout validation failed", world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
@@ -1291,14 +1379,14 @@ TEST_CASE("neighborhood receive byte size overflow is common and pre-allocation"
   neighborhood_protocol_probe::reset();
   neighborhood_protocol_probe::inject_receive_byte_size_overflow = true;
   neighborhood_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_deferred_capacity_mpi_error(
       [&] {
         static_cast<void>(neighbor_all_to_all_v(
             segmented_buffer<test_support::wire_entry>::from_segments(
                 std::vector<std::vector<test_support::wire_entry>>{{value}}),
             graph));
       },
-      "neighbor_all_to_all_v receive layout validation", world);
+      "neighbor_all_to_all_v receive layout validation failed", world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
@@ -1309,6 +1397,14 @@ TEST_CASE("neighborhood exchange rejects mismatched MPI-3 options collectively",
           "[unit][mpi][neighbor][exchange][failure][options]") {
   communicator_view const world{MPI_COMM_WORLD};
   if (world.size() == 1) {
+    distributed_graph graph{world, {world.rank()}};
+    semantic_error_protocol_probe::activation observation{};
+    auto received = neighbor_all_to_all_v(
+        segmented_buffer<int>::from_segments(
+            std::vector<std::vector<int>>{{world.rank()}}),
+        graph, collective_options{.mpi3_round_ceiling = 1, .force_mpi3 = true});
+    REQUIRE(std::ranges::equal(received.segment(0), std::array{world.rank()}));
+    REQUIRE(semantic_error_protocol_probe::error_string_calls == 0);
     return;
   }
   distributed_graph graph{world, {world.rank()}};
@@ -1317,14 +1413,16 @@ TEST_CASE("neighborhood exchange rejects mismatched MPI-3 options collectively",
 
   neighborhood_protocol_probe::reset();
   neighborhood_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         static_cast<void>(neighbor_all_to_all_v(
             segmented_buffer<int>::from_segments(
                 std::vector<std::vector<int>>{{world.rank()}}),
             graph, options));
       },
-      "neighbor_all_to_all_v collective options", world);
+      "neighbor_all_to_all_v collective options must match and use a nonzero "
+      "MPI-3 ceiling",
+      world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
@@ -1338,7 +1436,7 @@ TEST_CASE("neighborhood exchange rejects a zero MPI-3 ceiling before counts",
 
   neighborhood_protocol_probe::reset();
   neighborhood_protocol_probe::active = true;
-  require_common_mpi_error(
+  require_collective_semantic_error(
       [&] {
         static_cast<void>(neighbor_all_to_all_v(
             segmented_buffer<int>::from_segments(
@@ -1346,7 +1444,9 @@ TEST_CASE("neighborhood exchange rejects a zero MPI-3 ceiling before counts",
             graph,
             collective_options{.mpi3_round_ceiling = 0, .force_mpi3 = true}));
       },
-      "neighbor_all_to_all_v collective options", world);
+      "neighbor_all_to_all_v collective options must match and use a nonzero "
+      "MPI-3 ceiling",
+      world);
   neighborhood_protocol_probe::active = false;
   REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
   REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);

@@ -8,7 +8,7 @@ distributed_graph::distributed_graph(communicator_view source,
                                      std::vector<int> outgoing_destinations) {
   auto const rank = source.rank();
   auto const size = source.size();
-  auto local_destinations_are_valid = std::ranges::all_of(
+  auto const local_destination_ranks_are_valid = std::ranges::all_of(
       outgoing_destinations, [size](auto const destination) {
         return destination >= 0 && destination < size;
       });
@@ -16,19 +16,29 @@ distributed_graph::distributed_graph(communicator_view source,
   std::ranges::sort(outgoing_destinations);
   auto const unique_end = std::ranges::unique(outgoing_destinations);
   outgoing_destinations.erase(unique_end.begin(), unique_end.end());
-  local_destinations_are_valid =
-      local_destinations_are_valid &&
+  auto const local_outdegree_is_representable =
       std::in_range<int>(outgoing_destinations.size());
 
-  auto destinations_are_valid = false;
+  auto destination_ranks_are_valid = false;
+  auto outdegree_is_representable = false;
   {
     auto validation_communicator = communicator{source};
-    destinations_are_valid = detail::collective_predicate(
-        local_destinations_are_valid, validation_communicator.view());
+    auto const collective_communicator = validation_communicator.view();
+    destination_ranks_are_valid = detail::collective_predicate(
+        local_destination_ranks_are_valid, collective_communicator);
+    outdegree_is_representable = detail::collective_predicate(
+        local_outdegree_is_representable, collective_communicator);
   }
-  if (!destinations_are_valid) {
+  // KAHIP_SEMANTIC_EXIT_BEGIN(distributed-graph-rank-domain)
+  if (!destination_ranks_are_valid) {
+    throw_collectively_agreed_semantic_error(
+        source.native_handle(),
+        "distributed graph destination validation failed");
+  }
+  // KAHIP_SEMANTIC_EXIT_END(distributed-graph-rank-domain)
+  if (!outdegree_is_representable) {
     throw mpi_error{MPI_ERR_ARG,
-                    "distributed graph destination validation failed"};
+                    "distributed graph outdegree exceeds MPI int capacity"};
   }
 
   {

@@ -240,9 +240,12 @@ inline void validate_collectively(bool local_is_valid,
     all_valid =
         detail::collective_predicate(local_is_valid, owned_communicator.view());
   }
+  // KAHIP_SEMANTIC_EXIT_BEGIN(validate-collectively)
   if (!all_valid) {
-    throw mpi_error{MPI_ERR_ARG, std::string{context}};
+    throw_collectively_agreed_semantic_error(communicator.native_handle(),
+                                             context);
   }
+  // KAHIP_SEMANTIC_EXIT_END(validate-collectively)
 }
 
 template <mpi_native_datatype T>
@@ -264,9 +267,12 @@ template <mpi_native_datatype T>
                    collective_communicator.native_handle(),
                    "MPI_Allreduce(common value maximum)");
   }
+  // KAHIP_SEMANTIC_EXIT_BEGIN(agree-collectively)
   if (minimum != maximum) {
-    throw mpi_error{MPI_ERR_ARG, std::string{context}};
+    throw_collectively_agreed_semantic_error(communicator.native_handle(),
+                                             context);
   }
+  // KAHIP_SEMANTIC_EXIT_END(agree-collectively)
   return minimum;
 }
 
@@ -391,9 +397,12 @@ template <mpi_datatype T>
     }
   }
 
+  // KAHIP_SEMANTIC_EXIT_BEGIN(dense-all-to-all)
   if (!semantic_failure.empty()) {
-    throw mpi_error{MPI_ERR_ARG, std::string{semantic_failure}};
+    throw_collectively_agreed_semantic_error(communicator.native_handle(),
+                                             semantic_failure);
   }
+  // KAHIP_SEMANTIC_EXIT_END(dense-all-to-all)
   return std::move(*result);
 }
 }  // namespace parhip::mpi

@@ -78,38 +78,51 @@ template <typename T>
                                              std::vector<std::size_t> counts)
     -> segmented_buffer<T> {
   auto semantic_failure = std::string_view{};
+  auto deferred_capacity_failure = std::string_view{};
   auto result = std::optional<segmented_buffer<T>>{};
   {
     auto owned_communicator = communicator{graph.view()};
     auto const collective_communicator = owned_communicator.view();
     try {
-      auto offsets = counts.size() == graph.destinations().size()
-                         ? neighbor_offsets(counts)
-                         : std::nullopt;
-      auto storage_size = std::optional<std::size_t>{};
-      if (offsets.has_value()) {
-        auto const element_count = neighbor_storage_size(counts, *offsets);
-        if (element_count <=
-            std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-          storage_size = element_count;
-        }
-      }
-      auto const layout_is_valid =
-          collective_predicate(offsets.has_value() && storage_size.has_value(),
+      auto const cardinality_is_valid =
+          collective_predicate(counts.size() == graph.destinations().size(),
                                collective_communicator);
-      if (!layout_is_valid) {
+      if (!cardinality_is_valid) {
         semantic_failure = "fixed neighborhood send layout validation failed";
       } else {
-        result.emplace(segmented_buffer<T>::uninitialized(
-            *storage_size, std::move(counts), std::move(*offsets)));
+        auto offsets = neighbor_offsets(counts);
+        auto storage_size = std::optional<std::size_t>{};
+        if (offsets.has_value()) {
+          auto const element_count = neighbor_storage_size(counts, *offsets);
+          if (element_count <=
+              std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+            storage_size = element_count;
+          }
+        }
+        auto const capacity_is_valid = collective_predicate(
+            offsets.has_value() && storage_size.has_value(),
+            collective_communicator);
+        if (!capacity_is_valid) {
+          deferred_capacity_failure =
+              "fixed neighborhood send layout exceeds local capacity";
+        } else {
+          result.emplace(segmented_buffer<T>::uninitialized(
+              *storage_size, std::move(counts), std::move(*offsets)));
+        }
       }
     } catch (...) {
       abort_on_exception(collective_communicator.native_handle(),
                          "fixed neighborhood send allocation failure");
     }
   }
+  // KAHIP_SEMANTIC_EXIT_BEGIN(fixed-neighbor-cardinality)
   if (!semantic_failure.empty()) {
-    throw mpi_error{MPI_ERR_ARG, std::string{semantic_failure}};
+    throw_collectively_agreed_semantic_error(graph.native_handle(),
+                                             semantic_failure);
+  }
+  // KAHIP_SEMANTIC_EXIT_END(fixed-neighbor-cardinality)
+  if (!deferred_capacity_failure.empty()) {
+    throw mpi_error{MPI_ERR_ARG, std::string{deferred_capacity_failure}};
   }
   return std::move(*result);
 }
@@ -458,6 +471,7 @@ template <typename T>
     persistence_policy persistence)
     -> std::unique_ptr<direct_neighbor_storage<T>> {
   auto semantic_failure = std::string_view{};
+  auto deferred_capacity_failure = std::string_view{};
   auto result = std::unique_ptr<direct_neighbor_storage<T>>{};
   {
     auto operation_communicator = communicator{graph.view()};
@@ -497,7 +511,7 @@ template <typename T>
                 receive_offsets.has_value() && receive_storage_size.has_value(),
             collective_communicator);
         if (!receive_layout_is_valid) {
-          semantic_failure =
+          deferred_capacity_failure =
               "direct neighborhood exchange receive layout validation failed";
         } else {
           auto received = segmented_buffer<T>::uninitialized(
@@ -516,12 +530,47 @@ template <typename T>
               *agreed_persistence, legacy_representable,
               large_count_representable, collective.force_mpi3);
           if (!backend.has_value()) {
-            semantic_failure =
-                *agreed_persistence == persistence_policy::required
-                    ? "persistent neighborhood exchange is unavailable or "
-                      "unrepresentable"
-                    : "direct neighborhood exchange requires a single "
-                      "representable payload";
+            constexpr auto persistent_backend_is_available =
+                KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT != 0 ||
+                KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C != 0;
+            constexpr auto immediate_backend_is_available =
+                KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV != 0 ||
+                KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C != 0;
+            auto const required_persistence_is_unavailable =
+                *agreed_persistence == persistence_policy::required &&
+                (collective.force_mpi3 || !persistent_backend_is_available);
+            if (required_persistence_is_unavailable) {
+              semantic_failure =
+                  "persistent neighborhood exchange is unavailable";
+            } else if (!immediate_backend_is_available &&
+                       (*agreed_persistence == persistence_policy::disabled ||
+                        !persistent_backend_is_available)) {
+              semantic_failure = "direct neighborhood exchange is unavailable";
+            } else {
+              auto const physical_legacy_layout_is_representable =
+                  !neighbor_needs_bounded_rounds(
+                      sends, received.counts(), received.offsets(),
+                      static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                      collective_communicator);
+              auto const synthetic_ceiling_rejected_layout =
+                  !legacy_representable &&
+                  physical_legacy_layout_is_representable;
+              if (synthetic_ceiling_rejected_layout) {
+                semantic_failure =
+                    *agreed_persistence == persistence_policy::required
+                        ? "persistent neighborhood exchange requires a "
+                          "single representable payload"
+                        : "direct neighborhood exchange requires a single "
+                          "representable payload";
+              } else {
+                deferred_capacity_failure =
+                    *agreed_persistence == persistence_policy::required
+                        ? "persistent neighborhood exchange is unavailable or "
+                          "unrepresentable"
+                        : "direct neighborhood exchange requires a single "
+                          "representable payload";
+              }
+            }
           } else {
             auto operation_datatype =
                 make_mpi_datatype<T>(collective_communicator.native_handle());
@@ -542,8 +591,14 @@ template <typename T>
                          "direct neighborhood exchange local failure");
     }
   }
+  // KAHIP_SEMANTIC_EXIT_BEGIN(async-direct)
   if (!semantic_failure.empty()) {
-    throw mpi_error{MPI_ERR_ARG, std::string{semantic_failure}};
+    throw_collectively_agreed_semantic_error(graph.native_handle(),
+                                             semantic_failure);
+  }
+  // KAHIP_SEMANTIC_EXIT_END(async-direct)
+  if (!deferred_capacity_failure.empty()) {
+    throw mpi_error{MPI_ERR_ARG, std::string{deferred_capacity_failure}};
   }
   return result;
 }
