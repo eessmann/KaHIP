@@ -23,6 +23,14 @@ namespace capabilities {
 inline constexpr bool has_alltoallv_c = KAHIP_HAVE_MPI_ALLTOALLV_C != 0;
 inline constexpr bool has_neighbor_alltoallv_c =
     KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C != 0;
+inline constexpr bool has_ineighbor_alltoallv =
+    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV != 0;
+inline constexpr bool has_ineighbor_alltoallv_c =
+    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C != 0;
+inline constexpr bool has_neighbor_alltoallv_init =
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT != 0;
+inline constexpr bool has_neighbor_alltoallv_init_c =
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C != 0;
 }  // namespace capabilities
 
 struct collective_options {
@@ -202,7 +210,9 @@ void mpi3_bounded_all_to_all_v(segmented_buffer<T> const& sends,
   }
 }
 
-#if KAHIP_HAVE_MPI_ALLTOALLV_C || KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
+#if KAHIP_HAVE_MPI_ALLTOALLV_C || KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C || \
+    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C ||                            \
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
 inline auto checked_mpi_count(std::size_t value, std::string_view context)
     -> MPI_Count {
   if (!std::in_range<MPI_Count>(value)) {

@@ -73,7 +73,7 @@ option(KAHIP_ENABLE_MPI_TRACE "enable canonical ParHIP MPI stage tracing" OFF)
 # may need use MPI_HOME hint to get the proper one (eg, on openSUSE)
 if(NOT NOMPI)
     # Always look for MPI since kaffpaE also requires it
-    find_package(MPI REQUIRED)
+    find_package(MPI 3.1 REQUIRED COMPONENTS C CXX)
 
     if(${MPI_C_FOUND})
         message(

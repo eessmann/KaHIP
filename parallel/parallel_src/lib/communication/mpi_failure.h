@@ -33,6 +33,13 @@ void run_with_exception_barrier(Operation&& operation,
     std::string_view context,
     std::source_location location = std::source_location::current()) noexcept;
 
+[[noreturn]] void abort_on_programming_error(
+    MPI_Comm communicator,
+    std::string_view context) noexcept;
+
+[[noreturn]] void abort_on_inactive_mpi_ownership(
+    std::string_view context) noexcept;
+
 inline void check_or_abort(
     int error_code,
     MPI_Comm communicator,

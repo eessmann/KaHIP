@@ -446,6 +446,211 @@ foreach(mpi_ranks RANGE 1 5)
 endforeach()
 
 add_executable(
+    mpi_async_neighbors_test
+    communication/mpi_async_neighbors_test.cpp
+)
+target_link_libraries(
+    mpi_async_neighbors_test
+    PRIVATE
+        catch_mpi_runner
+        parallel
+        kahip_options
+        kahip_warnings
+)
+
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-mpi-async-neighbors-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:mpi_async_neighbors_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-mpi-async-neighbors-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 15
+    )
+endforeach()
+
+add_executable(
+    mpi_async_neighbors_failure_probe
+    communication/mpi_async_neighbors_failure_probe.cpp
+)
+target_link_libraries(
+    mpi_async_neighbors_failure_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+
+function(
+    add_mpi_async_neighbors_failure_test
+    mode
+    abort_kind
+    expected_diagnostic
+    expect_injected_mpi_error
+)
+    add_test(
+        NAME unit-mpi-async-neighbors-${mode}-failure
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DPROBE=$<TARGET_FILE:mpi_async_neighbors_failure_probe>"
+            "-DMODE=${mode}"
+            "-DABORT_KIND=${abort_kind}"
+            "-DEXPECTED_DIAGNOSTIC=${expected_diagnostic}"
+            "-DEXPECT_INJECTED_MPI_ERROR=${expect_injected_mpi_error}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_async_neighbors_failure.cmake"
+    )
+    set_tests_properties(
+        unit-mpi-async-neighbors-${mode}-failure
+        PROPERTIES
+            RUN_SERIAL TRUE
+            TIMEOUT 12
+    )
+endfunction()
+
+add_mpi_async_neighbors_failure_test(
+    immediate-init
+    mpi
+    "MPI backend failure: MPI_Ineighbor_alltoallv"
+    TRUE
+)
+add_mpi_async_neighbors_failure_test(
+    test
+    mpi
+    "MPI backend failure: MPI_Test(neighborhood exchange)"
+    TRUE
+)
+add_mpi_async_neighbors_failure_test(
+    wait
+    mpi
+    "MPI backend failure: MPI_Wait(neighborhood exchange)"
+    TRUE
+)
+add_mpi_async_neighbors_failure_test(
+    destructor-wait
+    mpi
+    "MPI backend failure: MPI_Wait(active neighborhood destruction)"
+    TRUE
+)
+add_mpi_async_neighbors_failure_test(
+    active-restart
+    mpi
+    "MPI adapter programming failure: neighbor context start requires an inactive generation"
+    FALSE
+)
+add_mpi_async_neighbors_failure_test(
+    inactive-test
+    mpi
+    "MPI adapter programming failure: neighbor context test requires an active generation"
+    FALSE
+)
+add_mpi_async_neighbors_failure_test(
+    send-while-active
+    mpi
+    "MPI adapter programming failure: neighbor context send mutation requires an inactive generation"
+    FALSE
+)
+add_mpi_async_neighbors_failure_test(
+    receive-while-active
+    mpi
+    "MPI adapter programming failure: neighbor context receive access requires a completed generation"
+    FALSE
+)
+
+if(
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT
+    OR KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
+)
+    add_mpi_async_neighbors_failure_test(
+        persistent-init
+        mpi
+        "MPI backend failure: MPI_Neighbor_alltoallv_init"
+        TRUE
+    )
+    add_mpi_async_neighbors_failure_test(
+        persistent-start
+        mpi
+        "MPI backend failure: MPI_Start(persistent neighborhood exchange)"
+        TRUE
+    )
+    add_mpi_async_neighbors_failure_test(
+        persistent-test
+        mpi
+        "MPI backend failure: MPI_Test(neighborhood exchange)"
+        TRUE
+    )
+    add_mpi_async_neighbors_failure_test(
+        persistent-wait
+        mpi
+        "MPI backend failure: MPI_Wait(neighborhood exchange)"
+        TRUE
+    )
+    add_mpi_async_neighbors_failure_test(
+        request-free
+        mpi
+        "MPI backend failure: MPI_Request_free(persistent neighborhood exchange)"
+        TRUE
+    )
+endif()
+
+foreach(
+    post_finalize_mode
+    IN ITEMS
+        post-finalize-active-request
+        post-finalize-immediate-context
+)
+    add_mpi_async_neighbors_failure_test(
+        ${post_finalize_mode}
+        raw
+        "MPI adapter ownership outlived the active MPI runtime: neighborhood operation destruction"
+        FALSE
+    )
+endforeach()
+add_mpi_async_neighbors_failure_test(
+    post-finalize-complete-request
+    raw
+    "MPI adapter ownership outlived the active MPI runtime: one-shot neighborhood test"
+    FALSE
+)
+add_mpi_async_neighbors_failure_test(
+    post-finalize-complete-wait
+    raw
+    "MPI adapter ownership outlived the active MPI runtime: one-shot neighborhood wait"
+    FALSE
+)
+if(
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT
+    OR KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
+)
+    add_mpi_async_neighbors_failure_test(
+        post-finalize-persistent-context
+        raw
+        "MPI adapter ownership outlived the active MPI runtime: neighborhood operation destruction"
+        FALSE
+    )
+endif()
+add_mpi_async_neighbors_failure_test(
+    initialized-query
+    raw
+    "MPI lifecycle query failure: MPI_Initialized returned raw error 17295"
+    FALSE
+)
+add_mpi_async_neighbors_failure_test(
+    finalized-query
+    raw
+    "MPI lifecycle query failure: MPI_Finalized returned raw error 17295"
+    FALSE
+)
+
+add_executable(
     mpi_neighborhood_failure_probe
     communication/mpi_neighborhood_failure_probe.cpp
 )

@@ -120,7 +120,9 @@ inline auto exchange_neighbor_counts(
   return result;
 }
 
-#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
+#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C || \
+    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C ||  \
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
 template <typename T>
 [[nodiscard]] auto neighbor_mpi4_layout_is_representable(
     segmented_buffer<T> const& sends,

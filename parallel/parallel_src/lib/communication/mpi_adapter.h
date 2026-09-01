@@ -1,6 +1,7 @@
 #pragma once
 
 #include "communication/mpi_collectives.h"
+#include "communication/mpi_async_neighbors.h"
 #include "communication/mpi_error.h"
 #include "communication/mpi_failure.h"
 #include "communication/mpi_handles.h"

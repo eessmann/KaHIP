@@ -38,6 +38,76 @@ check_cxx_source_compiles(
     ]=]
     KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
 )
+check_cxx_source_compiles(
+    [=[
+        #include <mpi.h>
+        int main() {
+            int counts[1]{};
+            int displacements[1]{};
+            MPI_Request request = MPI_REQUEST_NULL;
+            return MPI_Ineighbor_alltoallv(
+                nullptr, counts, displacements, MPI_BYTE,
+                nullptr, counts, displacements, MPI_BYTE, MPI_COMM_WORLD,
+                &request
+            );
+        }
+    ]=]
+    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV
+)
+if(NOT KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV)
+    message(
+        FATAL_ERROR
+        "KaHIP requires the MPI 3.1 MPI_Ineighbor_alltoallv binding"
+    )
+endif()
+check_cxx_source_compiles(
+    [=[
+        #include <mpi.h>
+        int main() {
+            MPI_Count counts[1]{};
+            MPI_Aint displacements[1]{};
+            MPI_Request request = MPI_REQUEST_NULL;
+            return MPI_Ineighbor_alltoallv_c(
+                nullptr, counts, displacements, MPI_BYTE,
+                nullptr, counts, displacements, MPI_BYTE, MPI_COMM_WORLD,
+                &request
+            );
+        }
+    ]=]
+    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C
+)
+check_cxx_source_compiles(
+    [=[
+        #include <mpi.h>
+        int main() {
+            int counts[1]{};
+            int displacements[1]{};
+            MPI_Request request = MPI_REQUEST_NULL;
+            return MPI_Neighbor_alltoallv_init(
+                nullptr, counts, displacements, MPI_BYTE,
+                nullptr, counts, displacements, MPI_BYTE, MPI_COMM_WORLD,
+                MPI_INFO_NULL, &request
+            );
+        }
+    ]=]
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT
+)
+check_cxx_source_compiles(
+    [=[
+        #include <mpi.h>
+        int main() {
+            MPI_Count counts[1]{};
+            MPI_Aint displacements[1]{};
+            MPI_Request request = MPI_REQUEST_NULL;
+            return MPI_Neighbor_alltoallv_init_c(
+                nullptr, counts, displacements, MPI_BYTE,
+                nullptr, counts, displacements, MPI_BYTE, MPI_COMM_WORLD,
+                MPI_INFO_NULL, &request
+            );
+        }
+    ]=]
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
+)
 cmake_pop_check_state()
 set(PARHIP_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${PARHIP_GENERATED_INCLUDE_DIR}")

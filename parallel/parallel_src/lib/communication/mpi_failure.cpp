@@ -128,4 +128,31 @@ auto runtime_is_active() noexcept -> bool {
   }
   std::abort();
 }
+
+[[noreturn]] void abort_on_programming_error(
+    MPI_Comm communicator,
+    std::string_view context) noexcept {
+  try {
+    spdlog::critical("MPI adapter programming failure: {}", context);
+  } catch (...) {
+    // State misuse must still terminate collectively when logging fails.
+  }
+  if (runtime_is_active()) {
+    auto const affected =
+        communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
+    MPI_Abort(affected, EXIT_FAILURE);
+  }
+  std::abort();
+}
+
+[[noreturn]] void abort_on_inactive_mpi_ownership(
+    std::string_view context) noexcept {
+  try {
+    spdlog::critical(
+        "MPI adapter ownership outlived the active MPI runtime: {}", context);
+  } catch (...) {
+    // No MPI call is valid on this raw termination path.
+  }
+  std::abort();
+}
 }  // namespace parhip::mpi
