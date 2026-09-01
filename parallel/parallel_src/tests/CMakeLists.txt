@@ -1,5 +1,85 @@
 include(Catch)
 
+add_library(
+    kahip_cube_fixture_obj
+    OBJECT
+        fixtures/cube_graph.cpp
+        fixtures/cube_partition.cpp
+)
+target_sources(
+    kahip_cube_fixture_obj
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+        FILES
+            fixtures/cube_graph.h
+            fixtures/cube_partition.h
+)
+target_link_libraries(
+    kahip_cube_fixture_obj
+    PRIVATE kahip_options kahip_warnings
+)
+
+add_executable(cube_graph_test fixtures/cube_graph_test.cpp)
+target_link_libraries(
+    cube_graph_test
+    PRIVATE
+        Catch2::Catch2WithMain
+        kahip_cube_fixture_obj
+        kahip_options
+        kahip_warnings
+)
+catch_discover_tests(
+    cube_graph_test
+    TEST_PREFIX "unit-"
+    OUTPUT_DIR .
+    OUTPUT_PREFIX "unit-"
+)
+
+add_executable(cube_partition_test fixtures/cube_partition_test.cpp)
+target_link_libraries(
+    cube_partition_test
+    PRIVATE
+        Catch2::Catch2WithMain
+        kahip_cube_fixture_obj
+        kahip_options
+        kahip_warnings
+)
+catch_discover_tests(
+    cube_partition_test
+    TEST_PREFIX "unit-"
+    OUTPUT_DIR .
+    OUTPUT_PREFIX "unit-"
+)
+
+add_executable(kahip_cube_generator fixtures/cube_graph_generator.cpp)
+target_link_libraries(
+    kahip_cube_generator
+    PRIVATE kahip_cube_fixture_obj fmt::fmt kahip_options kahip_warnings
+)
+
+add_executable(
+    kahip_cube_partition_verify
+    fixtures/cube_partition_verify.cpp
+)
+target_link_libraries(
+    kahip_cube_partition_verify
+    PRIVATE kahip_cube_fixture_obj fmt::fmt kahip_options kahip_warnings
+)
+add_test(
+    NAME integration-cube-fixture-cli
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DGENERATOR=$<TARGET_FILE:kahip_cube_generator>"
+        "-DVERIFIER=$<TARGET_FILE:kahip_cube_partition_verify>"
+        "-DWORK_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/cube-fixture"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cube_fixture_cli.cmake"
+)
+set_tests_properties(
+    integration-cube-fixture-cli
+    PROPERTIES TIMEOUT 10 LABELS "integration;fixture"
+)
+
 add_executable(random_functions_test tools/random_functions_test.cpp)
 target_link_libraries(
     random_functions_test

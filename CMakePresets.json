@@ -127,6 +127,11 @@
       "output": {
         "outputOnFailure": true
       },
+      "filter": {
+        "exclude": {
+          "label": "(large|performance)"
+        }
+      },
       "execution": {
         "noTestsAction": "error",
         "stopOnFailure": true
