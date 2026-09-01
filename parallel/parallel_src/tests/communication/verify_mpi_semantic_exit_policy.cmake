@@ -12,7 +12,6 @@ set(
     mpi_neighbors.cpp
     mpi_neighbors.h
     mpi_async_neighbors.h
-    mpi_async_neighbors.h
 )
 set(
     region_names
@@ -21,7 +20,6 @@ set(
     dense-all-to-all
     distributed-graph-rank-domain
     sync-neighbor
-    fixed-neighbor-cardinality
     async-direct
 )
 

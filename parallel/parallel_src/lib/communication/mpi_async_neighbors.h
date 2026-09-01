@@ -3,8 +3,10 @@
 #include <mpi.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -12,7 +14,9 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "communication/mpi_neighbors.h"
@@ -73,58 +77,259 @@ inline auto validate_persistence_policy(persistence_policy policy,
   return policy;
 }
 
-template <typename T>
-[[nodiscard]] auto make_fixed_neighbor_sends(distributed_graph const& graph,
-                                             std::vector<std::size_t> counts)
-    -> segmented_buffer<T> {
-  auto semantic_failure = std::string_view{};
-  auto deferred_capacity_failure = std::string_view{};
-  auto result = std::optional<segmented_buffer<T>>{};
-  {
-    auto owned_communicator = communicator{graph.view()};
-    auto const collective_communicator = owned_communicator.view();
-    try {
-      auto const cardinality_is_valid =
-          collective_predicate(counts.size() == graph.destinations().size(),
-                               collective_communicator);
-      if (!cardinality_is_valid) {
-        semantic_failure = "fixed neighborhood send layout validation failed";
-      } else {
-        auto offsets = neighbor_offsets(counts);
-        auto storage_size = std::optional<std::size_t>{};
-        if (offsets.has_value()) {
-          auto const element_count = neighbor_storage_size(counts, *offsets);
-          if (element_count <=
-              std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-            storage_size = element_count;
-          }
-        }
-        auto const capacity_is_valid = collective_predicate(
-            offsets.has_value() && storage_size.has_value(),
-            collective_communicator);
-        if (!capacity_is_valid) {
-          deferred_capacity_failure =
-              "fixed neighborhood send layout exceeds local capacity";
-        } else {
-          result.emplace(segmented_buffer<T>::uninitialized(
-              *storage_size, std::move(counts), std::move(*offsets)));
-        }
-      }
-    } catch (...) {
-      abort_on_exception(collective_communicator.native_handle(),
-                         "fixed neighborhood send allocation failure");
+using neighbor_backend_mask = std::uint64_t;
+
+[[nodiscard]] constexpr auto backend_bit(
+    neighbor_direct_backend backend) noexcept -> neighbor_backend_mask {
+  return neighbor_backend_mask{1} << static_cast<std::uint8_t>(backend);
+}
+
+struct neighbor_backend_masks final {
+  neighbor_backend_mask allowed = 0;
+  neighbor_backend_mask physical = 0;
+
+  auto operator==(neighbor_backend_masks const&) const -> bool = default;
+};
+
+[[nodiscard]] constexpr auto compiled_backend_mask(bool force_mpi3) noexcept
+    -> neighbor_backend_mask {
+  auto result = neighbor_backend_mask{0};
+  if constexpr (KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV != 0) {
+    result |= backend_bit(neighbor_direct_backend::immediate_legacy);
+  }
+  if (!force_mpi3) {
+    if constexpr (KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C != 0) {
+      result |= backend_bit(neighbor_direct_backend::immediate_large_count);
+    }
+    if constexpr (KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT != 0) {
+      result |= backend_bit(neighbor_direct_backend::persistent_legacy);
+    }
+    if constexpr (KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C != 0) {
+      result |= backend_bit(neighbor_direct_backend::persistent_large_count);
     }
   }
-  // KAHIP_SEMANTIC_EXIT_BEGIN(fixed-neighbor-cardinality)
-  if (!semantic_failure.empty()) {
-    throw_collectively_agreed_semantic_error(graph.native_handle(),
-                                             semantic_failure);
+  return result;
+}
+
+[[nodiscard]] constexpr auto policy_backend_mask(
+    persistence_policy policy) noexcept -> neighbor_backend_mask {
+  constexpr auto immediate =
+      backend_bit(neighbor_direct_backend::immediate_legacy) |
+      backend_bit(neighbor_direct_backend::immediate_large_count);
+  constexpr auto persistent =
+      backend_bit(neighbor_direct_backend::persistent_legacy) |
+      backend_bit(neighbor_direct_backend::persistent_large_count);
+  switch (policy) {
+    case persistence_policy::disabled:
+      return immediate;
+    case persistence_policy::prefer:
+      return persistent | immediate;
+    case persistence_policy::required:
+      return persistent;
   }
-  // KAHIP_SEMANTIC_EXIT_END(fixed-neighbor-cardinality)
-  if (!deferred_capacity_failure.empty()) {
-    throw mpi_error{MPI_ERR_ARG, std::string{deferred_capacity_failure}};
+  return 0;
+}
+
+[[nodiscard]] constexpr auto choose_direct_backend(
+    neighbor_backend_mask common_allowed) noexcept
+    -> std::optional<neighbor_direct_backend> {
+  constexpr auto precedence = std::array{
+      neighbor_direct_backend::persistent_large_count,
+      neighbor_direct_backend::persistent_legacy,
+      neighbor_direct_backend::immediate_large_count,
+      neighbor_direct_backend::immediate_legacy,
+  };
+  auto const selected = std::ranges::find_if(precedence, [&](auto backend) {
+    return (common_allowed & backend_bit(backend)) != 0;
+  });
+  return selected == precedence.end()
+             ? std::nullopt
+             : std::optional<neighbor_direct_backend>{*selected};
+}
+
+[[nodiscard]] inline auto agree_neighbor_backend_masks(
+    neighbor_backend_masks local,
+    communicator_view communicator) -> neighbor_backend_masks {
+  auto const local_masks = std::array{local.allowed, local.physical};
+  auto common_masks = std::array<neighbor_backend_mask, 2>{};
+  check_or_abort(
+      MPI_Allreduce(local_masks.data(), common_masks.data(),
+                    static_cast<int>(common_masks.size()), MPI_UINT64_T,
+                    MPI_BAND, communicator.native_handle()),
+      communicator.native_handle(),
+      "MPI_Allreduce(direct neighborhood backend agreement)");
+  return neighbor_backend_masks{
+      .allowed = common_masks[0],
+      .physical = common_masks[1],
+  };
+}
+
+template <typename T>
+struct pending_neighbor_sends final {
+  std::optional<segmented_buffer<T>> materialized;
+  std::vector<std::size_t> fixed_counts;
+  std::vector<std::size_t> fixed_offsets;
+  std::size_t fixed_element_count = 0;
+  capacity_result capacity;
+
+  [[nodiscard]] static auto one_shot(segmented_buffer<T> sends)
+      -> pending_neighbor_sends {
+    auto result = pending_neighbor_sends{};
+    result.materialized.emplace(std::move(sends));
+    return result;
   }
-  return std::move(*result);
+
+  [[nodiscard]] static auto fixed(std::vector<std::size_t> counts)
+      -> pending_neighbor_sends {
+    auto result = pending_neighbor_sends{};
+    result.fixed_counts = std::move(counts);
+    return result;
+  }
+
+  [[nodiscard]] auto is_fixed() const noexcept -> bool {
+    return !materialized.has_value();
+  }
+
+  [[nodiscard]] auto locally_valid(std::size_t expected_segments) const noexcept
+      -> bool {
+    return is_fixed() ? fixed_counts.size() == expected_segments
+                      : materialized->has_canonical_layout(expected_segments);
+  }
+
+  void prepare_fixed_layout() {
+    if (!is_fixed()) {
+      return;
+    }
+    auto layout = canonical_neighbor_layout(fixed_counts);
+    fixed_offsets = std::move(layout.offsets);
+    fixed_element_count = layout.element_count;
+    capacity = layout.capacity;
+    if (fixed_element_count >
+        std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+      capacity = with_fatal_capacity_issue(
+          capacity, capacity_issue::storage_byte_size_overflow);
+    }
+  }
+
+  [[nodiscard]] auto counts() const noexcept -> std::span<std::size_t const> {
+    return is_fixed() ? std::span<std::size_t const>{fixed_counts}
+                      : std::span<std::size_t const>{materialized->counts()};
+  }
+
+  [[nodiscard]] auto offsets() const noexcept -> std::span<std::size_t const> {
+    return is_fixed() ? std::span<std::size_t const>{fixed_offsets}
+                      : std::span<std::size_t const>{materialized->offsets()};
+  }
+
+  [[nodiscard]] auto materialize() -> segmented_buffer<T> {
+    if (materialized.has_value()) {
+      return std::move(*materialized);
+    }
+    return segmented_buffer<T>::uninitialized(
+        fixed_element_count, std::move(fixed_counts), std::move(fixed_offsets));
+  }
+};
+
+struct legacy_neighbor_layout final {
+  std::vector<int> send_counts;
+  std::vector<int> send_offsets;
+  std::vector<int> receive_counts;
+  std::vector<int> receive_offsets;
+};
+
+struct large_count_neighbor_layout final {
+  std::vector<MPI_Count> send_counts;
+  std::vector<MPI_Aint> send_offsets;
+  std::vector<MPI_Count> receive_counts;
+  std::vector<MPI_Aint> receive_offsets;
+};
+
+using direct_neighbor_layout =
+    std::variant<legacy_neighbor_layout, large_count_neighbor_layout>;
+
+static_assert(std::is_nothrow_move_constructible_v<direct_neighbor_layout>);
+static_assert(std::is_nothrow_move_assignable_v<direct_neighbor_layout>);
+
+[[nodiscard]] inline auto checked_neighbor_mpi_count(std::size_t value,
+                                                     std::string_view context)
+    -> MPI_Count {
+  if (!std::in_range<MPI_Count>(value)) {
+    throw mpi_error{MPI_ERR_COUNT, std::string{context}};
+  }
+  return static_cast<MPI_Count>(value);
+}
+
+[[nodiscard]] inline auto checked_neighbor_mpi_aint(std::size_t value,
+                                                    std::string_view context)
+    -> MPI_Aint {
+  if (!std::in_range<MPI_Aint>(value)) {
+    throw mpi_error{MPI_ERR_COUNT, std::string{context}};
+  }
+  return static_cast<MPI_Aint>(value);
+}
+
+template <typename Result, typename Conversion>
+[[nodiscard]] auto convert_neighbor_layout(std::span<std::size_t const> values,
+                                           Conversion conversion)
+    -> std::vector<Result> {
+  auto result = std::vector<Result>{};
+  result.reserve(values.size());
+  std::ranges::transform(values, std::back_inserter(result), conversion);
+  return result;
+}
+
+[[nodiscard]] inline auto build_direct_neighbor_layout(
+    neighbor_direct_backend backend,
+    std::span<std::size_t const> send_counts,
+    std::span<std::size_t const> send_offsets,
+    std::span<std::size_t const> receive_counts,
+    std::span<std::size_t const> receive_offsets) -> direct_neighbor_layout {
+  if (uses_large_count(backend)) {
+    return large_count_neighbor_layout{
+        .send_counts = convert_neighbor_layout<MPI_Count>(
+            send_counts,
+            [](auto value) {
+              return checked_neighbor_mpi_count(value, "neighbor send count");
+            }),
+        .send_offsets = convert_neighbor_layout<MPI_Aint>(
+            send_offsets,
+            [](auto value) {
+              return checked_neighbor_mpi_aint(value, "neighbor send offset");
+            }),
+        .receive_counts = convert_neighbor_layout<MPI_Count>(
+            receive_counts,
+            [](auto value) {
+              return checked_neighbor_mpi_count(value,
+                                                "neighbor receive count");
+            }),
+        .receive_offsets = convert_neighbor_layout<MPI_Aint>(
+            receive_offsets,
+            [](auto value) {
+              return checked_neighbor_mpi_aint(value,
+                                               "neighbor receive offset");
+            }),
+    };
+  }
+  return legacy_neighbor_layout{
+      .send_counts = convert_neighbor_layout<int>(
+          send_counts,
+          [](auto value) { return checked_int(value, "neighbor send count"); }),
+      .send_offsets = convert_neighbor_layout<int>(
+          send_offsets,
+          [](auto value) {
+            return checked_int(value, "neighbor send offset");
+          }),
+      .receive_counts = convert_neighbor_layout<int>(
+          receive_counts,
+          [](auto value) {
+            return checked_int(value, "neighbor receive count");
+          }),
+      .receive_offsets = convert_neighbor_layout<int>(
+          receive_offsets,
+          [](auto value) {
+            return checked_int(value, "neighbor receive offset");
+          }),
+  };
 }
 
 template <typename T>
@@ -133,18 +338,14 @@ struct direct_neighbor_storage {
                           datatype operation_datatype,
                           segmented_buffer<T> send_buffer,
                           segmented_buffer<T> receive_buffer,
-                          std::vector<int> source_ranks,
-                          std::vector<int> destination_ranks,
-                          neighbor_direct_backend selected_backend)
+                          direct_neighbor_layout layout,
+                          neighbor_direct_backend selected_backend) noexcept
       : communicator_(std::move(operation_communicator)),
         datatype_(std::move(operation_datatype)),
         sends_(std::move(send_buffer)),
         received_(std::move(receive_buffer)),
-        sources_(std::move(source_ranks)),
-        destinations_(std::move(destination_ranks)),
-        backend_(selected_backend) {
-    build_mpi_layout();
-  }
+        layout_(std::move(layout)),
+        backend_(selected_backend) {}
 
   direct_neighbor_storage(direct_neighbor_storage const&) = delete;
   auto operator=(direct_neighbor_storage const&)
@@ -178,17 +379,33 @@ struct direct_neighbor_storage {
     return values.empty() ? std::addressof(ignored) : values.data();
   }
 
+  [[nodiscard]] auto legacy_layout() const noexcept
+      -> legacy_neighbor_layout const* {
+    return std::get_if<legacy_neighbor_layout>(&layout_);
+  }
+
+  [[nodiscard]] auto large_count_layout() const noexcept
+      -> large_count_neighbor_layout const* {
+    return std::get_if<large_count_neighbor_layout>(&layout_);
+  }
+
   void initiate_immediate() noexcept {
     active_ = true;
     receive_ready_ = false;
     if (backend_ == neighbor_direct_backend::immediate_legacy) {
+      auto const* layout = legacy_layout();
+      if (layout == nullptr) {
+        abort_on_programming_error(
+            communicator_.native_handle(),
+            "legacy neighborhood backend requires a legacy MPI layout");
+      }
       check_or_abort(
           MPI_Ineighbor_alltoallv(
-              send_buffer(), data_or_ignored(send_counts_i_, ignored_int_),
-              data_or_ignored(send_offsets_i_, ignored_int_),
+              send_buffer(), data_or_ignored(layout->send_counts, ignored_int_),
+              data_or_ignored(layout->send_offsets, ignored_int_),
               datatype_.native_handle(), receive_buffer(),
-              data_or_ignored(receive_counts_i_, ignored_int_),
-              data_or_ignored(receive_offsets_i_, ignored_int_),
+              data_or_ignored(layout->receive_counts, ignored_int_),
+              data_or_ignored(layout->receive_offsets, ignored_int_),
               datatype_.native_handle(), communicator_.native_handle(),
               &request_),
           communicator_.native_handle(),
@@ -197,13 +414,21 @@ struct direct_neighbor_storage {
     }
 #if KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C
     if (backend_ == neighbor_direct_backend::immediate_large_count) {
+      auto const* layout = large_count_layout();
+      if (layout == nullptr) {
+        abort_on_programming_error(
+            communicator_.native_handle(),
+            "large-count neighborhood backend requires a large-count MPI "
+            "layout");
+      }
       check_or_abort(
           MPI_Ineighbor_alltoallv_c(
-              send_buffer(), data_or_ignored(send_counts_c_, ignored_count_),
-              data_or_ignored(send_offsets_c_, ignored_aint_),
+              send_buffer(),
+              data_or_ignored(layout->send_counts, ignored_count_),
+              data_or_ignored(layout->send_offsets, ignored_aint_),
               datatype_.native_handle(), receive_buffer(),
-              data_or_ignored(receive_counts_c_, ignored_count_),
-              data_or_ignored(receive_offsets_c_, ignored_aint_),
+              data_or_ignored(layout->receive_counts, ignored_count_),
+              data_or_ignored(layout->receive_offsets, ignored_aint_),
               datatype_.native_handle(), communicator_.native_handle(),
               &request_),
           communicator_.native_handle(),
@@ -219,13 +444,19 @@ struct direct_neighbor_storage {
   void initialize_persistent() noexcept {
     if (backend_ == neighbor_direct_backend::persistent_legacy) {
 #if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT
+      auto const* layout = legacy_layout();
+      if (layout == nullptr) {
+        abort_on_programming_error(
+            communicator_.native_handle(),
+            "legacy neighborhood backend requires a legacy MPI layout");
+      }
       check_or_abort(
           MPI_Neighbor_alltoallv_init(
-              send_buffer(), data_or_ignored(send_counts_i_, ignored_int_),
-              data_or_ignored(send_offsets_i_, ignored_int_),
+              send_buffer(), data_or_ignored(layout->send_counts, ignored_int_),
+              data_or_ignored(layout->send_offsets, ignored_int_),
               datatype_.native_handle(), receive_buffer(),
-              data_or_ignored(receive_counts_i_, ignored_int_),
-              data_or_ignored(receive_offsets_i_, ignored_int_),
+              data_or_ignored(layout->receive_counts, ignored_int_),
+              data_or_ignored(layout->receive_offsets, ignored_int_),
               datatype_.native_handle(), communicator_.native_handle(),
               MPI_INFO_NULL, &request_),
           communicator_.native_handle(),
@@ -235,13 +466,21 @@ struct direct_neighbor_storage {
     }
 #if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
     if (backend_ == neighbor_direct_backend::persistent_large_count) {
+      auto const* layout = large_count_layout();
+      if (layout == nullptr) {
+        abort_on_programming_error(
+            communicator_.native_handle(),
+            "large-count neighborhood backend requires a large-count MPI "
+            "layout");
+      }
       check_or_abort(
           MPI_Neighbor_alltoallv_init_c(
-              send_buffer(), data_or_ignored(send_counts_c_, ignored_count_),
-              data_or_ignored(send_offsets_c_, ignored_aint_),
+              send_buffer(),
+              data_or_ignored(layout->send_counts, ignored_count_),
+              data_or_ignored(layout->send_offsets, ignored_aint_),
               datatype_.native_handle(), receive_buffer(),
-              data_or_ignored(receive_counts_c_, ignored_count_),
-              data_or_ignored(receive_offsets_c_, ignored_aint_),
+              data_or_ignored(layout->receive_counts, ignored_count_),
+              data_or_ignored(layout->receive_offsets, ignored_aint_),
               datatype_.native_handle(), communicator_.native_handle(),
               MPI_INFO_NULL, &request_),
           communicator_.native_handle(),
@@ -359,63 +598,12 @@ struct direct_neighbor_storage {
     return received_.segment(index);
   }
 
-  void build_mpi_layout() {
-    if (uses_large_count(backend_)) {
-#if KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C || \
-    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
-      send_counts_c_.reserve(sends_.segment_count());
-      send_offsets_c_.reserve(sends_.segment_count());
-      receive_counts_c_.reserve(received_.segment_count());
-      receive_offsets_c_.reserve(received_.segment_count());
-      for (std::size_t index = 0; index < sends_.segment_count(); ++index) {
-        send_counts_c_.push_back(
-            checked_mpi_count(sends_.counts()[index], "neighbor send count"));
-        send_offsets_c_.push_back(
-            checked_mpi_aint(sends_.offsets()[index], "neighbor send offset"));
-      }
-      for (std::size_t index = 0; index < received_.segment_count(); ++index) {
-        receive_counts_c_.push_back(checked_mpi_count(
-            received_.counts()[index], "neighbor receive count"));
-        receive_offsets_c_.push_back(checked_mpi_aint(
-            received_.offsets()[index], "neighbor receive offset"));
-      }
-      return;
-#endif
-    }
-
-    send_counts_i_.reserve(sends_.segment_count());
-    send_offsets_i_.reserve(sends_.segment_count());
-    receive_counts_i_.reserve(received_.segment_count());
-    receive_offsets_i_.reserve(received_.segment_count());
-    for (std::size_t index = 0; index < sends_.segment_count(); ++index) {
-      send_counts_i_.push_back(
-          checked_int(sends_.counts()[index], "neighbor send count"));
-      send_offsets_i_.push_back(
-          checked_int(sends_.offsets()[index], "neighbor send offset"));
-    }
-    for (std::size_t index = 0; index < received_.segment_count(); ++index) {
-      receive_counts_i_.push_back(
-          checked_int(received_.counts()[index], "neighbor receive count"));
-      receive_offsets_i_.push_back(
-          checked_int(received_.offsets()[index], "neighbor receive offset"));
-    }
-  }
-
   communicator communicator_;
   datatype datatype_;
   segmented_buffer<T> sends_;
   segmented_buffer<T> received_;
-  std::vector<int> sources_;
-  std::vector<int> destinations_;
+  direct_neighbor_layout layout_;
   neighbor_direct_backend backend_;
-  std::vector<int> send_counts_i_;
-  std::vector<int> send_offsets_i_;
-  std::vector<int> receive_counts_i_;
-  std::vector<int> receive_offsets_i_;
-  std::vector<MPI_Count> send_counts_c_;
-  std::vector<MPI_Aint> send_offsets_c_;
-  std::vector<MPI_Count> receive_counts_c_;
-  std::vector<MPI_Aint> receive_offsets_c_;
   MPI_Request request_ = MPI_REQUEST_NULL;
   bool active_ = false;
   bool receive_ready_ = false;
@@ -426,164 +614,166 @@ struct direct_neighbor_storage {
   std::byte ignored_receive_byte_{};
 };
 
-[[nodiscard]] inline auto choose_direct_backend(persistence_policy policy,
-                                                bool legacy_representable,
-                                                bool large_count_representable,
-                                                bool force_mpi3)
-    -> std::optional<neighbor_direct_backend> {
-  auto const can_immediate_large = !force_mpi3 &&
-                                   KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C &&
-                                   large_count_representable;
-  auto const can_immediate_legacy =
-      KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV && legacy_representable;
-  auto const can_persistent_large = !force_mpi3 &&
-                                    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C &&
-                                    large_count_representable;
-  auto const can_persistent_legacy = !force_mpi3 &&
-                                     KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT &&
-                                     legacy_representable;
+[[nodiscard]] constexpr auto filter_local_backend_masks(
+    neighbor_backend_mask available,
+    persistence_policy persistence,
+    bool policy_legacy_representable,
+    bool physical_legacy_representable,
+    bool large_count_representable) noexcept -> neighbor_backend_masks {
+  constexpr auto legacy =
+      backend_bit(neighbor_direct_backend::immediate_legacy) |
+      backend_bit(neighbor_direct_backend::persistent_legacy);
+  constexpr auto large_count =
+      backend_bit(neighbor_direct_backend::immediate_large_count) |
+      backend_bit(neighbor_direct_backend::persistent_large_count);
+  auto allowed = available & policy_backend_mask(persistence);
+  auto physical = available;
+  if (!policy_legacy_representable) {
+    allowed &= ~legacy;
+  }
+  if (!physical_legacy_representable) {
+    physical &= ~legacy;
+  }
+  if (!large_count_representable) {
+    physical &= ~large_count;
+  }
+  allowed &= physical;
+  return neighbor_backend_masks{
+      .allowed = allowed,
+      .physical = physical,
+  };
+}
 
-  if (policy != persistence_policy::disabled) {
-    if (can_persistent_large) {
-      return neighbor_direct_backend::persistent_large_count;
-    }
-    if (can_persistent_legacy) {
-      return neighbor_direct_backend::persistent_legacy;
-    }
-    if (policy == persistence_policy::required) {
-      return std::nullopt;
-    }
-  }
-  if (can_immediate_large) {
-    return neighbor_direct_backend::immediate_large_count;
-  }
-  if (can_immediate_legacy) {
-    return neighbor_direct_backend::immediate_legacy;
-  }
-  return std::nullopt;
+[[nodiscard]] constexpr auto make_local_backend_masks(
+    persistence_policy persistence,
+    bool force_mpi3,
+    bool policy_legacy_representable,
+    bool physical_legacy_representable,
+    bool large_count_representable) noexcept -> neighbor_backend_masks {
+  return filter_local_backend_masks(compiled_backend_mask(force_mpi3),
+                                    persistence, policy_legacy_representable,
+                                    physical_legacy_representable,
+                                    large_count_representable);
 }
 
 template <typename T>
 [[nodiscard]] auto prepare_direct_neighbor_storage(
-    segmented_buffer<T> sends,
+    pending_neighbor_sends<T> pending_sends,
     distributed_graph const& graph,
     collective_options collective,
     persistence_policy persistence)
     -> std::unique_ptr<direct_neighbor_storage<T>> {
   auto semantic_failure = std::string_view{};
-  auto deferred_capacity_failure = std::string_view{};
   auto result = std::unique_ptr<direct_neighbor_storage<T>>{};
   {
     auto operation_communicator = communicator{graph.view()};
     auto const collective_communicator = operation_communicator.view();
     try {
       auto const layout_is_valid = collective_predicate(
-          sends.has_canonical_layout(graph.destinations().size()),
+          pending_sends.locally_valid(graph.destinations().size()),
           collective_communicator);
       auto const mpi3_ceiling =
           validate_collective_options(collective, collective_communicator);
       auto const agreed_persistence =
           validate_persistence_policy(persistence, collective_communicator);
       if (!layout_is_valid) {
-        semantic_failure =
-            "direct neighborhood exchange input validation failed";
+        semantic_failure = pending_sends.is_fixed()
+                               ? "fixed neighborhood send layout validation "
+                                 "failed"
+                               : "direct neighborhood exchange input "
+                                 "validation failed";
       } else if (!mpi3_ceiling.has_value() || !agreed_persistence.has_value()) {
         semantic_failure =
             "direct neighborhood exchange options must agree collectively";
       } else {
-        auto receive_count_exchange = exchange_neighbor_counts(
-            sends.counts(), graph.sources().size(), collective_communicator);
-        auto receive_offsets =
-            receive_count_exchange.representable
-                ? neighbor_offsets(receive_count_exchange.counts)
-                : std::nullopt;
-        auto receive_storage_size = std::optional<std::size_t>{};
-        if (receive_offsets.has_value()) {
-          auto const element_count = neighbor_storage_size(
-              receive_count_exchange.counts, *receive_offsets);
-          if (element_count <=
-              std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-            receive_storage_size = element_count;
-          }
+        auto const compiled_eligible =
+            compiled_backend_mask(collective.force_mpi3) &
+            policy_backend_mask(*agreed_persistence);
+        if (compiled_eligible == 0) {
+          semantic_failure =
+              *agreed_persistence == persistence_policy::required
+                  ? "persistent neighborhood exchange is unavailable"
+                  : "direct neighborhood exchange is unavailable";
         }
-        auto const receive_layout_is_valid = collective_predicate(
-            receive_count_exchange.representable &&
-                receive_offsets.has_value() && receive_storage_size.has_value(),
+      }
+
+      if (semantic_failure.empty()) {
+        pending_sends.prepare_fixed_layout();
+        auto receive_count_exchange = exchange_neighbor_counts(
+            pending_sends.counts(), graph.sources().size(),
             collective_communicator);
-        if (!receive_layout_is_valid) {
-          deferred_capacity_failure =
-              "direct neighborhood exchange receive layout validation failed";
-        } else {
+        auto receive_layout =
+            canonical_neighbor_layout(receive_count_exchange.counts);
+        auto local_capacity = combine_capacity_results(
+            pending_sends.capacity,
+            combine_capacity_results(receive_count_exchange.capacity,
+                                     receive_layout.capacity));
+        if (receive_layout.element_count >
+            std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+          local_capacity = with_fatal_capacity_issue(
+              local_capacity, capacity_issue::storage_byte_size_overflow);
+        }
+
+        auto const policy_legacy_representable =
+            neighbor_mpi3_layout_is_representable_locally(
+                pending_sends.counts(), pending_sends.offsets(),
+                receive_count_exchange.counts, receive_layout.offsets,
+                *mpi3_ceiling);
+        auto const physical_legacy_representable =
+            neighbor_mpi3_layout_is_representable_locally(
+                pending_sends.counts(), pending_sends.offsets(),
+                receive_count_exchange.counts, receive_layout.offsets,
+                static_cast<std::size_t>(std::numeric_limits<int>::max()));
+        auto const large_count_representable =
+            neighbor_mpi4_layout_is_representable_locally(
+                pending_sends.counts(), pending_sends.offsets(),
+                receive_count_exchange.counts, receive_layout.offsets);
+        auto const common_backends = agree_neighbor_backend_masks(
+            make_local_backend_masks(*agreed_persistence, collective.force_mpi3,
+                                     policy_legacy_representable,
+                                     physical_legacy_representable,
+                                     large_count_representable),
+            collective_communicator);
+        if (common_backends.physical == 0) {
+          local_capacity = with_fatal_capacity_issue(
+              local_capacity, capacity_issue::direct_backend_not_representable);
+        } else if (common_backends.allowed == 0) {
+          local_capacity = with_bounded_capacity_issue(
+              local_capacity, capacity_issue::direct_backend_not_representable);
+        }
+
+        auto const route = resolve_capacity_collectively(
+            local_capacity, collective_communicator.native_handle(),
+            collective_communicator.native_handle(),
+            "direct neighborhood exchange");
+        if (route == capacity_route::bounded) {
+          semantic_failure =
+              *agreed_persistence == persistence_policy::required
+                  ? "persistent neighborhood exchange requires a single "
+                    "representable payload"
+                  : "direct neighborhood exchange requires a single "
+                    "representable payload";
+        } else if (auto const backend =
+                       choose_direct_backend(common_backends.allowed);
+                   backend.has_value()) {
+          auto mpi_layout = build_direct_neighbor_layout(
+              *backend, pending_sends.counts(), pending_sends.offsets(),
+              receive_count_exchange.counts, receive_layout.offsets);
+          auto sends = pending_sends.materialize();
           auto received = segmented_buffer<T>::uninitialized(
-              *receive_storage_size, std::move(receive_count_exchange.counts),
-              std::move(*receive_offsets));
-          auto const legacy_representable = !neighbor_needs_bounded_rounds(
-              sends, received.counts(), received.offsets(), *mpi3_ceiling,
-              collective_communicator);
-          auto large_count_representable = false;
-#if KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C || \
-    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
-          large_count_representable = neighbor_mpi4_layout_is_representable(
-              sends, received, collective_communicator);
-#endif
-          auto const backend = choose_direct_backend(
-              *agreed_persistence, legacy_representable,
-              large_count_representable, collective.force_mpi3);
-          if (!backend.has_value()) {
-            constexpr auto persistent_backend_is_available =
-                KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT != 0 ||
-                KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C != 0;
-            constexpr auto immediate_backend_is_available =
-                KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV != 0 ||
-                KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C != 0;
-            auto const required_persistence_is_unavailable =
-                *agreed_persistence == persistence_policy::required &&
-                (collective.force_mpi3 || !persistent_backend_is_available);
-            if (required_persistence_is_unavailable) {
-              semantic_failure =
-                  "persistent neighborhood exchange is unavailable";
-            } else if (!immediate_backend_is_available &&
-                       (*agreed_persistence == persistence_policy::disabled ||
-                        !persistent_backend_is_available)) {
-              semantic_failure = "direct neighborhood exchange is unavailable";
-            } else {
-              auto const physical_legacy_layout_is_representable =
-                  !neighbor_needs_bounded_rounds(
-                      sends, received.counts(), received.offsets(),
-                      static_cast<std::size_t>(std::numeric_limits<int>::max()),
-                      collective_communicator);
-              auto const synthetic_ceiling_rejected_layout =
-                  !legacy_representable &&
-                  physical_legacy_layout_is_representable;
-              if (synthetic_ceiling_rejected_layout) {
-                semantic_failure =
-                    *agreed_persistence == persistence_policy::required
-                        ? "persistent neighborhood exchange requires a "
-                          "single representable payload"
-                        : "direct neighborhood exchange requires a single "
-                          "representable payload";
-              } else {
-                deferred_capacity_failure =
-                    *agreed_persistence == persistence_policy::required
-                        ? "persistent neighborhood exchange is unavailable or "
-                          "unrepresentable"
-                        : "direct neighborhood exchange requires a single "
-                          "representable payload";
-              }
-            }
-          } else {
-            auto operation_datatype =
-                make_mpi_datatype<T>(collective_communicator.native_handle());
-            auto sources = std::vector<int>(graph.sources().begin(),
-                                            graph.sources().end());
-            auto destinations = std::vector<int>(graph.destinations().begin(),
-                                                 graph.destinations().end());
-            result = std::make_unique<direct_neighbor_storage<T>>(
-                std::move(operation_communicator),
-                std::move(operation_datatype), std::move(sends),
-                std::move(received), std::move(sources),
-                std::move(destinations), *backend);
-          }
+              receive_layout.element_count,
+              std::move(receive_count_exchange.counts),
+              std::move(receive_layout.offsets));
+          auto operation_datatype =
+              make_mpi_datatype<T>(collective_communicator.native_handle());
+          result = std::make_unique<direct_neighbor_storage<T>>(
+              std::move(operation_communicator), std::move(operation_datatype),
+              std::move(sends), std::move(received), std::move(mpi_layout),
+              *backend);
+        } else {
+          abort_on_programming_error(
+              collective_communicator.native_handle(),
+              "direct neighborhood backend agreement selected no backend");
         }
       }
     } catch (...) {
@@ -597,9 +787,6 @@ template <typename T>
                                              semantic_failure);
   }
   // KAHIP_SEMANTIC_EXIT_END(async-direct)
-  if (!deferred_capacity_failure.empty()) {
-    throw mpi_error{MPI_ERR_ARG, std::string{deferred_capacity_failure}};
-  }
   return result;
 }
 }  // namespace detail
@@ -666,7 +853,8 @@ template <mpi_datatype T>
                                                collective_options options = {})
     -> neighbor_exchange_request<T> {
   auto state = detail::prepare_direct_neighbor_storage(
-      std::move(sends), graph, options, persistence_policy::disabled);
+      detail::pending_neighbor_sends<T>::one_shot(std::move(sends)), graph,
+      options, persistence_policy::disabled);
   state->initiate_immediate();
   return neighbor_exchange_request<T>{std::move(state)};
 }
@@ -678,7 +866,7 @@ class neighbor_all_to_all_v_context {
                                 std::vector<std::size_t> send_counts,
                                 context_options options = {})
       : state_(detail::prepare_direct_neighbor_storage(
-            detail::make_fixed_neighbor_sends<T>(graph, std::move(send_counts)),
+            detail::pending_neighbor_sends<T>::fixed(std::move(send_counts)),
             graph,
             options.collective,
             options.persistence)) {

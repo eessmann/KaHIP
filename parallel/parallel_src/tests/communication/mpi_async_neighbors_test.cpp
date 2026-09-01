@@ -136,6 +136,37 @@ class activation final {
 };
 }  // namespace semantic_error_protocol_probe
 
+namespace backend_agreement_probe {
+inline bool active = false;
+inline int band_calls = 0;
+
+class activation final {
+ public:
+  activation() noexcept {
+    band_calls = 0;
+    active = true;
+  }
+  ~activation() noexcept { active = false; }
+
+  activation(activation const&) = delete;
+  auto operator=(activation const&) -> activation& = delete;
+};
+}  // namespace backend_agreement_probe
+
+extern "C" int MPI_Allreduce(void const* send_buffer,
+                             void* receive_buffer,
+                             int count,
+                             MPI_Datatype datatype,
+                             MPI_Op operation,
+                             MPI_Comm communicator) {
+  if (backend_agreement_probe::active && count == 2 &&
+      datatype == MPI_UINT64_T && operation == MPI_BAND) {
+    ++backend_agreement_probe::band_calls;
+  }
+  return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype, operation,
+                        communicator);
+}
+
 extern "C" int MPI_Error_string(int error_code,
                                 char* error_text,
                                 int* error_text_length) {
@@ -1255,5 +1286,126 @@ TEST_CASE("direct reusable context rejects bounded layouts collectively",
       },
       "direct neighborhood exchange requires a single representable payload",
       world);
+}
+
+TEST_CASE("asymmetric backend masks select one common backend collectively",
+          "[unit][mpi][neighbor][async][backend][agreement]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() < 2) {
+    return;
+  }
+
+  using parhip::mpi::detail::agree_neighbor_backend_masks;
+  using parhip::mpi::detail::backend_bit;
+  using parhip::mpi::detail::choose_direct_backend;
+  using parhip::mpi::detail::filter_local_backend_masks;
+  using parhip::mpi::detail::neighbor_backend_mask;
+  using parhip::mpi::detail::neighbor_backend_masks;
+  using parhip::mpi::detail::neighbor_direct_backend;
+
+  auto const bit = [](neighbor_direct_backend backend) {
+    return backend_bit(backend);
+  };
+  auto const immediate_legacy = bit(neighbor_direct_backend::immediate_legacy);
+  auto const immediate_large =
+      bit(neighbor_direct_backend::immediate_large_count);
+  auto const persistent_legacy =
+      bit(neighbor_direct_backend::persistent_legacy);
+  auto const persistent_large =
+      bit(neighbor_direct_backend::persistent_large_count);
+  auto const all_backends =
+      immediate_legacy | immediate_large | persistent_legacy | persistent_large;
+  struct agreement_case final {
+    std::string_view name;
+    persistence_policy policy;
+    neighbor_backend_mask even_available;
+    neighbor_backend_mask odd_available;
+    bool even_physical_legacy = true;
+    bool odd_physical_legacy = true;
+    neighbor_backend_mask expected_allowed;
+    neighbor_backend_mask expected_physical;
+    std::optional<neighbor_direct_backend> expected;
+  };
+  auto const cases = std::array{
+      agreement_case{
+          .name = "disabled keeps only immediate backends",
+          .policy = persistence_policy::disabled,
+          .even_available = all_backends,
+          .odd_available = immediate_large | persistent_legacy,
+          .expected_allowed = immediate_large,
+          .expected_physical = immediate_large | persistent_legacy,
+          .expected = neighbor_direct_backend::immediate_large_count,
+      },
+      agreement_case{
+          .name = "prefer gives persistent precedence",
+          .policy = persistence_policy::prefer,
+          .even_available = all_backends,
+          .odd_available = persistent_legacy | immediate_legacy,
+          .expected_allowed = persistent_legacy | immediate_legacy,
+          .expected_physical = persistent_legacy | immediate_legacy,
+          .expected = neighbor_direct_backend::persistent_legacy,
+      },
+      agreement_case{
+          .name = "required removes immediate backends",
+          .policy = persistence_policy::required,
+          .even_available = all_backends,
+          .odd_available = persistent_legacy | immediate_legacy,
+          .expected_allowed = persistent_legacy,
+          .expected_physical = persistent_legacy | immediate_legacy,
+          .expected = neighbor_direct_backend::persistent_legacy,
+      },
+      agreement_case{
+          .name = "complementary capabilities have no common backend",
+          .policy = persistence_policy::prefer,
+          .even_available = immediate_legacy,
+          .odd_available = immediate_large,
+          .expected_allowed = 0,
+          .expected_physical = 0,
+          .expected = std::nullopt,
+      },
+      agreement_case{
+          .name = "required persistent layout failure leaves immediate "
+                  "physically available",
+          .policy = persistence_policy::required,
+          .even_available = immediate_large | persistent_legacy,
+          .odd_available = immediate_large | persistent_legacy,
+          .even_physical_legacy = true,
+          .odd_physical_legacy = false,
+          .expected_allowed = 0,
+          .expected_physical = immediate_large,
+          .expected = std::nullopt,
+      },
+  };
+
+  for (auto const& test_case : cases) {
+    INFO(test_case.name);
+    auto const even = world.rank() % 2 == 0;
+    auto const local = filter_local_backend_masks(
+        even ? test_case.even_available : test_case.odd_available,
+        test_case.policy, true,
+        even ? test_case.even_physical_legacy : test_case.odd_physical_legacy,
+        true);
+    auto common = neighbor_backend_masks{};
+    {
+      backend_agreement_probe::activation observation{};
+      common = agree_neighbor_backend_masks(local, world);
+      REQUIRE(backend_agreement_probe::band_calls == 1);
+    }
+    auto const selected = choose_direct_backend(common.allowed);
+    REQUIRE(selected == test_case.expected);
+    REQUIRE(common.allowed == test_case.expected_allowed);
+    REQUIRE(common.physical == test_case.expected_physical);
+
+    auto const encoded = selected.has_value()
+                             ? static_cast<std::uint64_t>(*selected)
+                             : std::numeric_limits<std::uint64_t>::max();
+    auto minimum = std::uint64_t{0};
+    auto maximum = std::uint64_t{0};
+    REQUIRE(PMPI_Allreduce(&encoded, &minimum, 1, MPI_UINT64_T, MPI_MIN,
+                           world.native_handle()) == MPI_SUCCESS);
+    REQUIRE(PMPI_Allreduce(&encoded, &maximum, 1, MPI_UINT64_T, MPI_MAX,
+                           world.native_handle()) == MPI_SUCCESS);
+    REQUIRE(minimum == maximum);
+  }
 }
 }  // namespace

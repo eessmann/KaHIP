@@ -790,6 +790,67 @@ add_mpi_failure_policy_death_test(
 )
 
 add_executable(
+    mpi_async_capacity_failure_probe
+    communication/mpi_async_capacity_failure_probe.cpp
+)
+target_link_libraries(
+    mpi_async_capacity_failure_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+
+function(add_mpi_async_capacity_death_test mode expected_detail expected_injection)
+    add_test(
+        NAME unit-mpi-async-capacity-${mode}-failure
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DMPI_RANKS=2"
+            "-DPROBE=$<TARGET_FILE:mpi_async_capacity_failure_probe>"
+            "-DMODE=${mode}"
+            "-DEXPECT_FAILURE=TRUE"
+            "-DEXPECTED_DIAGNOSTIC=MPI adapter capacity failure:"
+            "-DEXPECTED_DETAIL=direct neighborhood exchange: ${expected_detail}"
+            "-DEXPECTED_INJECTION=${expected_injection}"
+            "-DEXPECTED_MARKER=affected=async-operation error-string-attempts=0 cleanup-attempts=0 capacity-bor-attempts=1 backend-band-attempts=1 count-exchange-attempts=1 payload-allocation-attempts=0 datatype-attempts=0 immediate-init-attempts=0 persistent-init-attempts=0 payload-collective-attempts=0 operation-duplicate-attempts=1"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+    )
+    set_tests_properties(
+        unit-mpi-async-capacity-${mode}-failure
+        PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 10
+    )
+endfunction()
+
+add_mpi_async_capacity_death_test(
+    one-shot-receive-offset
+    "cumulative element offset exceeds local size_t capacity"
+    "injected rank-zero async receive offset capacity"
+)
+add_mpi_async_capacity_death_test(
+    one-shot-receive-byte
+    "element storage byte size exceeds local size_t capacity"
+    "injected rank-zero async receive byte capacity"
+)
+add_mpi_async_capacity_death_test(
+    fixed-send-offset
+    "cumulative element offset exceeds local size_t capacity"
+    "armed rank-zero async fixed-send offset capacity"
+)
+add_mpi_async_capacity_death_test(
+    fixed-send-byte
+    "element storage byte size exceeds local size_t capacity"
+    "armed rank-zero async fixed-send byte capacity"
+)
+add_mpi_async_capacity_death_test(
+    fixed-direct-backend
+    "direct neighborhood payload has no representable MPI backend"
+    "armed rank-zero async direct backend capacity"
+)
+
+add_executable(
     parallel_graph_consistency_mpi_test
     distributed_consistency/parallel_graph_consistency_mpi_test.cpp
 )

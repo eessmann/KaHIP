@@ -67,38 +67,15 @@ class distributed_graph {
 };
 
 namespace detail {
-inline auto neighbor_offsets(std::vector<std::size_t> const& counts)
-    -> std::optional<std::vector<std::size_t>> {
-  auto offsets = std::vector<std::size_t>(counts.size());
-  auto total = std::size_t{0};
-  for (std::size_t index = 0; index < counts.size(); ++index) {
-    if (counts[index] > std::numeric_limits<std::size_t>::max() - total) {
-      return std::nullopt;
-    }
-    offsets[index] = total;
-    total += counts[index];
-  }
-  return offsets;
-}
-
-inline auto neighbor_storage_size(
-    std::vector<std::size_t> const& counts,
-    std::vector<std::size_t> const& offsets) noexcept -> std::size_t {
-  return counts.empty() ? std::size_t{0} : offsets.back() + counts.back();
-}
-
 struct neighbor_count_exchange {
   std::vector<std::size_t> counts;
   capacity_result capacity;
-  // Kept until the direct asynchronous context is migrated to the shared
-  // capacity protocol. Blocking exchanges use capacity directly.
-  bool representable = true;
 };
 
-inline auto exchange_neighbor_counts(
-    std::vector<std::size_t> const& send_counts,
-    std::size_t indegree,
-    communicator_view communicator) -> neighbor_count_exchange {
+inline auto exchange_neighbor_counts(std::span<std::size_t const> send_counts,
+                                     std::size_t indegree,
+                                     communicator_view communicator)
+    -> neighbor_count_exchange {
   static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
   auto const outgoing =
       std::vector<std::uint64_t>(send_counts.begin(), send_counts.end());
@@ -112,13 +89,11 @@ inline auto exchange_neighbor_counts(
   auto result = neighbor_count_exchange{
       .counts = std::vector<std::size_t>(incoming.size()),
       .capacity = {},
-      .representable = true,
   };
   for (std::size_t index = 0; index < incoming.size(); ++index) {
     if (!std::in_range<std::size_t>(incoming[index])) {
       result.capacity = with_fatal_capacity_issue(
           result.capacity, capacity_issue::received_count_not_representable);
-      result.representable = false;
       continue;
     }
     result.counts[index] = static_cast<std::size_t>(incoming[index]);
@@ -175,81 +150,36 @@ template <typename T>
   return local;
 }
 
-template <typename T>
-[[nodiscard]] auto neighbor_mpi4_layout_is_representable_locally(
-    segmented_buffer<T> const& sends,
-    std::vector<std::size_t> const& receive_counts,
-    std::vector<std::size_t> const& receive_offsets) noexcept -> bool {
+[[nodiscard]] inline auto neighbor_mpi4_layout_is_representable_locally(
+    std::span<std::size_t const> send_counts,
+    std::span<std::size_t const> send_offsets,
+    std::span<std::size_t const> receive_counts,
+    std::span<std::size_t const> receive_offsets) noexcept -> bool {
   auto const count_is_representable = [](std::size_t value) noexcept {
     return std::in_range<MPI_Count>(value);
   };
   auto const offset_is_representable = [](std::size_t value) noexcept {
     return std::in_range<MPI_Aint>(value);
   };
-  return std::ranges::all_of(sends.counts(), count_is_representable) &&
+  return std::ranges::all_of(send_counts, count_is_representable) &&
          std::ranges::all_of(receive_counts, count_is_representable) &&
-         std::ranges::all_of(sends.offsets(), offset_is_representable) &&
+         std::ranges::all_of(send_offsets, offset_is_representable) &&
          std::ranges::all_of(receive_offsets, offset_is_representable);
 }
 
-template <typename T>
-[[nodiscard]] auto neighbor_mpi3_layout_is_representable_locally(
-    segmented_buffer<T> const& sends,
-    std::vector<std::size_t> const& receive_counts,
-    std::vector<std::size_t> const& receive_offsets,
+[[nodiscard]] inline auto neighbor_mpi3_layout_is_representable_locally(
+    std::span<std::size_t const> send_counts,
+    std::span<std::size_t const> send_offsets,
+    std::span<std::size_t const> receive_counts,
+    std::span<std::size_t const> receive_offsets,
     std::size_t ceiling) noexcept -> bool {
   auto const is_representable = [ceiling](std::size_t value) noexcept {
     return value <= ceiling;
   };
-  return std::ranges::all_of(sends.counts(), is_representable) &&
+  return std::ranges::all_of(send_counts, is_representable) &&
          std::ranges::all_of(receive_counts, is_representable) &&
-         std::ranges::all_of(sends.offsets(), is_representable) &&
+         std::ranges::all_of(send_offsets, is_representable) &&
          std::ranges::all_of(receive_offsets, is_representable);
-}
-
-#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C ||  \
-    KAHIP_HAVE_MPI_INEIGHBOR_ALLTOALLV_C || \
-    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_INIT_C
-template <typename T>
-[[nodiscard]] auto neighbor_mpi4_layout_is_representable(
-    segmented_buffer<T> const& sends,
-    segmented_buffer<T> const& received,
-    communicator_view communicator) -> bool {
-  auto const local_is_representable =
-      neighbor_mpi4_layout_is_representable_locally(sends, received.counts(),
-                                                    received.offsets());
-  return collective_predicate(local_is_representable, communicator);
-}
-#endif
-
-template <typename T>
-[[nodiscard]] auto neighbor_needs_bounded_rounds(
-    segmented_buffer<T> const& sends,
-    std::vector<std::size_t> const& receive_counts,
-    std::vector<std::size_t> const& receive_offsets,
-    std::size_t ceiling,
-    communicator_view communicator) -> bool {
-  auto local_needs_rounds = std::ranges::any_of(
-      std::views::iota(std::size_t{0}, sends.segment_count()),
-      [&](auto const index) {
-        return sends.counts()[index] > ceiling ||
-               sends.offsets()[index] > ceiling;
-      });
-  local_needs_rounds =
-      local_needs_rounds ||
-      std::ranges::any_of(
-          std::views::iota(std::size_t{0}, receive_counts.size()),
-          [&](auto const index) {
-            return receive_counts[index] > ceiling ||
-                   receive_offsets[index] > ceiling;
-          });
-  auto local = local_needs_rounds ? 1 : 0;
-  auto global = 0;
-  check_or_abort(MPI_Allreduce(&local, &global, 1, MPI_INT, MPI_MAX,
-                               communicator.native_handle()),
-                 communicator.native_handle(),
-                 "MPI_Allreduce(select MPI-3 neighborhood path)");
-  return global != 0;
 }
 
 inline auto bounded_round_count(std::size_t count, std::size_t ceiling) noexcept
@@ -464,11 +394,12 @@ template <mpi_datatype T>
           auto const direct_layout_is_representable =
               mpi4_is_candidate
                   ? detail::neighbor_mpi4_layout_is_representable_locally(
-                        sends, receive_count_exchange.counts,
-                        receive_layout.offsets)
+                        sends.counts(), sends.offsets(),
+                        receive_count_exchange.counts, receive_layout.offsets)
                   : detail::neighbor_mpi3_layout_is_representable_locally(
-                        sends, receive_count_exchange.counts,
-                        receive_layout.offsets, *mpi3_ceiling);
+                        sends.counts(), sends.offsets(),
+                        receive_count_exchange.counts, receive_layout.offsets,
+                        *mpi3_ceiling);
           local_capacity = detail::neighbor_capacity_preflight<T>(
               local_capacity, receive_layout.element_count,
               direct_layout_is_representable);
