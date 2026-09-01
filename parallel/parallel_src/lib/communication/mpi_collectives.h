@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "communication/mpi_error.h"
@@ -20,6 +21,8 @@
 namespace parhip::mpi {
 namespace capabilities {
 inline constexpr bool has_alltoallv_c = KAHIP_HAVE_MPI_ALLTOALLV_C != 0;
+inline constexpr bool has_neighbor_alltoallv_c =
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C != 0;
 }  // namespace capabilities
 
 struct collective_options {
@@ -34,11 +37,7 @@ inline auto collective_predicate(bool local_is_valid,
     -> bool {
   int local_valid = local_is_valid ? 1 : 0;
   int all_valid = 0;
-  check_or_abort(MPI_Allreduce(&local_valid,
-                               &all_valid,
-                               1,
-                               MPI_INT,
-                               MPI_MIN,
+  check_or_abort(MPI_Allreduce(&local_valid, &all_valid, 1, MPI_INT, MPI_MIN,
                                communicator.native_handle()),
                  communicator.native_handle(),
                  "MPI_Allreduce(collective validation)");
@@ -54,20 +53,12 @@ inline auto validate_collective_options(collective_options options,
       options.force_mpi3 ? std::uint64_t{1} : std::uint64_t{0}};
   std::array<std::uint64_t, 2> minimum{};
   std::array<std::uint64_t, 2> maximum{};
-  check_or_abort(MPI_Allreduce(local.data(),
-                               minimum.data(),
-                               2,
-                               MPI_UINT64_T,
-                               MPI_MIN,
-                               communicator.native_handle()),
+  check_or_abort(MPI_Allreduce(local.data(), minimum.data(), 2, MPI_UINT64_T,
+                               MPI_MIN, communicator.native_handle()),
                  communicator.native_handle(),
                  "MPI_Allreduce(dense collective option minimum)");
-  check_or_abort(MPI_Allreduce(local.data(),
-                               maximum.data(),
-                               2,
-                               MPI_UINT64_T,
-                               MPI_MAX,
-                               communicator.native_handle()),
+  check_or_abort(MPI_Allreduce(local.data(), maximum.data(), 2, MPI_UINT64_T,
+                               MPI_MAX, communicator.native_handle()),
                  communicator.native_handle(),
                  "MPI_Allreduce(dense collective option maximum)");
   if (minimum != maximum || options.mpi3_round_ceiling == 0) {
@@ -83,13 +74,8 @@ inline auto exchange_counts(std::vector<std::size_t> const& send_counts,
   static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
   std::vector<std::uint64_t> send(send_counts.begin(), send_counts.end());
   std::vector<std::uint64_t> receive(send_counts.size());
-  check_or_abort(MPI_Alltoall(send.data(),
-                              1,
-                              MPI_UINT64_T,
-                              receive.data(),
-                              1,
-                              MPI_UINT64_T,
-                              communicator.native_handle()),
+  check_or_abort(MPI_Alltoall(send.data(), 1, MPI_UINT64_T, receive.data(), 1,
+                              MPI_UINT64_T, communicator.native_handle()),
                  communicator.native_handle(),
                  "MPI_Alltoall(exchange dense counts)");
 
@@ -134,19 +120,14 @@ inline auto needs_bounded_rounds(
     communicator_view communicator) -> bool {
   auto local_needs_rounds = false;
   for (std::size_t index = 0; index < sends.segment_count(); ++index) {
-    local_needs_rounds = local_needs_rounds ||
-                         sends.counts()[index] > ceiling ||
-                         sends.offsets()[index] > ceiling ||
-                         receive_counts[index] > ceiling ||
-                         receive_offsets[index] > ceiling;
+    local_needs_rounds =
+        local_needs_rounds || sends.counts()[index] > ceiling ||
+        sends.offsets()[index] > ceiling || receive_counts[index] > ceiling ||
+        receive_offsets[index] > ceiling;
   }
   int local = local_needs_rounds ? 1 : 0;
   int global = 0;
-  check_or_abort(MPI_Allreduce(&local,
-                               &global,
-                               1,
-                               MPI_INT,
-                               MPI_MAX,
+  check_or_abort(MPI_Allreduce(&local, &global, 1, MPI_INT, MPI_MAX,
                                communicator.native_handle()),
                  communicator.native_handle(),
                  "MPI_Allreduce(select MPI-3 collective path)");
@@ -154,14 +135,13 @@ inline auto needs_bounded_rounds(
 }
 
 template <typename T>
-void mpi3_bounded_all_to_all_v(
-    segmented_buffer<T> const& sends,
-    std::span<T> receive_storage,
-    std::vector<std::size_t> const& receive_counts,
-    std::vector<std::size_t> const& receive_offsets,
-    MPI_Datatype datatype,
-    std::size_t ceiling,
-    communicator_view communicator) {
+void mpi3_bounded_all_to_all_v(segmented_buffer<T> const& sends,
+                               std::span<T> receive_storage,
+                               std::vector<std::size_t> const& receive_counts,
+                               std::vector<std::size_t> const& receive_offsets,
+                               MPI_Datatype datatype,
+                               std::size_t ceiling,
+                               communicator_view communicator) {
   auto const rank = communicator.rank();
   auto const size = communicator.size();
   std::vector<int> send_counts(static_cast<std::size_t>(size), 0);
@@ -174,29 +154,25 @@ void mpi3_bounded_all_to_all_v(
     auto const destination_index = static_cast<std::size_t>(destination);
     auto const source_index = static_cast<std::size_t>(source);
     auto const send_total = sends.counts()[destination_index];
-    auto const local_rounds =
-        send_total == 0 ? std::size_t{0}
-                        : (send_total - 1) / ceiling + std::size_t{1};
+    auto const local_rounds = send_total == 0
+                                  ? std::size_t{0}
+                                  : (send_total - 1) / ceiling + std::size_t{1};
     auto local_rounds_u64 = static_cast<std::uint64_t>(local_rounds);
     std::uint64_t phase_rounds_u64 = 0;
-    check_or_abort(MPI_Allreduce(&local_rounds_u64,
-                                 &phase_rounds_u64,
-                                 1,
-                                 MPI_UINT64_T,
-                                 MPI_MAX,
-                                 communicator.native_handle()),
-                   communicator.native_handle(),
-                   "MPI_Allreduce(MPI-3 bounded phase rounds)");
+    check_or_abort(
+        MPI_Allreduce(&local_rounds_u64, &phase_rounds_u64, 1, MPI_UINT64_T,
+                      MPI_MAX, communicator.native_handle()),
+        communicator.native_handle(),
+        "MPI_Allreduce(MPI-3 bounded phase rounds)");
     auto const phase_rounds = static_cast<std::size_t>(phase_rounds_u64);
 
     for (std::size_t round = 0; round < phase_rounds; ++round) {
       std::ranges::fill(send_counts, 0);
       std::ranges::fill(receive_counts_i, 0);
       auto const chunk_offset = round * ceiling;
-      auto const send_chunk =
-          chunk_offset < send_total
-              ? std::min(ceiling, send_total - chunk_offset)
-              : std::size_t{0};
+      auto const send_chunk = chunk_offset < send_total
+                                  ? std::min(ceiling, send_total - chunk_offset)
+                                  : std::size_t{0};
       auto const receive_total = receive_counts[source_index];
       auto const receive_chunk =
           chunk_offset < receive_total
@@ -215,25 +191,21 @@ void mpi3_bounded_all_to_all_v(
       if (receive_chunk != 0) {
         receive_buffer += receive_offsets[source_index] + chunk_offset;
       }
-      check_or_abort(MPI_Alltoallv(send_buffer,
-                                   send_counts.data(),
-                                   displacements.data(),
-                                   datatype,
-                                   receive_buffer,
-                                   receive_counts_i.data(),
-                                   displacements.data(),
-                                   datatype,
-                                   communicator.native_handle()),
-                     communicator.native_handle(),
-                     "MPI_Alltoallv(MPI-3 bounded dense round)");
+      check_or_abort(
+          MPI_Alltoallv(send_buffer, send_counts.data(), displacements.data(),
+                        datatype, receive_buffer, receive_counts_i.data(),
+                        displacements.data(), datatype,
+                        communicator.native_handle()),
+          communicator.native_handle(),
+          "MPI_Alltoallv(MPI-3 bounded dense round)");
     }
   }
 }
 
-#if KAHIP_HAVE_MPI_ALLTOALLV_C
+#if KAHIP_HAVE_MPI_ALLTOALLV_C || KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
 inline auto checked_mpi_count(std::size_t value, std::string_view context)
     -> MPI_Count {
-  if (value > static_cast<std::size_t>(std::numeric_limits<MPI_Count>::max())) {
+  if (!std::in_range<MPI_Count>(value)) {
     throw mpi_error{MPI_ERR_COUNT, std::string{context}};
   }
   return static_cast<MPI_Count>(value);
@@ -241,7 +213,7 @@ inline auto checked_mpi_count(std::size_t value, std::string_view context)
 
 inline auto checked_mpi_aint(std::size_t value, std::string_view context)
     -> MPI_Aint {
-  if (value > static_cast<std::size_t>(std::numeric_limits<MPI_Aint>::max())) {
+  if (!std::in_range<MPI_Aint>(value)) {
     throw mpi_error{MPI_ERR_COUNT, std::string{context}};
   }
   return static_cast<MPI_Aint>(value);
@@ -255,8 +227,8 @@ inline void validate_collectively(bool local_is_valid,
   auto all_valid = false;
   {
     auto owned_communicator = parhip::mpi::communicator{communicator};
-    all_valid = detail::collective_predicate(
-        local_is_valid, owned_communicator.view());
+    all_valid =
+        detail::collective_predicate(local_is_valid, owned_communicator.view());
   }
   if (!all_valid) {
     throw mpi_error{MPI_ERR_ARG, std::string{context}};
@@ -273,19 +245,11 @@ template <mpi_native_datatype T>
     auto owned_communicator = parhip::mpi::communicator{communicator};
     auto const collective_communicator = owned_communicator.view();
     auto const datatype = get_mpi_datatype<T>();
-    check_or_abort(MPI_Allreduce(&local_value,
-                                 &minimum,
-                                 1,
-                                 datatype,
-                                 MPI_MIN,
+    check_or_abort(MPI_Allreduce(&local_value, &minimum, 1, datatype, MPI_MIN,
                                  collective_communicator.native_handle()),
                    collective_communicator.native_handle(),
                    "MPI_Allreduce(common value minimum)");
-    check_or_abort(MPI_Allreduce(&local_value,
-                                 &maximum,
-                                 1,
-                                 datatype,
-                                 MPI_MAX,
+    check_or_abort(MPI_Allreduce(&local_value, &maximum, 1, datatype, MPI_MAX,
                                  collective_communicator.native_handle()),
                    collective_communicator.native_handle(),
                    "MPI_Allreduce(common value maximum)");
@@ -297,10 +261,9 @@ template <mpi_native_datatype T>
 }
 
 template <mpi_datatype T>
-[[nodiscard]] auto all_to_all_v(
-    segmented_buffer<T> sends,
-    communicator_view communicator,
-    collective_options options = {})
+[[nodiscard]] auto all_to_all_v(segmented_buffer<T> sends,
+                                communicator_view communicator,
+                                collective_options options = {})
     -> segmented_buffer<T> {
   auto semantic_failure = std::string_view{};
   auto result = std::optional<segmented_buffer<T>>{};
@@ -314,12 +277,10 @@ template <mpi_datatype T>
           sends.has_canonical_layout(communicator_size),
           collective_communicator);
       if (!layout_is_valid) {
-        semantic_failure =
-            "all_to_all_v collective input validation failed";
+        semantic_failure = "all_to_all_v collective input validation failed";
       } else {
-        auto const mpi3_ceiling =
-            detail::validate_collective_options(options,
-                                                collective_communicator);
+        auto const mpi3_ceiling = detail::validate_collective_options(
+            options, collective_communicator);
         if (!mpi3_ceiling.has_value()) {
           semantic_failure =
               "all_to_all_v collective options must match and use a "
@@ -333,11 +294,10 @@ template <mpi_datatype T>
                   ? std::size_t{0}
                   : receive_offsets.back() + receive_counts.back();
           auto received = segmented_buffer<T>::uninitialized(
-              receive_size,
-              std::move(receive_counts),
+              receive_size, std::move(receive_counts),
               std::move(receive_offsets));
-          auto datatype = make_mpi_datatype<T>(
-              collective_communicator.native_handle());
+          auto datatype =
+              make_mpi_datatype<T>(collective_communicator.native_handle());
           auto payload_complete = false;
 
 #if KAHIP_HAVE_MPI_ALLTOALLV_C
@@ -361,15 +321,12 @@ template <mpi_datatype T>
                   received.offsets()[index], "MPI receive offset"));
             }
             check_or_abort(
-                MPI_Alltoallv_c(sends.storage().data(),
-                                send_counts.data(),
-                                send_offsets.data(),
-                                datatype.native_handle(),
-                                received.storage().data(),
-                                receive_counts_c.data(),
-                                receive_offsets_c.data(),
-                                datatype.native_handle(),
-                                collective_communicator.native_handle()),
+                MPI_Alltoallv_c(
+                    sends.storage().data(), send_counts.data(),
+                    send_offsets.data(), datatype.native_handle(),
+                    received.storage().data(), receive_counts_c.data(),
+                    receive_offsets_c.data(), datatype.native_handle(),
+                    collective_communicator.native_handle()),
                 collective_communicator.native_handle(),
                 "MPI_Alltoallv_c(dense exchange)");
             payload_complete = true;
@@ -377,18 +334,13 @@ template <mpi_datatype T>
 #endif
 
           if (!payload_complete &&
-              detail::needs_bounded_rounds(sends,
-                                            received.counts(),
-                                            received.offsets(),
-                                            *mpi3_ceiling,
-                                            collective_communicator)) {
-            detail::mpi3_bounded_all_to_all_v(sends,
-                                              received.storage(),
-                                              received.counts(),
-                                              received.offsets(),
-                                              datatype.native_handle(),
-                                              *mpi3_ceiling,
-                                              collective_communicator);
+              detail::needs_bounded_rounds(sends, received.counts(),
+                                           received.offsets(), *mpi3_ceiling,
+                                           collective_communicator)) {
+            detail::mpi3_bounded_all_to_all_v(
+                sends, received.storage(), received.counts(),
+                received.offsets(), datatype.native_handle(), *mpi3_ceiling,
+                collective_communicator);
             payload_complete = true;
           }
           if (!payload_complete) {
@@ -401,23 +353,20 @@ template <mpi_datatype T>
             send_offsets.reserve(communicator_size);
             receive_offsets_i.reserve(communicator_size);
             for (std::size_t index = 0; index < communicator_size; ++index) {
-              send_counts.push_back(detail::checked_int(
-                  sends.counts()[index], "MPI send count"));
+              send_counts.push_back(
+                  detail::checked_int(sends.counts()[index], "MPI send count"));
               receive_counts_i.push_back(detail::checked_int(
                   received.counts()[index], "MPI receive count"));
-              send_offsets.push_back(detail::checked_int(
-                  sends.offsets()[index], "MPI send offset"));
+              send_offsets.push_back(detail::checked_int(sends.offsets()[index],
+                                                         "MPI send offset"));
               receive_offsets_i.push_back(detail::checked_int(
                   received.offsets()[index], "MPI receive offset"));
             }
             check_or_abort(
-                MPI_Alltoallv(sends.storage().data(),
-                              send_counts.data(),
-                              send_offsets.data(),
-                              datatype.native_handle(),
+                MPI_Alltoallv(sends.storage().data(), send_counts.data(),
+                              send_offsets.data(), datatype.native_handle(),
                               received.storage().data(),
-                              receive_counts_i.data(),
-                              receive_offsets_i.data(),
+                              receive_counts_i.data(), receive_offsets_i.data(),
                               datatype.native_handle(),
                               collective_communicator.native_handle()),
                 collective_communicator.native_handle(),

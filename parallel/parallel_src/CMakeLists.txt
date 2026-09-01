@@ -24,6 +24,20 @@ check_cxx_source_compiles(
     ]=]
     KAHIP_HAVE_MPI_ALLTOALLV_C
 )
+check_cxx_source_compiles(
+    [=[
+        #include <mpi.h>
+        int main() {
+            MPI_Count counts[1]{};
+            MPI_Aint displacements[1]{};
+            return MPI_Neighbor_alltoallv_c(
+                nullptr, counts, displacements, MPI_BYTE,
+                nullptr, counts, displacements, MPI_BYTE, MPI_COMM_WORLD
+            );
+        }
+    ]=]
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
+)
 cmake_pop_check_state()
 set(PARHIP_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${PARHIP_GENERATED_INCLUDE_DIR}")
@@ -93,6 +107,7 @@ set(LIBPARALLEL_SOURCE_FILES
     lib/distributed_partitioning/initial_partitioning/distributed_evolutionary_partitioning.cpp
     lib/distributed_partitioning/initial_partitioning/random_initial_partitioning.cpp
     lib/communication/mpi_adapter.cpp
+    lib/communication/mpi_neighbors.cpp
     lib/communication/mpi_failure.cpp
     lib/communication/mpi_tools.cpp
     lib/communication/dummy_operations.cpp

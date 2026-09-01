@@ -446,6 +446,49 @@ foreach(mpi_ranks RANGE 1 5)
 endforeach()
 
 add_executable(
+    mpi_neighborhood_failure_probe
+    communication/mpi_neighborhood_failure_probe.cpp
+)
+target_link_libraries(
+    mpi_neighborhood_failure_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+
+foreach(neighborhood_failure IN ITEMS create query free)
+    if(neighborhood_failure STREQUAL "create")
+        set(neighborhood_failure_context "MPI_Dist_graph_create")
+        set(neighborhood_failure_affected "internal")
+    elseif(neighborhood_failure STREQUAL "query")
+        set(neighborhood_failure_context "MPI_Dist_graph_neighbors_count")
+        set(neighborhood_failure_affected "graph")
+    else()
+        set(neighborhood_failure_context "MPI_Comm_free\\(distributed graph\\)")
+        set(neighborhood_failure_affected "world")
+    endif()
+    add_test(
+        NAME unit-mpi-neighborhood-${neighborhood_failure}-failure
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DPROBE=$<TARGET_FILE:mpi_neighborhood_failure_probe>"
+            "-DMODE=${neighborhood_failure}"
+            "-DEXPECTED_CONTEXT=${neighborhood_failure_context}"
+            "-DEXPECTED_AFFECTED=${neighborhood_failure_affected}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_neighborhood_failure.cmake"
+    )
+    set_tests_properties(
+        unit-mpi-neighborhood-${neighborhood_failure}-failure
+        PROPERTIES
+            RUN_SERIAL TRUE
+            TIMEOUT 10
+    )
+endforeach()
+
+add_executable(
     mpi_lifecycle_failure_probe
     communication/mpi_lifecycle_failure_probe.cpp
 )

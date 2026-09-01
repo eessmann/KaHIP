@@ -6,16 +6,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <limits>
+#include <optional>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "communication/mpi_adapter.h"
 #include "communication/contiguous_owner_layout.h"
+#include "communication/mpi_adapter.h"
+#include "kahip_mpi_capabilities.h"
 #include "parhip_interface.h"
 
 namespace test_support {
@@ -42,30 +47,375 @@ struct non_default_wire_entry {
 
 template <>
 struct parhip::mpi::wire_members<test_support::wire_entry> {
-  inline static constexpr auto value = boost::hana::make_tuple(
-      &test_support::wire_entry::id,
-      &test_support::wire_entry::owner,
-      &test_support::wire_entry::weight);
+  inline static constexpr auto value =
+      boost::hana::make_tuple(&test_support::wire_entry::id,
+                              &test_support::wire_entry::owner,
+                              &test_support::wire_entry::weight);
 };
 
 template <>
 struct parhip::mpi::wire_members<test_support::non_default_wire_entry> {
-  inline static constexpr auto value = boost::hana::make_tuple(
-      &test_support::non_default_wire_entry::id,
-      &test_support::non_default_wire_entry::owner);
+  inline static constexpr auto value =
+      boost::hana::make_tuple(&test_support::non_default_wire_entry::id,
+                              &test_support::non_default_wire_entry::owner);
 };
 
+namespace neighborhood_protocol_probe {
+inline bool active = false;
+inline int dist_graph_create_calls = 0;
+inline int neighbor_count_calls = 0;
+inline int neighbor_payload_calls = 0;
+inline int neighbor_payload_c_calls = 0;
+inline int point_to_point_calls = 0;
+inline int maximum_active_send_segments = 0;
+inline int maximum_active_receive_segments = 0;
+inline int maximum_payload_count = 0;
+inline int nonzero_displacement_calls = 0;
+inline bool inject_receive_count_overflow = false;
+inline bool inject_receive_byte_size_overflow = false;
+
+void reset() {
+  dist_graph_create_calls = 0;
+  neighbor_count_calls = 0;
+  neighbor_payload_calls = 0;
+  neighbor_payload_c_calls = 0;
+  point_to_point_calls = 0;
+  maximum_active_send_segments = 0;
+  maximum_active_receive_segments = 0;
+  maximum_payload_count = 0;
+  nonzero_displacement_calls = 0;
+  inject_receive_count_overflow = false;
+  inject_receive_byte_size_overflow = false;
+}
+}  // namespace neighborhood_protocol_probe
+
+extern "C" int MPI_Dist_graph_create(MPI_Comm communicator,
+                                     int source_count,
+                                     int const sources[],
+                                     int const degrees[],
+                                     int const destinations[],
+                                     int const weights[],
+                                     MPI_Info info,
+                                     int reorder,
+                                     MPI_Comm* graph_communicator) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::dist_graph_create_calls;
+  }
+  return PMPI_Dist_graph_create(communicator, source_count, sources, degrees,
+                                destinations, weights, info, reorder,
+                                graph_communicator);
+}
+
+extern "C" int MPI_Neighbor_alltoall(void const* send_buffer,
+                                     int send_count,
+                                     MPI_Datatype send_datatype,
+                                     void* receive_buffer,
+                                     int receive_count,
+                                     MPI_Datatype receive_datatype,
+                                     MPI_Comm communicator) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::neighbor_count_calls;
+  }
+  auto const result = PMPI_Neighbor_alltoall(
+      send_buffer, send_count, send_datatype, receive_buffer, receive_count,
+      receive_datatype, communicator);
+  if (neighborhood_protocol_probe::active &&
+      neighborhood_protocol_probe::inject_receive_count_overflow &&
+      result == MPI_SUCCESS && receive_count == 1 &&
+      receive_datatype == MPI_UINT64_T) {
+    auto indegree = 0;
+    auto outdegree = 0;
+    auto weighted = 0;
+    if (PMPI_Dist_graph_neighbors_count(communicator, &indegree, &outdegree,
+                                        &weighted) == MPI_SUCCESS) {
+      auto* counts = static_cast<std::uint64_t*>(receive_buffer);
+      std::ranges::fill(std::span{counts, static_cast<std::size_t>(indegree)},
+                        std::numeric_limits<std::uint64_t>::max());
+    }
+  } else if (neighborhood_protocol_probe::active &&
+             neighborhood_protocol_probe::inject_receive_byte_size_overflow &&
+             result == MPI_SUCCESS && receive_count == 1 &&
+             receive_datatype == MPI_UINT64_T) {
+    auto indegree = 0;
+    auto outdegree = 0;
+    auto weighted = 0;
+    if (PMPI_Dist_graph_neighbors_count(communicator, &indegree, &outdegree,
+                                        &weighted) == MPI_SUCCESS) {
+      auto rank = 0;
+      if (PMPI_Comm_rank(communicator, &rank) == MPI_SUCCESS && rank == 0) {
+        auto* counts = static_cast<std::uint64_t*>(receive_buffer);
+        std::uint64_t const product_only_overflow =
+            std::numeric_limits<std::size_t>::max() /
+                sizeof(test_support::wire_entry) +
+            std::size_t{1};
+        std::ranges::fill(
+            std::span{counts, static_cast<std::size_t>(indegree)},
+            product_only_overflow);
+      }
+    }
+  }
+  return result;
+}
+
+extern "C" int MPI_Neighbor_alltoallv(void const* send_buffer,
+                                      int const send_counts[],
+                                      int const send_displacements[],
+                                      MPI_Datatype send_datatype,
+                                      void* receive_buffer,
+                                      int const receive_counts[],
+                                      int const receive_displacements[],
+                                      MPI_Datatype receive_datatype,
+                                      MPI_Comm communicator) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::neighbor_payload_calls;
+    auto indegree = 0;
+    auto outdegree = 0;
+    auto weighted = 0;
+    if (PMPI_Dist_graph_neighbors_count(communicator, &indegree, &outdegree,
+                                        &weighted) == MPI_SUCCESS) {
+      auto active_sends = 0;
+      auto active_receives = 0;
+      for (int index = 0; index < outdegree; ++index) {
+        active_sends += send_counts[index] != 0 ? 1 : 0;
+        neighborhood_protocol_probe::maximum_payload_count =
+            std::max(neighborhood_protocol_probe::maximum_payload_count,
+                     send_counts[index]);
+        neighborhood_protocol_probe::nonzero_displacement_calls +=
+            send_displacements[index] != 0 ? 1 : 0;
+      }
+      for (int index = 0; index < indegree; ++index) {
+        active_receives += receive_counts[index] != 0 ? 1 : 0;
+        neighborhood_protocol_probe::maximum_payload_count =
+            std::max(neighborhood_protocol_probe::maximum_payload_count,
+                     receive_counts[index]);
+        neighborhood_protocol_probe::nonzero_displacement_calls +=
+            receive_displacements[index] != 0 ? 1 : 0;
+      }
+      neighborhood_protocol_probe::maximum_active_send_segments =
+          std::max(neighborhood_protocol_probe::maximum_active_send_segments,
+                   active_sends);
+      neighborhood_protocol_probe::maximum_active_receive_segments =
+          std::max(neighborhood_protocol_probe::maximum_active_receive_segments,
+                   active_receives);
+    }
+  }
+  return PMPI_Neighbor_alltoallv(send_buffer, send_counts, send_displacements,
+                                 send_datatype, receive_buffer, receive_counts,
+                                 receive_displacements, receive_datatype,
+                                 communicator);
+}
+
+#if defined(KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C) && \
+    KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
+extern "C" int MPI_Neighbor_alltoallv_c(void const* send_buffer,
+                                        MPI_Count const send_counts[],
+                                        MPI_Aint const send_displacements[],
+                                        MPI_Datatype send_datatype,
+                                        void* receive_buffer,
+                                        MPI_Count const receive_counts[],
+                                        MPI_Aint const receive_displacements[],
+                                        MPI_Datatype receive_datatype,
+                                        MPI_Comm communicator) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::neighbor_payload_c_calls;
+  }
+  return PMPI_Neighbor_alltoallv_c(send_buffer, send_counts, send_displacements,
+                                   send_datatype, receive_buffer,
+                                   receive_counts, receive_displacements,
+                                   receive_datatype, communicator);
+}
+#endif
+
+extern "C" int MPI_Isend(void const* buffer,
+                         int count,
+                         MPI_Datatype datatype,
+                         int destination,
+                         int tag,
+                         MPI_Comm communicator,
+                         MPI_Request* request) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Isend(buffer, count, datatype, destination, tag, communicator,
+                    request);
+}
+
+extern "C" int MPI_Irecv(void* buffer,
+                         int count,
+                         MPI_Datatype datatype,
+                         int source,
+                         int tag,
+                         MPI_Comm communicator,
+                         MPI_Request* request) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Irecv(buffer, count, datatype, source, tag, communicator,
+                    request);
+}
+
+extern "C" int MPI_Recv(void* buffer,
+                        int count,
+                        MPI_Datatype datatype,
+                        int source,
+                        int tag,
+                        MPI_Comm communicator,
+                        MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Recv(buffer, count, datatype, source, tag, communicator, status);
+}
+
+extern "C" int MPI_Probe(int source,
+                         int tag,
+                         MPI_Comm communicator,
+                         MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Probe(source, tag, communicator, status);
+}
+
+extern "C" int MPI_Iprobe(int source,
+                          int tag,
+                          MPI_Comm communicator,
+                          int* flag,
+                          MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Iprobe(source, tag, communicator, flag, status);
+}
+
+extern "C" int MPI_Mprobe(int source,
+                          int tag,
+                          MPI_Comm communicator,
+                          MPI_Message* message,
+                          MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Mprobe(source, tag, communicator, message, status);
+}
+
+extern "C" int MPI_Improbe(int source,
+                            int tag,
+                            MPI_Comm communicator,
+                            int* flag,
+                            MPI_Message* message,
+                            MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Improbe(source, tag, communicator, flag, message, status);
+}
+
+extern "C" int MPI_Send(void const* buffer,
+                        int count,
+                        MPI_Datatype datatype,
+                        int destination,
+                        int tag,
+                        MPI_Comm communicator) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Send(buffer, count, datatype, destination, tag, communicator);
+}
+
+extern "C" int MPI_Sendrecv(void const* send_buffer,
+                            int send_count,
+                            MPI_Datatype send_datatype,
+                            int destination,
+                            int send_tag,
+                            void* receive_buffer,
+                            int receive_count,
+                            MPI_Datatype receive_datatype,
+                            int source,
+                            int receive_tag,
+                            MPI_Comm communicator,
+                            MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Sendrecv(send_buffer, send_count, send_datatype, destination,
+                       send_tag, receive_buffer, receive_count,
+                       receive_datatype, source, receive_tag, communicator,
+                       status);
+}
+
+extern "C" int MPI_Sendrecv_replace(void* buffer,
+                                     int count,
+                                     MPI_Datatype datatype,
+                                     int destination,
+                                     int send_tag,
+                                     int source,
+                                     int receive_tag,
+                                     MPI_Comm communicator,
+                                     MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Sendrecv_replace(buffer, count, datatype, destination, send_tag,
+                               source, receive_tag, communicator, status);
+}
+
+extern "C" int MPI_Wait(MPI_Request* request, MPI_Status* status) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Wait(request, status);
+}
+
+extern "C" int MPI_Waitall(int count,
+                           MPI_Request requests[],
+                           MPI_Status statuses[]) {
+  if (neighborhood_protocol_probe::active) {
+    ++neighborhood_protocol_probe::point_to_point_calls;
+  }
+  return PMPI_Waitall(count, requests, statuses);
+}
+
 namespace {
-using parhip::mpi::communicator;
-using parhip::mpi::communicator_view;
 using parhip::mpi::all_to_all_v;
 using parhip::mpi::collective_options;
+using parhip::mpi::communicator;
+using parhip::mpi::communicator_view;
 using parhip::mpi::contiguous_owner_layout;
+using parhip::mpi::distributed_graph;
 using parhip::mpi::make_mpi_datatype;
+using parhip::mpi::neighbor_all_to_all_v;
 using parhip::mpi::run_with_exception_barrier;
 using parhip::mpi::runtime_is_active;
 using parhip::mpi::segmented_buffer;
 using parhip::mpi::topology;
+
+template <typename Operation>
+void require_common_mpi_error(Operation&& operation,
+                              std::string_view expected_context,
+                              communicator_view communicator) {
+  auto caught = 0;
+  auto structured = 0;
+  auto context_matches = 0;
+  try {
+    std::invoke(std::forward<Operation>(operation));
+  } catch (parhip::mpi::mpi_error const& error) {
+    caught = 1;
+    structured = 1;
+    context_matches =
+        error.context().find(expected_context) != std::string_view::npos;
+  } catch (...) {
+    caught = 1;
+  }
+
+  auto totals = std::array{caught, structured, context_matches};
+  auto global_totals = std::array{0, 0, 0};
+  REQUIRE(MPI_Allreduce(totals.data(), global_totals.data(),
+                        static_cast<int>(totals.size()), MPI_INT, MPI_SUM,
+                        communicator.native_handle()) == MPI_SUCCESS);
+  auto const size = communicator.size();
+  REQUIRE(global_totals == std::array{size, size, size});
+}
 
 TEST_CASE("contiguous ownership uses exact integer boundaries",
           "[unit][mpi][ownership]") {
@@ -190,19 +540,9 @@ TEST_CASE("exception barrier captures failures without letting them escape",
 }
 
 TEST_CASE("exported partition boundary is non-throwing", "[unit][mpi]") {
-  using partition_function = void(idxtype*,
-                                  idxtype*,
-                                  idxtype*,
-                                  idxtype*,
-                                  idxtype*,
-                                  int*,
-                                  double*,
-                                  bool,
-                                  int,
-                                  int,
-                                  int*,
-                                  idxtype*,
-                                  MPI_Comm*) noexcept;
+  using partition_function =
+      void(idxtype*, idxtype*, idxtype*, idxtype*, idxtype*, int*, double*,
+           bool, int, int, int*, idxtype*, MPI_Comm*) noexcept;
   STATIC_REQUIRE(
       std::is_same_v<decltype(&ParHIPPartitionKWay), partition_function*>);
 }
@@ -218,8 +558,8 @@ TEST_CASE("explicit Hana wire metadata produces array-safe extent",
 
   MPI_Aint lower_bound = -1;
   MPI_Aint extent = -1;
-  REQUIRE(MPI_Type_get_extent(datatype.native_handle(), &lower_bound, &extent) ==
-          MPI_SUCCESS);
+  REQUIRE(MPI_Type_get_extent(datatype.native_handle(), &lower_bound,
+                              &extent) == MPI_SUCCESS);
   REQUIRE(lower_bound == 0);
   REQUIRE(extent == static_cast<MPI_Aint>(sizeof(test_support::wire_entry)));
 }
@@ -247,9 +587,8 @@ TEST_CASE("wire-record exchange needs no default constructor", "[unit][mpi]") {
           segments),
       world);
 
-  REQUIRE(std::ranges::equal(
-      received.segment(static_cast<std::size_t>(rank)),
-      segments[static_cast<std::size_t>(rank)]));
+  REQUIRE(std::ranges::equal(received.segment(static_cast<std::size_t>(rank)),
+                             segments[static_cast<std::size_t>(rank)]));
 }
 
 TEST_CASE("segmented buffers expose canonical contiguous spans",
@@ -257,8 +596,8 @@ TEST_CASE("segmented buffers expose canonical contiguous spans",
   auto buffer = segmented_buffer<int>::from_segments(
       std::vector<std::vector<int>>{{1, 2}, {}, {3, 4, 5}});
 
-  REQUIRE(std::ranges::equal(buffer.storage(),
-                             std::vector<int>{1, 2, 3, 4, 5}));
+  REQUIRE(
+      std::ranges::equal(buffer.storage(), std::vector<int>{1, 2, 3, 4, 5}));
   REQUIRE(buffer.counts() == std::vector<std::size_t>{2, 0, 3});
   REQUIRE(buffer.offsets() == std::vector<std::size_t>{0, 2, 2});
   REQUIRE(std::ranges::equal(buffer.segment(0), std::array{1, 2}));
@@ -274,8 +613,8 @@ TEST_CASE("dense exchange preserves all-empty segments", "[unit][mpi]") {
   auto received = all_to_all_v(std::move(sends), world);
 
   REQUIRE(received.storage().empty());
-  REQUIRE(received.has_canonical_layout(
-      static_cast<std::size_t>(world.size())));
+  REQUIRE(
+      received.has_canonical_layout(static_cast<std::size_t>(world.size())));
   REQUIRE(std::ranges::all_of(received.counts(),
                               [](auto count) { return count == 0; }));
 }
@@ -294,13 +633,13 @@ TEST_CASE("dense exchange preserves self-only wire-record arrays",
       segmented_buffer<test_support::wire_entry>::from_segments(segments),
       world);
 
-  REQUIRE(received.has_canonical_layout(
-      static_cast<std::size_t>(world.size())));
+  REQUIRE(
+      received.has_canonical_layout(static_cast<std::size_t>(world.size())));
   for (int source = 0; source < world.size(); ++source) {
     if (source == rank) {
-      REQUIRE(std::ranges::equal(
-          received.segment(static_cast<std::size_t>(source)),
-          segments[static_cast<std::size_t>(rank)]));
+      REQUIRE(
+          std::ranges::equal(received.segment(static_cast<std::size_t>(source)),
+                             segments[static_cast<std::size_t>(rank)]));
     } else {
       REQUIRE(received.segment(static_cast<std::size_t>(source)).empty());
     }
@@ -321,11 +660,11 @@ TEST_CASE("dense uneven exchange returns canonical source segments",
     }
   }
 
-  auto received = all_to_all_v(
-      segmented_buffer<int>::from_segments(segments), world);
+  auto received =
+      all_to_all_v(segmented_buffer<int>::from_segments(segments), world);
 
-  REQUIRE(received.has_canonical_layout(
-      static_cast<std::size_t>(world.size())));
+  REQUIRE(
+      received.has_canonical_layout(static_cast<std::size_t>(world.size())));
   for (int source = 0; source < world.size(); ++source) {
     std::vector<int> expected;
     for (int index = 0; index < source + rank; ++index) {
@@ -346,23 +685,22 @@ TEST_CASE("zero-local-work ranks still participate in dense exchange",
     segments[0].push_back(rank * 7);
   }
 
-  auto received = all_to_all_v(
-      segmented_buffer<int>::from_segments(segments), world);
+  auto received =
+      all_to_all_v(segmented_buffer<int>::from_segments(segments), world);
 
   if (rank == 0) {
     REQUIRE(received.counts()[0] == 0);
     for (int source = 1; source < world.size(); ++source) {
-      REQUIRE(std::ranges::equal(
-          received.segment(static_cast<std::size_t>(source)),
-          std::array{source * 7}));
+      REQUIRE(
+          std::ranges::equal(received.segment(static_cast<std::size_t>(source)),
+                             std::array{source * 7}));
     }
   } else {
     REQUIRE(received.storage().empty());
   }
 }
 
-TEST_CASE("dense validation failure propagates to every rank",
-          "[unit][mpi]") {
+TEST_CASE("dense validation failure propagates to every rank", "[unit][mpi]") {
   communicator_view const world{MPI_COMM_WORLD};
   if (world.size() == 1) {
     return;
@@ -388,8 +726,7 @@ TEST_CASE("dense validation failure propagates to every rank",
   REQUIRE(threw);
 }
 
-TEST_CASE("forced MPI-3 bounded rounds preserve every element",
-          "[unit][mpi]") {
+TEST_CASE("forced MPI-3 bounded rounds preserve every element", "[unit][mpi]") {
   communicator_view const world{MPI_COMM_WORLD};
   auto const rank = world.rank();
   std::vector<std::vector<int>> segments(
@@ -402,16 +739,14 @@ TEST_CASE("forced MPI-3 bounded rounds preserve every element",
   }
 
   auto received = all_to_all_v(
-      segmented_buffer<int>::from_segments(segments),
-      world,
+      segmented_buffer<int>::from_segments(segments), world,
       collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
 
   for (int source = 0; source < world.size(); ++source) {
-    std::array expected{source * 10'000 + rank * 100,
-                        source * 10'000 + rank * 100 + 1,
-                        source * 10'000 + rank * 100 + 2,
-                        source * 10'000 + rank * 100 + 3,
-                        source * 10'000 + rank * 100 + 4};
+    std::array expected{
+        source * 10'000 + rank * 100, source * 10'000 + rank * 100 + 1,
+        source * 10'000 + rank * 100 + 2, source * 10'000 + rank * 100 + 3,
+        source * 10'000 + rank * 100 + 4};
     REQUIRE(std::ranges::equal(
         received.segment(static_cast<std::size_t>(source)), expected));
   }
@@ -428,8 +763,7 @@ TEST_CASE("forced MPI-3 rounds preserve self-only source segments",
   }
 
   auto received = all_to_all_v(
-      segmented_buffer<int>::from_segments(segments),
-      world,
+      segmented_buffer<int>::from_segments(segments), world,
       collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
 
   for (int source = 0; source < world.size(); ++source) {
@@ -456,8 +790,7 @@ TEST_CASE("forced MPI-3 rounds preserve uneven asymmetric segments",
   }
 
   auto received = all_to_all_v(
-      segmented_buffer<int>::from_segments(segments),
-      world,
+      segmented_buffer<int>::from_segments(segments), world,
       collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
 
   for (int source = 0; source < world.size(); ++source) {
@@ -487,8 +820,7 @@ TEST_CASE("forced MPI-3 rounds retain zero-work rank participation",
   }
 
   auto received = all_to_all_v(
-      segmented_buffer<int>::from_segments(segments),
-      world,
+      segmented_buffer<int>::from_segments(segments), world,
       collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
 
   if (rank == 0) {
@@ -496,14 +828,511 @@ TEST_CASE("forced MPI-3 rounds retain zero-work rank participation",
   } else {
     REQUIRE(received.segment(0).empty());
     for (int source = 1; source < world.size(); ++source) {
-      std::array expected{source * 10'000 + rank * 100,
-                          source * 10'000 + rank * 100 + 1,
-                          source * 10'000 + rank * 100 + 2,
-                          source * 10'000 + rank * 100 + 3,
-                          source * 10'000 + rank * 100 + 4};
+      std::array expected{
+          source * 10'000 + rank * 100, source * 10'000 + rank * 100 + 1,
+          source * 10'000 + rank * 100 + 2, source * 10'000 + rank * 100 + 3,
+          source * 10'000 + rank * 100 + 4};
       REQUIRE(std::ranges::equal(
           received.segment(static_cast<std::size_t>(source)), expected));
     }
   }
+}
+
+TEST_CASE("distributed graph preserves zero-degree ranks",
+          "[unit][mpi][neighbor][topology][zero]") {
+  communicator_view const world{MPI_COMM_WORLD};
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  distributed_graph graph{world, {}};
+  neighborhood_protocol_probe::active = false;
+
+  REQUIRE(graph.sources().empty());
+  REQUIRE(graph.destinations().empty());
+  REQUIRE_FALSE(graph.source_index(world.rank()).has_value());
+  REQUIRE_FALSE(graph.destination_index(world.rank()).has_value());
+  REQUIRE(neighborhood_protocol_probe::dist_graph_create_calls == 1);
+
+  int topology_kind = MPI_UNDEFINED;
+  REQUIRE(MPI_Topo_test(graph.native_handle(), &topology_kind) == MPI_SUCCESS);
+  REQUIRE(topology_kind == MPI_DIST_GRAPH);
+
+  MPI_Errhandler handler = MPI_ERRHANDLER_NULL;
+  REQUIRE(MPI_Comm_get_errhandler(graph.native_handle(), &handler) ==
+          MPI_SUCCESS);
+  REQUIRE(handler == MPI_ERRORS_RETURN);
+  REQUIRE(MPI_Errhandler_free(&handler) == MPI_SUCCESS);
+}
+
+TEST_CASE("distributed graph does not alter its caller error handler",
+          "[unit][mpi][neighbor][topology][handler]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  communicator caller{world};
+  REQUIRE(MPI_Comm_set_errhandler(caller.native_handle(),
+                                  MPI_ERRORS_ARE_FATAL) == MPI_SUCCESS);
+
+  distributed_graph graph{caller.view(), {world.rank()}};
+
+  MPI_Errhandler caller_handler = MPI_ERRHANDLER_NULL;
+  REQUIRE(MPI_Comm_get_errhandler(caller.native_handle(), &caller_handler) ==
+          MPI_SUCCESS);
+  REQUIRE(caller_handler == MPI_ERRORS_ARE_FATAL);
+  REQUIRE(MPI_Errhandler_free(&caller_handler) == MPI_SUCCESS);
+
+  MPI_Errhandler graph_handler = MPI_ERRHANDLER_NULL;
+  REQUIRE(MPI_Comm_get_errhandler(graph.native_handle(), &graph_handler) ==
+          MPI_SUCCESS);
+  REQUIRE(graph_handler == MPI_ERRORS_RETURN);
+  REQUIRE(MPI_Errhandler_free(&graph_handler) == MPI_SUCCESS);
+}
+
+TEST_CASE("distributed graph normalizes unsorted duplicate destinations",
+          "[unit][mpi][neighbor][topology][normalization]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  auto const next = (rank + 1) % world.size();
+  distributed_graph graph{world, {next, rank, next, rank}};
+
+  auto actual_destinations = std::vector<int>(graph.destinations().begin(),
+                                              graph.destinations().end());
+  std::ranges::sort(actual_destinations);
+  auto expected_destinations = std::vector<int>{rank};
+  if (next != rank) {
+    expected_destinations.push_back(next);
+    std::ranges::sort(expected_destinations);
+  }
+  REQUIRE(actual_destinations == expected_destinations);
+
+  auto const previous = (rank - 1 + world.size()) % world.size();
+  auto actual_sources =
+      std::vector<int>(graph.sources().begin(), graph.sources().end());
+  std::ranges::sort(actual_sources);
+  auto expected_sources = std::vector<int>{rank};
+  if (previous != rank) {
+    expected_sources.push_back(previous);
+    std::ranges::sort(expected_sources);
+  }
+  REQUIRE(actual_sources == expected_sources);
+
+  for (std::size_t index = 0; index < graph.destinations().size(); ++index) {
+    REQUIRE(graph.destination_index(graph.destinations()[index]) == index);
+  }
+  for (std::size_t index = 0; index < graph.sources().size(); ++index) {
+    REQUIRE(graph.source_index(graph.sources()[index]) == index);
+  }
+  REQUIRE_FALSE(graph.source_index(world.size()).has_value());
+  REQUIRE_FALSE(graph.destination_index(world.size()).has_value());
+
+  auto indegree = 0;
+  auto outdegree = 0;
+  auto weighted = 0;
+  REQUIRE(MPI_Dist_graph_neighbors_count(graph.native_handle(), &indegree,
+                                         &outdegree, &weighted) == MPI_SUCCESS);
+  auto queried_sources = std::vector<int>(static_cast<std::size_t>(indegree));
+  auto queried_destinations =
+      std::vector<int>(static_cast<std::size_t>(outdegree));
+  REQUIRE(MPI_Dist_graph_neighbors(graph.native_handle(), indegree,
+                                   queried_sources.data(), MPI_UNWEIGHTED,
+                                   outdegree, queried_destinations.data(),
+                                   MPI_UNWEIGHTED) == MPI_SUCCESS);
+  REQUIRE(std::ranges::equal(graph.sources(), queried_sources));
+  REQUIRE(std::ranges::equal(graph.destinations(), queried_destinations));
+}
+
+TEST_CASE(
+    "distributed graph represents asymmetric source destination and isolated "
+    "ranks",
+    "[unit][mpi][neighbor][topology][asymmetric]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() < 3) {
+    return;
+  }
+
+  auto outgoing = std::vector<int>{};
+  if (world.rank() == 0) {
+    for (int destination = 1; destination < world.size() - 1; ++destination) {
+      outgoing.push_back(destination);
+    }
+  }
+  distributed_graph graph{world, std::move(outgoing)};
+
+  if (world.rank() == 0) {
+    REQUIRE(graph.sources().empty());
+    REQUIRE(graph.destinations().size() ==
+            static_cast<std::size_t>(world.size() - 2));
+  } else if (world.rank() == world.size() - 1) {
+    REQUIRE(graph.sources().empty());
+    REQUIRE(graph.destinations().empty());
+  } else {
+    REQUIRE(std::ranges::equal(graph.sources(), std::array{0}));
+    REQUIRE(graph.destinations().empty());
+  }
+}
+
+TEST_CASE("distributed graph owns one movable communicator",
+          "[unit][mpi][neighbor][topology][ownership]") {
+  STATIC_REQUIRE_FALSE(std::is_copy_constructible_v<distributed_graph>);
+  STATIC_REQUIRE(std::is_move_constructible_v<distributed_graph>);
+  STATIC_REQUIRE_FALSE(std::is_copy_assignable_v<distributed_graph>);
+  STATIC_REQUIRE(std::is_move_assignable_v<distributed_graph>);
+
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph original{world, {world.rank()}};
+  distributed_graph moved{std::move(original)};
+  REQUIRE(original.native_handle() == MPI_COMM_NULL);
+  REQUIRE(moved.native_handle() != MPI_COMM_NULL);
+
+  distributed_graph replacement{world, {}};
+  replacement = std::move(moved);
+  REQUIRE(moved.native_handle() == MPI_COMM_NULL);
+  REQUIRE(
+      std::ranges::equal(replacement.destinations(), std::array{world.rank()}));
+}
+
+TEST_CASE(
+    "distributed graph rejects an invalid destination collectively before "
+    "creation",
+    "[unit][mpi][neighbor][topology][failure]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto outgoing = std::vector<int>{};
+  if (world.rank() == 0) {
+    outgoing.push_back(world.size());
+  }
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  require_common_mpi_error(
+      [&] {
+        distributed_graph invalid{world, outgoing};
+        static_cast<void>(invalid);
+      },
+      "distributed graph destination validation", world);
+  neighborhood_protocol_probe::active = false;
+  REQUIRE(neighborhood_protocol_probe::dist_graph_create_calls == 0);
+}
+
+TEST_CASE(
+    "neighborhood exchange preserves an all-zero topology without point to "
+    "point calls",
+    "[unit][mpi][neighbor][exchange][zero]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {}};
+  auto sends =
+      segmented_buffer<int>::from_segments(std::vector<std::vector<int>>{});
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  auto received = neighbor_all_to_all_v(std::move(sends), graph);
+  neighborhood_protocol_probe::active = false;
+
+  REQUIRE(received.storage().empty());
+  REQUIRE(received.segment_count() == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls +
+              neighborhood_protocol_probe::neighbor_payload_c_calls ==
+          1);
+  REQUIRE(neighborhood_protocol_probe::point_to_point_calls == 0);
+}
+
+TEST_CASE("neighborhood exchange preserves self-only typed arrays",
+          "[unit][mpi][neighbor][exchange][self]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  distributed_graph graph{world, {rank}};
+  auto const expected = std::vector<test_support::wire_entry>{
+      {static_cast<std::uint64_t>(rank * 10 + 1), rank, 1.25},
+      {static_cast<std::uint64_t>(rank * 10 + 2), rank, 2.5}};
+  auto sends = segmented_buffer<test_support::wire_entry>::from_segments(
+      std::vector<std::vector<test_support::wire_entry>>{expected});
+
+  auto received = neighbor_all_to_all_v(std::move(sends), graph);
+
+  REQUIRE(std::ranges::equal(graph.sources(), std::array{rank}));
+  REQUIRE(received.segment_count() == 1);
+  REQUIRE(std::ranges::equal(received.segment(0), expected));
+}
+
+TEST_CASE("neighborhood exchange follows authoritative queried neighbor order",
+          "[unit][mpi][neighbor][exchange][order][uneven]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto const rank = world.rank();
+  auto const next = (rank + 1) % world.size();
+  distributed_graph graph{world, {next, rank}};
+
+  auto segments = std::vector<std::vector<int>>{};
+  segments.reserve(graph.destinations().size());
+  for (auto const destination : graph.destinations()) {
+    auto values = std::vector<int>{};
+    auto const count = (rank + destination) % 3;
+    for (int index = 0; index < count; ++index) {
+      values.push_back(rank * 10'000 + destination * 100 + index);
+    }
+    segments.push_back(std::move(values));
+  }
+
+  auto received = neighbor_all_to_all_v(
+      segmented_buffer<int>::from_segments(segments), graph);
+
+  REQUIRE(received.segment_count() == graph.sources().size());
+  for (std::size_t index = 0; index < graph.sources().size(); ++index) {
+    auto const source = graph.sources()[index];
+    auto expected = std::vector<int>{};
+    auto const count = (source + rank) % 3;
+    for (int element = 0; element < count; ++element) {
+      expected.push_back(source * 10'000 + rank * 100 + element);
+    }
+    REQUIRE(std::ranges::equal(received.segment(index), expected));
+  }
+}
+
+TEST_CASE("neighborhood exchange supports an asymmetric star",
+          "[unit][mpi][neighbor][exchange][asymmetric]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() < 3) {
+    return;
+  }
+  auto outgoing = std::vector<int>{};
+  if (world.rank() == 0) {
+    for (int destination = 1; destination < world.size() - 1; ++destination) {
+      outgoing.push_back(destination);
+    }
+  }
+  distributed_graph graph{world, std::move(outgoing)};
+
+  auto segments = std::vector<std::vector<int>>{};
+  for (auto const destination : graph.destinations()) {
+    auto values = std::vector<int>{};
+    for (int index = 0; index < destination; ++index) {
+      values.push_back(destination * 100 + index);
+    }
+    segments.push_back(std::move(values));
+  }
+  auto received = neighbor_all_to_all_v(
+      segmented_buffer<int>::from_segments(segments), graph);
+
+  if (world.rank() == 0 || world.rank() == world.size() - 1) {
+    REQUIRE(received.storage().empty());
+  } else {
+    REQUIRE(std::ranges::equal(graph.sources(), std::array{0}));
+    auto expected = std::vector<int>{};
+    for (int index = 0; index < world.rank(); ++index) {
+      expected.push_back(world.rank() * 100 + index);
+    }
+    REQUIRE(std::ranges::equal(received.segment(0), expected));
+  }
+}
+
+TEST_CASE("neighborhood exchange supports a reversed asymmetric star",
+          "[unit][mpi][neighbor][exchange][asymmetric]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() < 3) {
+    return;
+  }
+  auto outgoing = world.rank() == 0 ? std::vector<int>{} : std::vector<int>{0};
+  distributed_graph graph{world, std::move(outgoing)};
+
+  auto segments = std::vector<std::vector<int>>{};
+  for (auto const destination : graph.destinations()) {
+    segments.push_back({world.rank() * 100 + destination});
+  }
+  auto received = neighbor_all_to_all_v(
+      segmented_buffer<int>::from_segments(segments), graph);
+
+  if (world.rank() == 0) {
+    REQUIRE(graph.destinations().empty());
+    REQUIRE(received.segment_count() ==
+            static_cast<std::size_t>(world.size() - 1));
+    for (std::size_t index = 0; index < graph.sources().size(); ++index) {
+      REQUIRE(std::ranges::equal(received.segment(index),
+                                 std::array{graph.sources()[index] * 100}));
+    }
+  } else {
+    REQUIRE(graph.sources().empty());
+    REQUIRE(received.storage().empty());
+  }
+}
+
+TEST_CASE("forced MPI-3 neighborhood rounds preserve asymmetric payloads",
+          "[unit][mpi][neighbor][exchange][mpi3][bounded]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  auto outgoing = std::vector<int>{};
+  if (world.size() == 1) {
+    outgoing.push_back(0);
+  } else if (world.rank() == 0) {
+    for (int destination = 1; destination < world.size(); ++destination) {
+      outgoing.push_back(destination);
+    }
+  }
+  distributed_graph graph{world, std::move(outgoing)};
+
+  auto segments = std::vector<std::vector<int>>{};
+  for (auto const destination : graph.destinations()) {
+    auto values = std::vector<int>{};
+    for (int index = 0; index < 5; ++index) {
+      values.push_back(world.rank() * 10'000 + destination * 100 + index);
+    }
+    segments.push_back(std::move(values));
+  }
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  auto received = neighbor_all_to_all_v(
+      segmented_buffer<int>::from_segments(segments), graph,
+      collective_options{.mpi3_round_ceiling = 2, .force_mpi3 = true});
+  neighborhood_protocol_probe::active = false;
+
+  if (world.size() == 1 || world.rank() != 0) {
+    REQUIRE(received.segment_count() == 1);
+    constexpr auto source = 0;
+    auto expected = std::vector<int>{};
+    for (int index = 0; index < 5; ++index) {
+      expected.push_back(source * 10'000 + world.rank() * 100 + index);
+    }
+    REQUIRE(std::ranges::equal(received.segment(0), expected));
+  } else {
+    REQUIRE(received.storage().empty());
+  }
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
+  auto const expected_payload_calls =
+      3 * (world.size() == 1 ? 1 : world.size() - 1);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls ==
+          expected_payload_calls);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::maximum_active_send_segments <= 1);
+  REQUIRE(neighborhood_protocol_probe::maximum_active_receive_segments <= 1);
+  REQUIRE(neighborhood_protocol_probe::maximum_payload_count <= 2);
+  REQUIRE(neighborhood_protocol_probe::nonzero_displacement_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::point_to_point_calls == 0);
+}
+
+TEST_CASE(
+    "neighborhood exchange rejects a malformed segment count collectively",
+    "[unit][mpi][neighbor][exchange][failure]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+  auto segments = world.rank() == 0
+                      ? std::vector<std::vector<int>>{}
+                      : std::vector<std::vector<int>>{{world.rank()}};
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  require_common_mpi_error(
+      [&] {
+        static_cast<void>(neighbor_all_to_all_v(
+            segmented_buffer<int>::from_segments(segments), graph));
+      },
+      "neighbor_all_to_all_v collective input validation", world);
+  neighborhood_protocol_probe::active = false;
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
+}
+
+TEST_CASE("neighborhood receive offset overflow is common and pre-payload",
+          "[unit][mpi][neighbor][exchange][failure][overflow]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() < 3) {
+    return;
+  }
+  auto outgoing = world.rank() == 0 ? std::vector<int>{} : std::vector<int>{0};
+  distributed_graph graph{world, std::move(outgoing)};
+  auto segments = std::vector<std::vector<int>>(graph.destinations().size(),
+                                                std::vector<int>{world.rank()});
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::inject_receive_count_overflow = true;
+  neighborhood_protocol_probe::active = true;
+  require_common_mpi_error(
+      [&] {
+        static_cast<void>(neighbor_all_to_all_v(
+            segmented_buffer<int>::from_segments(segments), graph));
+      },
+      "neighbor_all_to_all_v receive layout validation", world);
+  neighborhood_protocol_probe::active = false;
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
+}
+
+TEST_CASE("neighborhood receive byte size overflow is common and pre-allocation",
+          "[unit][mpi][neighbor][exchange][failure][overflow]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+  auto const value = test_support::wire_entry{
+      static_cast<std::uint64_t>(world.rank()), world.rank(), 1.0};
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::inject_receive_byte_size_overflow = true;
+  neighborhood_protocol_probe::active = true;
+  require_common_mpi_error(
+      [&] {
+        static_cast<void>(neighbor_all_to_all_v(
+            segmented_buffer<test_support::wire_entry>::from_segments(
+                std::vector<std::vector<test_support::wire_entry>>{{value}}),
+            graph));
+      },
+      "neighbor_all_to_all_v receive layout validation", world);
+  neighborhood_protocol_probe::active = false;
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 1);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
+}
+
+TEST_CASE("neighborhood exchange rejects mismatched MPI-3 options collectively",
+          "[unit][mpi][neighbor][exchange][failure][options]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  if (world.size() == 1) {
+    return;
+  }
+  distributed_graph graph{world, {world.rank()}};
+  auto options = collective_options{
+      .mpi3_round_ceiling = world.rank() == 0 ? 1U : 2U, .force_mpi3 = true};
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  require_common_mpi_error(
+      [&] {
+        static_cast<void>(neighbor_all_to_all_v(
+            segmented_buffer<int>::from_segments(
+                std::vector<std::vector<int>>{{world.rank()}}),
+            graph, options));
+      },
+      "neighbor_all_to_all_v collective options", world);
+  neighborhood_protocol_probe::active = false;
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
+}
+
+TEST_CASE("neighborhood exchange rejects a zero MPI-3 ceiling before counts",
+          "[unit][mpi][neighbor][exchange][failure][options]") {
+  communicator_view const world{MPI_COMM_WORLD};
+  distributed_graph graph{world, {world.rank()}};
+
+  neighborhood_protocol_probe::reset();
+  neighborhood_protocol_probe::active = true;
+  require_common_mpi_error(
+      [&] {
+        static_cast<void>(neighbor_all_to_all_v(
+            segmented_buffer<int>::from_segments(
+                std::vector<std::vector<int>>{{world.rank()}}),
+            graph,
+            collective_options{.mpi3_round_ceiling = 0, .force_mpi3 = true}));
+      },
+      "neighbor_all_to_all_v collective options", world);
+  neighborhood_protocol_probe::active = false;
+  REQUIRE(neighborhood_protocol_probe::neighbor_count_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_calls == 0);
+  REQUIRE(neighborhood_protocol_probe::neighbor_payload_c_calls == 0);
+}
+
+TEST_CASE("neighbor large-count capability reflects the generated probe",
+          "[unit][mpi][neighbor][capability]") {
+#if defined(KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C)
+  STATIC_REQUIRE(parhip::mpi::capabilities::has_neighbor_alltoallv_c ==
+                 (KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C != 0));
+#else
+  FAIL("generated MPI neighborhood capability macro is missing");
+#endif
 }
 }  // namespace
