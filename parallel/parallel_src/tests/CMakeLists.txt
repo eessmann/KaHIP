@@ -1074,6 +1074,106 @@ add_ghost_label_failure_test(
 )
 
 add_executable(
+    population_size_broadcast_mpi_test
+    communication/population_size_broadcast_mpi_test.cpp
+)
+target_sources(
+    population_size_broadcast_mpi_test
+    PRIVATE
+        FILE_SET shared_population_size_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+        FILES
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
+)
+target_link_libraries(
+    population_size_broadcast_mpi_test
+    PRIVATE
+        catch_mpi_runner
+        MPI::MPI_CXX
+        spdlog::spdlog
+        kahip_options
+        kahip_warnings
+)
+add_test(
+    NAME unit-pmpi-callback-safety-population-size
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/communication/population_size_broadcast_mpi_test.cpp"
+        "-DPROFILE=population-size"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-population-size
+    PROPERTIES TIMEOUT 5
+)
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-population-size-broadcast-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:population_size_broadcast_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-population-size-broadcast-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 10
+    )
+endforeach()
+
+add_executable(
+    population_size_broadcast_failure_probe
+    communication/population_size_broadcast_failure_probe.cpp
+)
+target_sources(
+    population_size_broadcast_failure_probe
+    PRIVATE
+        FILE_SET shared_population_size_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+        FILES
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
+)
+target_link_libraries(
+    population_size_broadcast_failure_probe
+    PRIVATE MPI::MPI_CXX spdlog::spdlog kahip_options kahip_warnings
+)
+add_test(
+    NAME unit-pmpi-callback-safety-population-size-failure
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/communication/population_size_broadcast_failure_probe.cpp"
+        "-DPROFILE=population-size-failure"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-population-size-failure
+    PROPERTIES TIMEOUT 5
+)
+add_test(
+    NAME unit-population-size-broadcast-failure
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+        "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+        "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+        "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+        "-DPROBE=$<TARGET_FILE:population_size_broadcast_failure_probe>"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_population_size_broadcast_failure.cmake"
+)
+set_tests_properties(
+    unit-population-size-broadcast-failure
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+)
+
+add_executable(
     parallel_graph_lifecycle_probe
     distributed_consistency/parallel_graph_lifecycle_probe.cpp
 )

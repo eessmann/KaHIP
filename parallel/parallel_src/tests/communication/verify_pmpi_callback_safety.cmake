@@ -114,6 +114,28 @@ elseif(PROFILE STREQUAL "ghost-label-failure")
         [=[static_assert *\( *noexcept *\( *ghost_failure_probe::corrupt_completed_incremental_payload *\( *\) *\) *\) *[;]]=]
         [=[static_assert *\( *noexcept *\( *ghost_failure_probe::expected_abort_state *\( *\) *\) *\) *[;]]=]
     )
+elseif(PROFILE STREQUAL "population-size")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+observe_broadcast\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *population_size_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *population_size_probe::observe_broadcast *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "population-size-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *population_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *population_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
 else()
     message(FATAL_ERROR "unknown PMPI callback audit PROFILE: ${PROFILE}")
 endif()

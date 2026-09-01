@@ -74,6 +74,7 @@ option(KAHIP_ENABLE_MPI_TRACE "enable canonical ParHIP MPI stage tracing" OFF)
 if(NOT NOMPI)
     # Always look for MPI since kaffpaE also requires it
     find_package(MPI 3.1 REQUIRED COMPONENTS C CXX)
+    find_package(spdlog CONFIG REQUIRED)
 
     if(${MPI_C_FOUND})
         message(
@@ -276,6 +277,7 @@ if(NOT NOMPI)
     target_link_libraries(
         kahip_collective_obj
         PUBLIC MPI::MPI_CXX
+        PRIVATE spdlog::spdlog
     )
 endif()
 
@@ -587,7 +589,6 @@ install(
 # ParHIP
 if(NOT NOMPI AND PARHIP)
     find_package(fmt CONFIG REQUIRED)
-    find_package(spdlog CONFIG REQUIRED)
     find_package(Boost CONFIG REQUIRED COMPONENTS hana mp11)
     if(BUILD_TESTING)
         find_package(Catch2 3 CONFIG REQUIRED)

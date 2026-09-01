@@ -18,6 +18,7 @@
 #include "graph_io.h"
 #include "graph_partitioner.h"
 #include "parallel_mh_async.h"
+#include "parallel_mh/population_size_broadcast.h"
 #include "quality_metrics.h"
 #include "random_functions.h"
 namespace kahip::modified {
@@ -112,8 +113,7 @@ void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_c
 void parallel_mh_async::initialize(PartitionConfig & working_config, graph_access & G) {
   // each PE performs a partitioning
   // estimate the runtime of a partitioner call
-  // calculate the poolsize and async Bcast the poolsize.
-  // recv. has to be sync
+  // calculate the poolsize and broadcast it to the communicator.
   Individuum first_one;
   m_t.restart();
   if( !working_config.mh_easy_construction) {
@@ -137,27 +137,14 @@ void parallel_mh_async::initialize(PartitionConfig & working_config, graph_acces
   //compute S and Bcast
   int population_size = 1;
   double fraction     = working_config.mh_initial_population_fraction;
-  int POPSIZE_TAG     = 10;
 
   if( m_rank == ROOT ) {
     double fraction_to_spend_for_IP = (double)m_time_limit / fraction;
     population_size                 = ceil(fraction_to_spend_for_IP / time_spend);
-
-    for( int target = 1; target < m_size; target++) {
-      MPI_Request rq;
-      MPI_Isend(&population_size, 1, MPI_INT, target, POPSIZE_TAG, m_communicator, &rq);
-    }
-  } else {
-    MPI_Status rst;
-    MPI_Recv(&population_size, 1, MPI_INT, ROOT, POPSIZE_TAG, m_communicator, &rst);
   }
 
-  population_size = std::max(3, population_size);
-  if(working_config.mh_easy_construction) {
-    population_size = std::min(50, population_size);
-  } else {
-    population_size = std::min(100, population_size);
-  }
+  population_size = ::kahip::parallel_mh::broadcast_population_size(
+      m_communicator, population_size, working_config.mh_easy_construction);
   std::cout <<  "poolsize = " <<  population_size  << std::endl;
 
   //set S
@@ -326,4 +313,3 @@ EdgeWeight parallel_mh_async::perform_local_partitioning(PartitionConfig & worki
   return min_objective;
 }
 }
-

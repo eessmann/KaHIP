@@ -128,7 +128,17 @@ kahip_add_private_header_set(
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${MODIFIED_KAHIP_COLLECTIVE_HEADERS}
 )
+target_sources(
+    modified_kahip_collective_obj
+    PRIVATE
+        FILE_SET shared_population_size_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+        FILES
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
+)
 kahip_configure_modified_object(modified_kahip_collective_obj)
+target_link_libraries(modified_kahip_collective_obj PRIVATE spdlog::spdlog)
 
 add_library(libmodified_kahip_interface STATIC interface/kaHIP_interface.cpp)
 kahip_add_private_header_set(
