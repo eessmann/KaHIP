@@ -14,6 +14,7 @@ enum class failure_mode {
   semantic_factory_resource,
   error_string_secondary,
   wrong_topology,
+  capacity_resolver,
 };
 
 auto selected_mode = failure_mode::pre_init_error;
@@ -24,6 +25,7 @@ auto track_next_duplicate = false;
 auto tracked_communicator = MPI_COMM_NULL;
 auto error_string_attempts = 0;
 auto cleanup_attempts = 0;
+auto capacity_allreduce_attempts = 0;
 auto cached_rank = -1;
 
 constexpr auto original_backend_error = 17291;
@@ -55,6 +57,8 @@ void record_pre_initialization_mpi_call(char const* operation) noexcept {
         return "backend";
       case failure_mode::wrong_topology:
         return "topology";
+      case failure_mode::capacity_resolver:
+        return "capacity";
       case failure_mode::pre_init_error:
         break;
     }
@@ -146,12 +150,35 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int error_code) {
     auto const affected = affected_name(communicator);
     std::fprintf(stderr,
                  "observed MPI_Abort rank=%d affected=%.*s "
-                 "error-string-attempts=%d cleanup-attempts=%d\n",
+                 "error-string-attempts=%d cleanup-attempts=%d "
+                 "capacity-allreduce-attempts=%d\n",
                  cached_rank, static_cast<int>(affected.size()),
-                 affected.data(), error_string_attempts, cleanup_attempts);
+                 affected.data(), error_string_attempts, cleanup_attempts,
+                 capacity_allreduce_attempts);
     std::_Exit(86);
   }
   return PMPI_Abort(communicator, error_code);
+}
+
+extern "C" int MPI_Allreduce(void const* send_buffer,
+                             void* receive_buffer,
+                             int count,
+                             MPI_Datatype datatype,
+                             MPI_Op operation,
+                             MPI_Comm communicator) {
+  if (injection_is_armed) {
+    if (selected_mode != failure_mode::capacity_resolver) {
+      forbidden_failure_path_call("MPI_Allreduce");
+    }
+    ++capacity_allreduce_attempts;
+    if (capacity_allreduce_attempts != 1 || send_buffer == nullptr ||
+        receive_buffer == nullptr || count != 2 || datatype != MPI_UINT64_T ||
+        operation != MPI_BOR || communicator != tracked_communicator) {
+      forbidden_failure_path_call("MPI_Allreduce(capacity resolver shape)");
+    }
+  }
+  return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype, operation,
+                        communicator);
 }
 
 extern "C" int MPI_Comm_dup(MPI_Comm communicator,
@@ -241,6 +268,28 @@ auto run_pre_initialization_control() -> int {
   }
   returned_from_failure("wrong-topology");
 }
+
+[[noreturn]] void run_capacity_resolver_failure() {
+  auto affected =
+      parhip::mpi::communicator{parhip::mpi::communicator_view{MPI_COMM_WORLD}};
+  tracked_communicator = affected.native_handle();
+  injection_is_armed = true;
+
+  auto local = parhip::mpi::capacity_result{};
+  if (cached_rank == 0) {
+    local = parhip::mpi::with_fatal_capacity_issue(
+        local, parhip::mpi::capacity_issue::cumulative_offset_overflow);
+    std::fputs("injected rank-zero fatal capacity issue\n", stderr);
+  } else {
+    local = parhip::mpi::with_bounded_capacity_issue(
+        local,
+        parhip::mpi::capacity_issue::collective_layout_not_representable);
+  }
+  static_cast<void>(parhip::mpi::resolve_capacity_collectively(
+      local, affected.native_handle(), affected.native_handle(),
+      "capacity resolver probe"));
+  returned_from_failure("capacity-resolver");
+}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -259,6 +308,8 @@ int main(int argc, char* argv[]) {
     selected_mode = failure_mode::error_string_secondary;
   } else if (mode == "wrong-topology") {
     selected_mode = failure_mode::wrong_topology;
+  } else if (mode == "capacity-resolver") {
+    selected_mode = failure_mode::capacity_resolver;
   } else {
     std::fprintf(stderr, "unknown failure-policy mode: %s\n", argv[1]);
     return 64;
@@ -282,6 +333,8 @@ int main(int argc, char* argv[]) {
       run_error_string_secondary_failure();
     case failure_mode::wrong_topology:
       run_wrong_topology_failure();
+    case failure_mode::capacity_resolver:
+      run_capacity_resolver_failure();
     case failure_mode::pre_init_error:
       break;
   }

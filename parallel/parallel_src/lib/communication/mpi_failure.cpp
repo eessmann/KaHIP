@@ -181,6 +181,72 @@ auto runtime_is_active() noexcept -> bool {
   std::abort();
 }
 
+[[noreturn]] void abort_on_capacity_failure(
+    MPI_Comm communicator,
+    std::string_view boundary,
+    std::string_view issue_diagnostic) noexcept {
+  try {
+    spdlog::critical("MPI adapter capacity failure: {}: {}", boundary,
+                     issue_diagnostic);
+  } catch (...) {
+    // Logging and formatting failures must not replace capacity termination.
+  }
+  if (runtime_is_active()) {
+    auto const affected =
+        communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
+    MPI_Abort(affected, EXIT_FAILURE);
+  }
+  std::abort();
+}
+
+auto resolve_capacity_collectively(capacity_result local,
+                                   MPI_Comm convergence_communicator,
+                                   MPI_Comm abort_communicator,
+                                   std::string_view boundary) noexcept
+    -> capacity_route {
+  if (!runtime_is_active()) {
+    abort_on_inactive_mpi_ownership("capacity resolution");
+  }
+  if (convergence_communicator == MPI_COMM_NULL) {
+    abort_on_programming_error(
+        abort_communicator,
+        "capacity resolution requires a live convergence intracommunicator");
+  }
+
+  auto is_intercommunicator = 0;
+  check_or_abort(
+      MPI_Comm_test_inter(convergence_communicator, &is_intercommunicator),
+      convergence_communicator, "MPI_Comm_test_inter(capacity resolution)");
+  if (is_intercommunicator != 0) {
+    abort_on_programming_error(
+        abort_communicator,
+        "capacity resolution requires a live convergence intracommunicator");
+  }
+
+  auto const local_masks = std::array{
+      local.fatal_issues,
+      local.bounded_fallback_issues,
+  };
+  auto global_masks = std::array<std::uint64_t, 2>{};
+  check_or_abort(MPI_Allreduce(local_masks.data(), global_masks.data(),
+                               static_cast<int>(global_masks.size()),
+                               MPI_UINT64_T, MPI_BOR, convergence_communicator),
+                 convergence_communicator,
+                 "MPI_Allreduce(capacity resolution)");
+
+  auto const global = capacity_result{
+      .fatal_issues = global_masks[0],
+      .bounded_fallback_issues = global_masks[1],
+  };
+  if (auto const fatal_issue = first_fatal_capacity_issue(global);
+      fatal_issue.has_value()) {
+    abort_on_capacity_failure(abort_communicator, boundary,
+                              capacity_issue_diagnostic(*fatal_issue));
+  }
+  return global.bounded_fallback_issues != 0 ? capacity_route::bounded
+                                             : capacity_route::direct;
+}
+
 [[noreturn]] void abort_on_inactive_mpi_ownership(
     std::string_view context) noexcept {
   try {

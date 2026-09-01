@@ -720,6 +720,14 @@ add_mpi_failure_policy_death_test(
     "captured wrong-topology internal duplicate"
     "affected=topology error-string-attempts=0 cleanup-attempts=0"
 )
+add_mpi_failure_policy_death_test(
+    capacity-resolver-failure
+    capacity-resolver
+    "MPI adapter capacity failure:"
+    "capacity resolver probe: cumulative element offset exceeds local size_t capacity"
+    "injected rank-zero fatal capacity issue"
+    "affected=capacity error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1"
+)
 
 add_executable(
     parallel_graph_consistency_mpi_test

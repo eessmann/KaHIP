@@ -79,6 +79,25 @@ class activation final {
 };
 }  // namespace semantic_error_protocol_probe
 
+namespace capacity_protocol_probe {
+inline bool active = false;
+inline int allreduce_calls = 0;
+inline bool signature_matches = true;
+
+class activation final {
+ public:
+  activation() noexcept {
+    allreduce_calls = 0;
+    signature_matches = true;
+    active = true;
+  }
+  ~activation() noexcept { active = false; }
+
+  activation(activation const&) = delete;
+  auto operator=(activation const&) -> activation& = delete;
+};
+}  // namespace capacity_protocol_probe
+
 extern "C" int MPI_Error_string(int error_code,
                                 char* error_text,
                                 int* error_text_length) {
@@ -86,6 +105,23 @@ extern "C" int MPI_Error_string(int error_code,
     ++semantic_error_protocol_probe::error_string_calls;
   }
   return PMPI_Error_string(error_code, error_text, error_text_length);
+}
+
+extern "C" int MPI_Allreduce(void const* send_buffer,
+                             void* receive_buffer,
+                             int count,
+                             MPI_Datatype datatype,
+                             MPI_Op operation,
+                             MPI_Comm communicator) {
+  if (capacity_protocol_probe::active) {
+    ++capacity_protocol_probe::allreduce_calls;
+    capacity_protocol_probe::signature_matches =
+        capacity_protocol_probe::signature_matches && send_buffer != nullptr &&
+        receive_buffer != nullptr && count == 2 && datatype == MPI_UINT64_T &&
+        operation == MPI_BOR;
+  }
+  return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype, operation,
+                        communicator);
 }
 
 namespace neighborhood_protocol_probe {
@@ -407,18 +443,30 @@ extern "C" int MPI_Waitall(int count,
 namespace {
 using parhip::mpi::agree_collectively;
 using parhip::mpi::all_to_all_v;
+using parhip::mpi::capacity_issue;
+using parhip::mpi::capacity_issue_diagnostic;
+using parhip::mpi::capacity_issue_mask;
+using parhip::mpi::capacity_result;
+using parhip::mpi::capacity_route;
+using parhip::mpi::capacity_route_for;
 using parhip::mpi::collective_options;
 using parhip::mpi::communicator;
 using parhip::mpi::communicator_view;
 using parhip::mpi::contiguous_owner_layout;
 using parhip::mpi::distributed_graph;
+using parhip::mpi::first_fatal_capacity_issue;
+using parhip::mpi::has_bounded_capacity_issue;
+using parhip::mpi::has_fatal_capacity_issue;
 using parhip::mpi::make_mpi_datatype;
 using parhip::mpi::neighbor_all_to_all_v;
+using parhip::mpi::resolve_capacity_collectively;
 using parhip::mpi::run_with_exception_barrier;
 using parhip::mpi::runtime_is_active;
 using parhip::mpi::segmented_buffer;
 using parhip::mpi::topology;
 using parhip::mpi::validate_collectively;
+using parhip::mpi::with_bounded_capacity_issue;
+using parhip::mpi::with_fatal_capacity_issue;
 
 template <typename Operation>
 void require_exact_common_mpi_error(Operation&& operation,
@@ -469,6 +517,127 @@ void require_deferred_capacity_mpi_error(Operation&& operation,
                                          communicator_view communicator) {
   require_exact_common_mpi_error(std::forward<Operation>(operation),
                                  expected_context, communicator);
+}
+
+TEST_CASE("capacity issues have stable bits diagnostics and fatal priority",
+          "[unit][mpi][failure-policy][capacity][pure]") {
+  STATIC_REQUIRE(std::is_trivially_copyable_v<capacity_result>);
+  STATIC_REQUIRE(std::is_standard_layout_v<capacity_result>);
+  STATIC_REQUIRE(sizeof(capacity_result) == 2 * sizeof(std::uint64_t));
+
+  STATIC_REQUIRE(
+      capacity_issue_mask(capacity_issue::received_count_not_representable) ==
+      (std::uint64_t{1} << 0));
+  STATIC_REQUIRE(
+      capacity_issue_mask(capacity_issue::cumulative_offset_overflow) ==
+      (std::uint64_t{1} << 1));
+  STATIC_REQUIRE(
+      capacity_issue_mask(capacity_issue::storage_byte_size_overflow) ==
+      (std::uint64_t{1} << 2));
+  STATIC_REQUIRE(
+      capacity_issue_mask(capacity_issue::topology_degree_not_representable) ==
+      (std::uint64_t{1} << 3));
+  STATIC_REQUIRE(capacity_issue_mask(
+                     capacity_issue::collective_layout_not_representable) ==
+                 (std::uint64_t{1} << 4));
+  STATIC_REQUIRE(
+      capacity_issue_mask(capacity_issue::direct_backend_not_representable) ==
+      (std::uint64_t{1} << 5));
+  STATIC_REQUIRE(
+      capacity_issue_mask(capacity_issue::bounded_round_arithmetic_overflow) ==
+      (std::uint64_t{1} << 6));
+
+  STATIC_REQUIRE(capacity_issue_diagnostic(
+                     capacity_issue::received_count_not_representable) ==
+                 "received element count exceeds local size_t capacity");
+  STATIC_REQUIRE(
+      capacity_issue_diagnostic(capacity_issue::cumulative_offset_overflow) ==
+      "cumulative element offset exceeds local size_t capacity");
+  STATIC_REQUIRE(
+      capacity_issue_diagnostic(capacity_issue::storage_byte_size_overflow) ==
+      "element storage byte size exceeds local size_t capacity");
+  STATIC_REQUIRE(capacity_issue_diagnostic(
+                     capacity_issue::topology_degree_not_representable) ==
+                 "distributed graph outdegree exceeds MPI int capacity");
+  STATIC_REQUIRE(capacity_issue_diagnostic(
+                     capacity_issue::collective_layout_not_representable) ==
+                 "collective payload layout has no representable MPI backend");
+  STATIC_REQUIRE(
+      capacity_issue_diagnostic(
+          capacity_issue::direct_backend_not_representable) ==
+      "direct neighborhood payload has no representable MPI backend");
+  STATIC_REQUIRE(
+      capacity_issue_diagnostic(
+          capacity_issue::bounded_round_arithmetic_overflow) ==
+      "bounded MPI-3 chunk arithmetic exceeds local size_t capacity");
+
+  constexpr auto empty = capacity_result{};
+  constexpr auto fallback = with_bounded_capacity_issue(
+      empty, capacity_issue::collective_layout_not_representable);
+  constexpr auto high_fatal = with_fatal_capacity_issue(
+      fallback, capacity_issue::direct_backend_not_representable);
+  constexpr auto mixed = with_fatal_capacity_issue(
+      high_fatal, capacity_issue::received_count_not_representable);
+
+  STATIC_REQUIRE_FALSE(has_fatal_capacity_issue(
+      empty, capacity_issue::direct_backend_not_representable));
+  STATIC_REQUIRE(has_bounded_capacity_issue(
+      fallback, capacity_issue::collective_layout_not_representable));
+  STATIC_REQUIRE(has_fatal_capacity_issue(
+      mixed, capacity_issue::direct_backend_not_representable));
+  STATIC_REQUIRE(first_fatal_capacity_issue(mixed).has_value());
+  STATIC_REQUIRE(*first_fatal_capacity_issue(mixed) ==
+                 capacity_issue::received_count_not_representable);
+  STATIC_REQUIRE(capacity_route_for(empty) == capacity_route::direct);
+  STATIC_REQUIRE(capacity_route_for(fallback) == capacity_route::bounded);
+  STATIC_REQUIRE_FALSE(capacity_route_for(mixed).has_value());
+  STATIC_REQUIRE(noexcept(resolve_capacity_collectively(
+      capacity_result{}, MPI_COMM_WORLD, MPI_COMM_WORLD, "capacity test")));
+}
+
+TEST_CASE("capacity resolver performs one BOR and agrees direct or bounded",
+          "[unit][mpi][failure-policy][capacity][collective]") {
+  communicator_view const world{MPI_COMM_WORLD};
+
+  auto require_route = [&](capacity_result local, capacity_route expected) {
+    auto route_matches = 0;
+    auto allreduce_calls = 0;
+    auto signature_matches = 0;
+    auto error_string_calls = 0;
+    {
+      semantic_error_protocol_probe::activation error_string_observation{};
+      capacity_protocol_probe::activation collective_observation{};
+      auto const route = resolve_capacity_collectively(
+          local, world.native_handle(), world.native_handle(),
+          "capacity route test");
+      route_matches = route == expected ? 1 : 0;
+      allreduce_calls = capacity_protocol_probe::allreduce_calls;
+      signature_matches = capacity_protocol_probe::signature_matches ? 1 : 0;
+      error_string_calls = semantic_error_protocol_probe::error_string_calls;
+    }
+
+    auto local_result = std::array{route_matches, allreduce_calls,
+                                   signature_matches, error_string_calls};
+    auto global_result = std::array{0, 0, 0, 0};
+    REQUIRE(PMPI_Allreduce(local_result.data(), global_result.data(),
+                           static_cast<int>(local_result.size()), MPI_INT,
+                           MPI_SUM, world.native_handle()) == MPI_SUCCESS);
+    REQUIRE(global_result ==
+            std::array{world.size(), world.size(), world.size(), 0});
+  };
+
+  SECTION("no issue selects the direct route") {
+    require_route(capacity_result{}, capacity_route::direct);
+  }
+
+  SECTION("one rank requesting fallback selects bounded everywhere") {
+    auto local = capacity_result{};
+    if (world.rank() == 0) {
+      local = with_bounded_capacity_issue(
+          local, capacity_issue::collective_layout_not_representable);
+    }
+    require_route(local, capacity_route::bounded);
+  }
 }
 
 TEST_CASE("contiguous ownership uses exact integer boundaries",
