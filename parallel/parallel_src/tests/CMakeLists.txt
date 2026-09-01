@@ -417,10 +417,39 @@ add_test(
     COMMAND
         "${CMAKE_COMMAND}"
         "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/parallel_projection/parallel_projection_mpi_test.cpp"
+        "-DPROFILE=projection"
         -P
         "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
 )
 set_tests_properties(unit-pmpi-callback-safety PROPERTIES TIMEOUT 5)
+
+add_test(
+    NAME unit-pmpi-callback-safety-ghost-label
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/distributed_consistency/ghost_label_exchange_mpi_test.cpp"
+        "-DPROFILE=ghost-label"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-ghost-label
+    PROPERTIES TIMEOUT 5
+)
+
+add_test(
+    NAME unit-pmpi-callback-safety-ghost-label-failure
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/distributed_consistency/ghost_label_failure_probe.cpp"
+        "-DPROFILE=ghost-label-failure"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-ghost-label-failure
+    PROPERTIES TIMEOUT 5
+)
 
 add_executable(
     parallel_block_down_mpi_test
@@ -960,6 +989,89 @@ foreach(mpi_ranks RANGE 1 5)
             TIMEOUT 20
     )
 endforeach()
+
+add_executable(
+    ghost_label_exchange_mpi_test
+    distributed_consistency/ghost_label_exchange_mpi_test.cpp
+)
+target_link_libraries(
+    ghost_label_exchange_mpi_test
+    PRIVATE
+        catch_mpi_runner
+        parallel
+        kahip_options
+        kahip_warnings
+)
+
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-ghost-label-exchange-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:ghost_label_exchange_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-ghost-label-exchange-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 25
+    )
+endforeach()
+
+add_executable(
+    ghost_label_failure_probe
+    distributed_consistency/ghost_label_failure_probe.cpp
+)
+target_link_libraries(
+    ghost_label_failure_probe
+    PRIVATE parallel kahip_options kahip_warnings
+)
+
+function(
+    add_ghost_label_failure_test
+    mode
+    expected_diagnostic
+    expected_abort_marker
+)
+    add_test(
+        NAME unit-ghost-label-${mode}-failure
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DPROBE=$<TARGET_FILE:ghost_label_failure_probe>"
+            "-DMODE=${mode}"
+            "-DEXPECTED_DIAGNOSTIC=${expected_diagnostic}"
+            "-DEXPECTED_ABORT_MARKER=${expected_abort_marker}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/distributed_consistency/verify_ghost_label_failure.cmake"
+    )
+    set_tests_properties(
+        unit-ghost-label-${mode}-failure
+        PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+    )
+endfunction()
+
+add_ghost_label_failure_test(
+    active-incremental-then-global
+    "MPI adapter programming failure: global ghost label exchange requires no active incremental exchange"
+    "observed active-incremental/global MPI_Abort before blocking payload"
+)
+add_ghost_label_failure_test(
+    skewed-incremental-protocol
+    "MPI adapter programming failure: ghost label incremental protocol diverged across ranks"
+    "observed skewed incremental-protocol MPI_Abort before first payload"
+)
+add_ghost_label_failure_test(
+    corrupted-incremental-completion
+    "MPI adapter programming failure: incremental ghost label receive validation failed after payload completion"
+    "observed corrupted incremental-completion terminal MPI_Abort"
+)
 
 add_executable(
     parallel_graph_lifecycle_probe

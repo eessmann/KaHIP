@@ -138,6 +138,10 @@ function(kahip_configure_parhip_object target)
         PUBLIC kahip_options MPI::MPI_CXX
         PRIVATE kahip_warnings
     )
+    target_compile_definitions(
+        ${target}
+        PRIVATE KAHIP_ENABLE_MPI_TRACE=$<BOOL:${KAHIP_ENABLE_MPI_TRACE}>
+    )
 endfunction()
 
 file(
@@ -215,10 +219,6 @@ kahip_add_private_header_set(
     ${PARHIP_CORE_HEADERS}
 )
 kahip_configure_parhip_object(parhip_core_obj)
-target_compile_definitions(
-    parhip_core_obj
-    PRIVATE KAHIP_ENABLE_MPI_TRACE=$<BOOL:${KAHIP_ENABLE_MPI_TRACE}>
-)
 target_link_libraries(
     parhip_core_obj
     PRIVATE
