@@ -2,7 +2,7 @@
 
 #include <mpi.h>
 
-#include "communication/mpi_error.h"
+#include "communication/mpi_failure.h"
 
 namespace parhip::mpi {
 class communicator_view {
@@ -14,15 +14,17 @@ public:
     return communicator_;
   }
 
-  [[nodiscard]] auto rank() const -> int {
+  [[nodiscard]] auto rank() const noexcept -> int {
     int result = 0;
-    check(MPI_Comm_rank(communicator_, &result), "MPI_Comm_rank");
+    check_or_abort(
+        MPI_Comm_rank(communicator_, &result), communicator_, "MPI_Comm_rank");
     return result;
   }
 
-  [[nodiscard]] auto size() const -> int {
+  [[nodiscard]] auto size() const noexcept -> int {
     int result = 0;
-    check(MPI_Comm_size(communicator_, &result), "MPI_Comm_size");
+    check_or_abort(
+        MPI_Comm_size(communicator_, &result), communicator_, "MPI_Comm_size");
     return result;
   }
 

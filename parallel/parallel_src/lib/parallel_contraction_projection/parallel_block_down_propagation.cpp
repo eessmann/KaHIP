@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "communication/mpi_adapter.h"
+#include "communication/contiguous_owner_layout.h"
 #include "communication/mpi_trace.h"
 namespace parhip {
 parallel_block_down_propagation::parallel_block_down_propagation() {
@@ -34,17 +35,23 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
         {G.getCNode(node), G.getSecondPartitionIndex(node)});
   } endfor
 
-  PEID rank, size;
-  MPI_Comm_rank( communicator, &rank);
-  MPI_Comm_size( communicator, &size);
+  auto const communicator_view = mpi::communicator_view{communicator};
+  auto const rank = communicator_view.rank();
+  auto const size = communicator_view.size();
+  auto const rank_index = static_cast<std::size_t>(rank);
 
   std::ranges::stable_sort(local_updates, {}, [](auto const& update) {
     return std::tie(update.coarse_global_id, update.block);
   });
-  auto const number_of_coarse_nodes = Q.number_of_global_nodes();
+  auto const number_of_coarse_nodes = mpi::agree_collectively(
+      Q.number_of_global_nodes(),
+      communicator_view,
+      "block coarse node count agreement failed");
+  auto const ownership = mpi::contiguous_owner_layout<NodeID>{
+      number_of_coarse_nodes, static_cast<std::size_t>(size)};
   auto local_updates_are_valid = true;
   for (auto const& update : local_updates) {
-    if (update.coarse_global_id >= number_of_coarse_nodes) {
+    if (!ownership.owner(update.coarse_global_id).has_value()) {
       local_updates_are_valid = false;
     }
   }
@@ -61,16 +68,11 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
       mpi::communicator_view{communicator},
       "block update local validation failed");
 
-  NodeID divisor = number_of_coarse_nodes == 0
-                       ? NodeID{1}
-                       : ceil(number_of_coarse_nodes / (double)size);
-
   auto updates_by_destination =
       std::vector<std::vector<block_down::block_update>>(
           static_cast<std::size_t>(size));
   for (auto const& [coarse_global_id, block] : local_updates) {
-    auto const destination =
-        static_cast<std::size_t>(coarse_global_id / divisor);
+    auto const destination = ownership.owner(coarse_global_id).value();
     updates_by_destination.at(destination).push_back(
         {coarse_global_id, block});
   }
@@ -89,11 +91,12 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
        source < incoming_updates.segment_count();
        ++source) {
     for (auto const& update : incoming_updates.segment(source)) {
-      if (update.coarse_global_id >= number_of_coarse_nodes) {
+      auto const owner = ownership.owner(update.coarse_global_id);
+      if (!owner.has_value()) {
         incoming_updates_are_valid = false;
         continue;
       }
-      if (static_cast<PEID>(update.coarse_global_id / divisor) != rank ||
+      if (*owner != rank_index ||
           !Q.is_local_node_from_global_id(update.coarse_global_id)) {
         incoming_updates_are_valid = false;
       }

@@ -284,3 +284,110 @@ The deliberately deferred list above remains exact: in particular,
 `update_ghost_nodes_blocks` remain sparse P2P for Task 7, and graph ghost
 messaging, consistency checks, DSPAC, `mpi_tools` root gather, and asynchronous
 evolutionary gossip were not changed.
+
+## Fix round 2: backend fail-fast and exact ownership
+
+### Scope and backend failure policy
+
+This round starts from reviewed fix-round-1 commit
+`e60ac4c0cd49e871e105a7521aee9d09ee4d4d21` and closes all four Important
+findings and the remaining test gaps from the second scoped review. Task 7
+sparse exchanges remain deliberately deferred.
+
+MPI backend failures no longer become exceptions while an internally
+duplicated communicator is alive. `check_or_abort` records the structured MPI
+diagnostic best-effort, calls `MPI_Abort` on the affected communicator, and
+falls back to `std::abort` if MPI returns. `MPI_ERRORS_RETURN` is therefore
+diagnostic-only, not a recovery policy. Communicator duplication,
+`MPI_Comm_set_errhandler`, rank/size lookup, every dense count/payload
+collective, datatype creation/commit/free, scans, broadcasts, barriers, and
+the quotient edge-count reduction all use this path. A set-errhandler failure
+does not first free the duplicated communicator. A failed `MPI_Comm_free`
+uses `MPI_COMM_WORLD` because the freed handle may be stale. Before MPI
+initialization or after finalization, failure reporting avoids both
+`MPI_Error_string` and `MPI_Abort`, logs the raw return code, and terminates
+with `std::abort`.
+
+Successful collective semantic rejection remains distinguishable. Both
+`validate_collectively` and the new common-value agreement helper complete
+their reduction and leave the owned-communicator scope normally; only then do
+all ranks throw the same structured `mpi_error`. `all_to_all_v` likewise
+defers layout/option disagreement until after normal communicator destruction,
+while unilateral allocation, representability, or other local failures abort
+before its communicator destructor can run.
+
+### Exact ownership and common domains
+
+One `contiguous_owner_layout<NodeID>` now defines every Task 6 dense owner
+range. It computes the pinned fixed-chunk partition entirely with checked
+integer arithmetic, validates an ID before division, exposes half-open
+boundaries, saturates boundary multiplication without overflow, and represents
+empty trailing ranks without underflow. All owner-derived container access is
+bounds checked. The label, quotient, and block paths no longer use floating
+point `ceil(N / double(size))` arithmetic.
+
+Before ownership, routing, or domain-sized graph state is created, ranks now
+agree on the minimum and maximum global domain value:
+
+- label mapping agrees `G.number_of_global_nodes()`;
+- quotient redistribution agrees `number_of_cnodes`; and
+- block propagation agrees `Q.number_of_global_nodes()`.
+
+A mismatch is rejected commonly even when every payload is empty. The exact
+owner helper has compile-time regressions for `N=0`, `N<p`, uneven `N=4,p=3`,
+`2^53+1`, and maximum 64-bit `NodeID` with 2, 3, and 5 ranks, including the
+last valid owner and exact terminal boundary.
+
+### TDD and malformed-receive evidence
+
+The ownership test first failed to compile because the helper did not exist.
+The three empty-payload domain-skew tests then went RED with zero of three
+ranks catching for label mapping, quotient redistribution, and block
+propagation. GREEN makes all three ranks catch the named common context before
+graph state changes.
+
+The PMPI seam mutates a selected dense payload ordinal after a successful
+`MPI_Alltoallv`; the same typed hook is present behind the guarded
+`MPI_Alltoallv_c` interposer. It does not infer record identity from datatype
+extent. Dedicated five-second three-rank tests cover:
+
+- an in-domain label request delivered to the wrong owner;
+- an in-domain, correct-source label reply with an unrequested semantic key;
+- an in-domain quotient edge source delivered to the wrong owner;
+- a quotient sender-sequence gap; and
+- an in-domain node-weight ID delivered to the wrong owner.
+
+Characterization mutations that removed the corresponding request-owner,
+reply-correlation, and sequence checks made each dedicated CTest fail with
+zero of three ranks observing the expected common exception; restoring the
+checks made all five receive tests pass. The block fixture separately proves
+that a valid identical duplicate from one sender is accepted while the full
+coarse-ID domain remains covered.
+
+Real backend failure injection is intentionally not emulated with a fake PMPI
+return: a genuine backend error is a non-returning process-group event, so an
+in-process recovery assertion would weaken the production contract. The
+non-returning paths were instead audited call by call. This host reports
+`KAHIP_HAVE_MPI_ALLTOALLV_C 0`; it exercises the real MPI-3 path, while the
+typed MPI-4 interposer remains compile-guarded for MPI-4 CI.
+
+### Fix-round-2 verification
+
+Every build, test, oracle run, and verification command used the required
+`systemd-run --user --scope` memory limits; builds used at most two jobs.
+
+- Trace-ON debug full build passed; full CTest: **74/74 passed**.
+- Default trace-OFF release full build passed; full CTest: **69/69 passed**.
+  Ninja emitted its known recoverable premature-EOF warning and completed
+  regeneration, compilation, and linking successfully.
+- The final fixed two-rank tuple retained partition SHA-256
+  `a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0`
+  and canonical 436,721-record aggregate SHA-256
+  `a179bb30213dbb26638657a1d611e951a8bf900b817647fc03d4c700a83f0a18`.
+- Debug capability/cache readback has tracing ON and
+  `KAHIP_HAVE_MPI_ALLTOALLV_C 0`; release has tracing OFF and the same
+  capability result.
+- The protocol audit still finds the five Task 6 dense `all_to_all_v`
+  payloads, no tag-7/tag-8/tag-10 dense P2P protocol, and only the required
+  sparse tag-6/tag-9/tag-11 deferrals.
+- `git diff --check` passed before the final commit.

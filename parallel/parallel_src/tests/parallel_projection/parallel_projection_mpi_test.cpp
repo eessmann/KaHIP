@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <functional>
 #include <optional>
 #include <string_view>
@@ -11,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "communication/contiguous_owner_layout.h"
 #include "communication/mpi_error.h"
 #include "communication/mpi_trace.h"
 #include "data_structure/parallel_graph_access.h"
@@ -223,13 +223,13 @@ void build_block_coarser(parhip::parallel_graph_access& graph,
                          int rank,
                          int size) {
   constexpr auto global_nodes = parhip::NodeID{4};
-  auto const divisor = static_cast<parhip::NodeID>(
-      std::ceil(global_nodes / static_cast<double>(size)));
+  auto const ownership = parhip::mpi::contiguous_owner_layout<parhip::NodeID>{
+      global_nodes, static_cast<std::size_t>(size)};
   auto ranges = std::vector<parhip::NodeID>(
       static_cast<std::size_t>(size) + 1);
   for (int pe = 0; pe <= size; ++pe) {
-    ranges[static_cast<std::size_t>(pe)] = std::min(
-        global_nodes, static_cast<parhip::NodeID>(pe) * divisor);
+    ranges[static_cast<std::size_t>(pe)] =
+        ownership.boundary(static_cast<std::size_t>(pe));
   }
   auto const first = ranges[static_cast<std::size_t>(rank)];
   auto const end = ranges[static_cast<std::size_t>(rank + 1)];
@@ -243,6 +243,18 @@ void build_block_coarser(parhip::parallel_graph_access& graph,
     graph.setNodeLabel(node, 0);
     graph.setSecondPartitionIndex(node, 0);
   }
+  graph.finish_construction();
+}
+
+void build_empty_graph_with_global_count(
+    parhip::parallel_graph_access& graph,
+    parhip::NodeID global_nodes,
+    int size) {
+  graph.start_construction(0, 0, global_nodes, 0, false);
+  graph.set_range(0, 0);
+  auto ranges = std::vector<parhip::NodeID>(
+      static_cast<std::size_t>(size) + 1, parhip::NodeID{0});
+  graph.set_range_array(ranges);
   graph.finish_construction();
 }
 
@@ -555,6 +567,66 @@ TEST_CASE("block-down dense owner phase uses keyed collective and exact updates"
 #else
   REQUIRE(parhip::mpi::trace::snapshot().empty());
 #endif
+}
+
+TEST_CASE("block-down accepts an identical same-sender duplicate",
+          "[mpi][block-propagation][owner][duplicate]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_block_finer(finer, rank, size);
+  build_block_coarser(coarser, rank, size);
+  finer.allocate_node_to_cnode();
+  for (parhip::NodeID node = 0; node < 4; ++node) {
+    finer.setCNode(node, rank == 0 && node == 1 ? 0 : node);
+    finer.setSecondPartitionIndex(
+        node, rank == 0 && node == 1 ? 10 : 10 + node);
+  }
+
+  parhip::PPartitionConfig config{};
+  parhip::parallel_block_down_propagation{}.propagate_block_down(
+      MPI_COMM_WORLD, config, finer, coarser);
+
+  for (parhip::NodeID node = 0; node < coarser.number_of_local_nodes();
+       ++node) {
+    auto const global = coarser.getGlobalID(node);
+    REQUIRE(coarser.getSecondPartitionIndex(node) == 10 + global);
+  }
+}
+
+TEST_CASE("block-down rejects an empty-payload coarse-count mismatch collectively",
+          "[mpi][block-propagation][owner][failure][domain]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_empty_graph_with_global_count(finer, 0, size);
+  build_empty_graph_with_global_count(
+      coarser, rank == 0 ? parhip::NodeID{2} : parhip::NodeID{3}, size);
+  finer.allocate_node_to_cnode();
+
+  parhip::PPartitionConfig config{};
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_block_down_propagation{}.propagate_block_down(
+            MPI_COMM_WORLD, config, finer, coarser);
+      },
+      "block coarse node count agreement failed",
+      size);
+  REQUIRE(coarser.number_of_local_nodes() == 0);
 }
 
 TEST_CASE("block-down rejects a rank-local conflicting coarse block collectively",

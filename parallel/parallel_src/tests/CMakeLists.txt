@@ -78,6 +78,23 @@ add_test(
         "label mapping rejects an out-of-domain local label collectively"
         ${MPIEXEC_POSTFLAGS}
 )
+
+add_test(
+    NAME unit-parallel-label-domain-skew-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "label mapping rejects an empty-payload global-count mismatch collectively"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-label-domain-skew-3-rank
+    PROPERTIES
+        PROCESSORS 3
+        RUN_SERIAL TRUE
+        TIMEOUT 5
+)
 set_tests_properties(
     unit-parallel-label-invalid-3-rank
     PROPERTIES
@@ -126,6 +143,76 @@ foreach(
             TIMEOUT 5
     )
 endforeach()
+
+add_test(
+    NAME unit-parallel-quotient-domain-skew-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "quotient redistribution rejects an empty-payload coarse-count mismatch collectively"
+        ${MPIEXEC_POSTFLAGS}
+)
+
+foreach(
+    receive_case
+    IN ITEMS
+        label-request-owner
+        label-reply-correlation
+        quotient-edge-owner
+        quotient-edge-sequence
+        quotient-weight-owner
+)
+    if(receive_case STREQUAL "label-request-owner")
+        set(
+            receive_filter
+            "label request receive validation rejects a valid wrong-owner record collectively"
+        )
+    elseif(receive_case STREQUAL "label-reply-correlation")
+        set(
+            receive_filter
+            "label reply receive validation rejects bad keyed correlation collectively"
+        )
+    elseif(receive_case STREQUAL "quotient-edge-owner")
+        set(
+            receive_filter
+            "quotient edge receive validation rejects a valid wrong-owner source collectively"
+        )
+    elseif(receive_case STREQUAL "quotient-edge-sequence")
+        set(
+            receive_filter
+            "quotient edge receive validation rejects a sender-sequence gap collectively"
+        )
+    else()
+        set(
+            receive_filter
+            "quotient node-weight receive validation rejects a valid wrong-owner ID collectively"
+        )
+    endif()
+    add_test(
+        NAME unit-parallel-receive-${receive_case}-3-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_contraction_mpi_test>
+            "${receive_filter}"
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-parallel-receive-${receive_case}-3-rank
+        PROPERTIES
+            PROCESSORS 3
+            RUN_SERIAL TRUE
+            TIMEOUT 5
+    )
+endforeach()
+set_tests_properties(
+    unit-parallel-quotient-domain-skew-3-rank
+    PROPERTIES
+        PROCESSORS 3
+        RUN_SERIAL TRUE
+        TIMEOUT 5
+)
 
 add_executable(
     parallel_projection_mpi_test
@@ -178,6 +265,40 @@ add_test(
         $<TARGET_FILE:parallel_projection_mpi_test>
         "block-down rejects a rank-local conflicting coarse block collectively"
         ${MPIEXEC_POSTFLAGS}
+)
+
+add_test(
+    NAME unit-parallel-block-owner-identical-duplicate-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_projection_mpi_test>
+        "block-down accepts an identical same-sender duplicate"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-block-owner-identical-duplicate-3-rank
+    PROPERTIES
+        PROCESSORS 3
+        RUN_SERIAL TRUE
+        TIMEOUT 10
+)
+
+add_test(
+    NAME unit-parallel-block-owner-domain-skew-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_projection_mpi_test>
+        "block-down rejects an empty-payload coarse-count mismatch collectively"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-block-owner-domain-skew-3-rank
+    PROPERTIES
+        PROCESSORS 3
+        RUN_SERIAL TRUE
+        TIMEOUT 5
 )
 set_tests_properties(
     unit-parallel-block-owner-local-conflict-3-rank

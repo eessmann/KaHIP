@@ -5,6 +5,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include "communication/mpi_error.h"
+
 namespace parhip::mpi {
 auto runtime_is_active() noexcept -> bool {
   int initialized = 0;
@@ -44,6 +46,52 @@ void log_failure(std::string_view boundary,
                                      std::exception_ptr failure) noexcept {
   log_failure(boundary, failure);
   if (runtime_is_active()) {
+    auto const affected =
+        communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
+    MPI_Abort(affected, EXIT_FAILURE);
+  }
+  std::abort();
+}
+
+[[noreturn]] void abort_on_mpi_error(
+    MPI_Comm communicator,
+    int error_code,
+    std::string_view context,
+    std::source_location location) noexcept {
+  auto const mpi_is_active = runtime_is_active();
+  if (mpi_is_active) {
+    try {
+      auto const failure = std::make_exception_ptr(
+          mpi_error{error_code, std::string{context}, location});
+      log_failure("MPI backend failure", failure);
+    } catch (...) {
+      try {
+        spdlog::critical(
+            "MPI backend failure: {} at {}:{} (MPI error {})",
+            context,
+            location.file_name(),
+            location.line(),
+            error_code);
+      } catch (...) {
+        // The process must still terminate if diagnostic formatting fails.
+      }
+    }
+  } else {
+    // MPI_Error_string is itself an MPI call and is not valid before
+    // initialization or after finalization. Retain the raw code instead.
+    try {
+      spdlog::critical(
+          "MPI backend failure: {} at {}:{} (MPI error {})",
+          context,
+          location.file_name(),
+          location.line(),
+          error_code);
+    } catch (...) {
+      // The process must still terminate if diagnostic formatting fails.
+    }
+  }
+
+  if (mpi_is_active) {
     auto const affected =
         communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
     MPI_Abort(affected, EXIT_FAILURE);

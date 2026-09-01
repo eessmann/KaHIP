@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "communication/mpi_adapter.h"
+#include "communication/contiguous_owner_layout.h"
 #include "parhip_interface.h"
 
 namespace test_support {
@@ -58,11 +60,74 @@ using parhip::mpi::communicator;
 using parhip::mpi::communicator_view;
 using parhip::mpi::all_to_all_v;
 using parhip::mpi::collective_options;
+using parhip::mpi::contiguous_owner_layout;
 using parhip::mpi::make_mpi_datatype;
 using parhip::mpi::run_with_exception_barrier;
 using parhip::mpi::runtime_is_active;
 using parhip::mpi::segmented_buffer;
 using parhip::mpi::topology;
+
+TEST_CASE("contiguous ownership uses exact integer boundaries",
+          "[unit][mpi][ownership]") {
+  using id_type = std::uint64_t;
+
+  SECTION("zero work has no owners") {
+    constexpr contiguous_owner_layout<id_type> layout{0, 5};
+    STATIC_REQUIRE(layout.chunk_size() == 1);
+    STATIC_REQUIRE(layout.boundary(0) == 0);
+    STATIC_REQUIRE(layout.boundary(5) == 0);
+    STATIC_REQUIRE_FALSE(layout.owner(0).has_value());
+  }
+
+  SECTION("more ranks than IDs leaves trailing ranks empty") {
+    constexpr contiguous_owner_layout<id_type> layout{2, 5};
+    STATIC_REQUIRE(layout.chunk_size() == 1);
+    STATIC_REQUIRE(layout.begin(0) == 0);
+    STATIC_REQUIRE(layout.end(0) == 1);
+    STATIC_REQUIRE(layout.begin(1) == 1);
+    STATIC_REQUIRE(layout.end(1) == 2);
+    STATIC_REQUIRE(layout.begin(2) == 2);
+    STATIC_REQUIRE(layout.end(4) == 2);
+    STATIC_REQUIRE(layout.owner(0) == 0);
+    STATIC_REQUIRE(layout.owner(1) == 1);
+    STATIC_REQUIRE_FALSE(layout.owner(2).has_value());
+  }
+
+  SECTION("uneven ownership retains the pinned fixed-chunk partition") {
+    constexpr contiguous_owner_layout<id_type> layout{4, 3};
+    STATIC_REQUIRE(layout.chunk_size() == 2);
+    STATIC_REQUIRE(layout.boundary(0) == 0);
+    STATIC_REQUIRE(layout.boundary(1) == 2);
+    STATIC_REQUIRE(layout.boundary(2) == 4);
+    STATIC_REQUIRE(layout.boundary(3) == 4);
+    STATIC_REQUIRE(layout.owner(0) == 0);
+    STATIC_REQUIRE(layout.owner(1) == 0);
+    STATIC_REQUIRE(layout.owner(2) == 1);
+    STATIC_REQUIRE(layout.owner(3) == 1);
+  }
+
+  SECTION("values above the exact double integer range stay exact") {
+    constexpr auto total = (id_type{1} << 53) + 1;
+    constexpr contiguous_owner_layout<id_type> layout{total, 2};
+    STATIC_REQUIRE(layout.chunk_size() == (id_type{1} << 52) + 1);
+    STATIC_REQUIRE(layout.boundary(1) == (id_type{1} << 52) + 1);
+    STATIC_REQUIRE(layout.boundary(2) == total);
+    STATIC_REQUIRE(layout.owner(total - 1) == 1);
+  }
+
+  SECTION("maximum NodeID never overflows a boundary product") {
+    constexpr auto total = std::numeric_limits<id_type>::max();
+    constexpr contiguous_owner_layout<id_type> two_ranks{total, 2};
+    constexpr contiguous_owner_layout<id_type> three_ranks{total, 3};
+    constexpr contiguous_owner_layout<id_type> five_ranks{total, 5};
+    STATIC_REQUIRE(two_ranks.boundary(2) == total);
+    STATIC_REQUIRE(three_ranks.boundary(3) == total);
+    STATIC_REQUIRE(five_ranks.boundary(5) == total);
+    STATIC_REQUIRE(two_ranks.owner(total - 1) == 1);
+    STATIC_REQUIRE(three_ranks.owner(total - 1) == 2);
+    STATIC_REQUIRE(five_ranks.owner(total - 1) == 4);
+  }
+}
 
 TEST_CASE("native MPI types use the closed MP11 mapping", "[unit][mpi]") {
   STATIC_REQUIRE(parhip::mpi::mpi_native_datatype<int>);

@@ -13,17 +13,17 @@
 #include <unordered_set>
 #include <vector>
 
-#include "data_structure/hashed_graph.h"
 #include "communication/mpi_adapter.h"
+#include "communication/contiguous_owner_layout.h"
 #include "communication/mpi_trace.h"
+#include "data_structure/hashed_graph.h"
 #include "tools/helpers.h"
 namespace parhip {
 void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicator, PPartitionConfig & config,
                                                              parallel_graph_access & G, 
                                                              parallel_graph_access & Q) {
 #if KAHIP_ENABLE_MPI_TRACE
-  PEID trace_rank = 0;
-  MPI_Comm_rank(communicator, &trace_rank);
+  auto const trace_rank = mpi::communicator_view{communicator}.rank();
 #endif
 
   NodeID number_of_distinct_labels; // equals global number of coarse nodes
@@ -51,7 +51,8 @@ void parallel_contraction::contract_to_distributed_quotient( MPI_Comm communicat
 
   build_quotient_graph_locally( G, number_of_distinct_labels, hG, node_weights);
 
-  MPI_Barrier(communicator);
+  mpi::check_or_abort(
+      MPI_Barrier(communicator), communicator, "MPI_Barrier(contraction)");
 
   m_send_buffers.clear();
 
@@ -76,15 +77,17 @@ void parallel_contraction::compute_label_mapping(
     parallel_graph_access& G,
     NodeID& global_num_distinct_ids,
     std::unordered_map<NodeID, NodeID>& label_mapping) {
-  PEID rank, size;
-  MPI_Comm_rank(communicator, &rank);
-  MPI_Comm_size(communicator, &size);
+  auto const communicator_view = mpi::communicator_view{communicator};
+  auto const rank = communicator_view.rank();
+  auto const size = communicator_view.size();
+  auto const rank_index = static_cast<std::size_t>(rank);
 
-  auto const number_of_global_nodes = G.number_of_global_nodes();
-  NodeID divisor = number_of_global_nodes == 0
-                       ? NodeID{1}
-                       : ceil(number_of_global_nodes /
-                              static_cast<double>(size));
+  auto const number_of_global_nodes = mpi::agree_collectively(
+      G.number_of_global_nodes(),
+      communicator_view,
+      "label global node count agreement failed");
+  auto const ownership = mpi::contiguous_owner_layout<NodeID>{
+      number_of_global_nodes, static_cast<std::size_t>(size)};
 
   auto requests_by_destination =
       std::vector<std::vector<contraction::label_request>>(
@@ -95,7 +98,7 @@ void parallel_contraction::compute_label_mapping(
   forall_local_nodes(G, node) {
     local_requests_are_valid =
         local_requests_are_valid &&
-        G.getNodeLabel(node) < number_of_global_nodes;
+        ownership.owner(G.getNodeLabel(node)).has_value();
   } endfor
   mpi::validate_collectively(
       local_requests_are_valid,
@@ -104,8 +107,8 @@ void parallel_contraction::compute_label_mapping(
 
   forall_local_nodes(G, node) {
     auto const old_label = G.getNodeLabel(node);
-    auto const destination = static_cast<std::size_t>(old_label / divisor);
-    requests_by_destination[destination].push_back({old_label});
+    auto const destination = ownership.owner(old_label).value();
+    requests_by_destination.at(destination).push_back({old_label});
     requested_labels.insert(old_label);
   } endfor
 
@@ -129,8 +132,7 @@ void parallel_contraction::compute_label_mapping(
     for (auto const& request : incoming_requests.segment(source)) {
       incoming_requests_are_valid =
           incoming_requests_are_valid &&
-          request.old_label < number_of_global_nodes &&
-          static_cast<PEID>(request.old_label / divisor) == rank;
+          ownership.owner(request.old_label) == rank_index;
     }
   }
   mpi::validate_collectively(
@@ -165,13 +167,24 @@ void parallel_contraction::compute_label_mapping(
   NodeID local_num_labels = local_labels.size();
   NodeID prefix_sum = 0;
 
-  MPI_Scan(&local_num_labels, &prefix_sum, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
-           communicator);
+  mpi::check_or_abort(MPI_Scan(&local_num_labels,
+                               &prefix_sum,
+                               1,
+                               MPI_UNSIGNED_LONG_LONG,
+                               MPI_SUM,
+                               communicator),
+                      communicator,
+                      "MPI_Scan(label prefix)");
 
   global_num_distinct_ids = prefix_sum;
   // Broadcast global number of ids
-  MPI_Bcast(&global_num_distinct_ids, 1, MPI_UNSIGNED_LONG_LONG, size - 1,
-            communicator);
+  mpi::check_or_abort(MPI_Bcast(&global_num_distinct_ids,
+                                1,
+                                MPI_UNSIGNED_LONG_LONG,
+                                size - 1,
+                                communicator),
+                      communicator,
+                      "MPI_Bcast(global label count)");
 
   NodeID num_smaller_ids = prefix_sum - local_num_labels;
 
@@ -210,13 +223,14 @@ void parallel_contraction::compute_label_mapping(
   for (std::size_t source = 0; source < incoming_replies.segment_count();
        ++source) {
     for (auto const& reply : incoming_replies.segment(source)) {
-      if (reply.old_label >= number_of_global_nodes) {
+      auto const owner = ownership.owner(reply.old_label);
+      if (!owner.has_value()) {
         incoming_replies_are_valid = false;
         continue;
       }
       incoming_replies_are_valid =
           incoming_replies_are_valid &&
-          static_cast<std::size_t>(reply.old_label / divisor) == source &&
+          *owner == source &&
           reply.coarse_global_id < global_num_distinct_ids &&
           requested_labels.contains(reply.old_label);
       if (requested_labels.erase(reply.old_label) == 0) {
@@ -345,9 +359,16 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                                                                              std::unordered_map< NodeID, NodeWeight > & node_weights,
                                                                              NodeID number_of_cnodes,
                                                                              parallel_graph_access & Q  ) {
-        PEID rank, size;
-        MPI_Comm_rank( communicator, &rank);
-        MPI_Comm_size( communicator, &size);
+        auto const communicator_view = mpi::communicator_view{communicator};
+        auto const rank = communicator_view.rank();
+        auto const size = communicator_view.size();
+        auto const rank_index = static_cast<std::size_t>(rank);
+        number_of_cnodes = mpi::agree_collectively(
+            number_of_cnodes,
+            communicator_view,
+            "quotient coarse node count agreement failed");
+        auto const ownership = mpi::contiguous_owner_layout<NodeID>{
+            number_of_cnodes, static_cast<std::size_t>(size)};
 
         auto local_edges_are_valid = true;
         for (auto const& [edge, data] : hG) {
@@ -374,14 +395,8 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
             mpi::communicator_view{communicator},
             "quotient node-weight local validation failed");
 
-        NodeID divisor = number_of_cnodes == 0
-                             ? NodeID{1}
-                             : ceil(number_of_cnodes /
-                                    static_cast<double>(size));
-        auto const from = std::min(
-            number_of_cnodes, static_cast<NodeID>(rank) * divisor);
-        auto const end = std::min(
-            number_of_cnodes, static_cast<NodeID>(rank + 1) * divisor);
+        auto const from = ownership.begin(rank_index);
+        auto const end = ownership.end(rank_index);
         auto const local_num_cnodes = end - from;
         auto const to = local_num_cnodes == 0 ? from : end - 1;
         Q.set_range(from, to);
@@ -392,20 +407,18 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         auto sender_sequences = std::vector<NodeID>(
             static_cast<std::size_t>(size), NodeID{0});
         for (auto const& [edge, data] : hG) {
-                auto const source_owner =
-                    static_cast<std::size_t>(edge.source / divisor);
-                auto const target_owner =
-                    static_cast<std::size_t>(edge.target / divisor);
-                edges_by_destination[source_owner].push_back(
+                auto const source_owner = ownership.owner(edge.source).value();
+                auto const target_owner = ownership.owner(edge.target).value();
+                edges_by_destination.at(source_owner).push_back(
                     {edge.source,
                      edge.target,
                      data.weight,
-                     sender_sequences[source_owner]++});
-                edges_by_destination[target_owner].push_back(
+                     sender_sequences.at(source_owner)++});
+                edges_by_destination.at(target_owner).push_back(
                     {edge.target,
                      edge.source,
                      data.weight,
-                     sender_sequences[target_owner]++});
+                     sender_sequences.at(target_owner)++});
         }
         for (auto& edges : edges_by_destination) {
                 std::ranges::stable_sort(edges, {}, [](auto const& edge) {
@@ -448,7 +461,7 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                         }
                         incoming_edges_are_valid =
                             incoming_edges_are_valid &&
-                            static_cast<PEID>(edge.source / divisor) == rank &&
+                            ownership.owner(edge.source) == rank_index &&
                             Q.is_local_node_from_global_id(edge.source);
                 }
         }
@@ -500,16 +513,22 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         }
 
         ULONG global_edges = 0;
-        MPI_Allreduce(&edge_counter, &global_edges, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, communicator);
+        mpi::check_or_abort(MPI_Allreduce(&edge_counter,
+                                          &global_edges,
+                                          1,
+                                          MPI_UNSIGNED_LONG_LONG,
+                                          MPI_SUM,
+                                          communicator),
+                            communicator,
+                            "MPI_Allreduce(quotient edge count)");
 
         Q.start_construction(local_num_cnodes, edge_counter, number_of_cnodes, global_edges);
         Q.set_range(from, to);
 
         std::vector< NodeID > vertex_dist( size+1, 0 );
         for( PEID peID = 0; peID <= size; peID++) {
-                vertex_dist[peID] = std::min(
-                    number_of_cnodes,
-                    static_cast<NodeID>(peID) * divisor);
+                vertex_dist[peID] = ownership.boundary(
+                    static_cast<std::size_t>(peID));
         }
         //vertex_dist[size] = std::min(to, number_of_cnodes - 1);
         Q.set_range_array(vertex_dist);
@@ -534,8 +553,8 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                 static_cast<std::size_t>(size));
         for (auto const& [coarse_global_id, weight] : node_weights) {
                 auto const destination =
-                    static_cast<std::size_t>(coarse_global_id / divisor);
-                weights_by_destination[destination].push_back(
+                    ownership.owner(coarse_global_id).value();
+                weights_by_destination.at(destination).push_back(
                     {coarse_global_id, weight});
         }
         for (auto& weights : weights_by_destination) {
@@ -562,9 +581,8 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                         }
                         incoming_weights_are_valid =
                             incoming_weights_are_valid &&
-                            static_cast<PEID>(
-                                contribution.coarse_global_id / divisor) ==
-                                rank &&
+                            ownership.owner(
+                                contribution.coarse_global_id) == rank_index &&
                             Q.is_local_node_from_global_id(
                                 contribution.coarse_global_id);
                 }

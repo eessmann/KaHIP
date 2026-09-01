@@ -20,6 +20,7 @@
 #include <fmt/ranges.h>
 
 #include "kahip_mpi_capabilities.h"
+#include "communication/contiguous_owner_layout.h"
 #include "communication/mpi_error.h"
 #include "communication/mpi_tools.h"
 #include "parallel_contraction_projection/parallel_contraction.h"
@@ -38,6 +39,19 @@ inline std::vector<int> isend_tags;
 inline std::vector<int> probe_tags;
 inline std::vector<int> recv_tags;
 
+enum class receive_mutation {
+  none,
+  label_request_wrong_owner,
+  label_reply_bad_correlation,
+  quotient_edge_wrong_owner,
+  quotient_edge_sequence_gap,
+  quotient_node_weight_wrong_owner,
+};
+
+inline receive_mutation mutation = receive_mutation::none;
+inline int mutation_payload_ordinal = 0;
+inline int mutation_target_rank = 0;
+
 void reset() {
   all_to_all_v_calls = 0;
   all_to_all_v_c_calls = 0;
@@ -48,6 +62,9 @@ void reset() {
   isend_tags.clear();
   probe_tags.clear();
   recv_tags.clear();
+  mutation = receive_mutation::none;
+  mutation_payload_ordinal = 0;
+  mutation_target_rank = 0;
 }
 
 [[nodiscard]] auto dense_payload_collective_calls() -> int {
@@ -76,6 +93,91 @@ void record_payload_extent(MPI_Datatype datatype) {
   return static_cast<std::size_t>(
       std::ranges::count(payload_extents, extent));
 }
+
+class scoped_receive_mutation {
+public:
+  scoped_receive_mutation(receive_mutation selected,
+                          int payload_ordinal,
+                          int target_rank = 0) noexcept {
+    mutation = selected;
+    mutation_payload_ordinal = payload_ordinal;
+    mutation_target_rank = target_rank;
+  }
+
+  ~scoped_receive_mutation() noexcept {
+    mutation = receive_mutation::none;
+    mutation_payload_ordinal = 0;
+    mutation_target_rank = 0;
+  }
+
+  scoped_receive_mutation(scoped_receive_mutation const&) = delete;
+  auto operator=(scoped_receive_mutation const&)
+      -> scoped_receive_mutation& = delete;
+};
+
+template <typename Count, typename Displacement>
+void mutate_received_payload(int payload_ordinal,
+                             void* receive_buffer,
+                             Count const receive_counts[],
+                             Displacement const receive_displacements[],
+                             MPI_Datatype receive_datatype,
+                             MPI_Comm communicator) {
+  if (mutation == receive_mutation::none ||
+      payload_ordinal != mutation_payload_ordinal) {
+    return;
+  }
+
+  int rank = 0;
+  int size = 0;
+  REQUIRE(PMPI_Comm_rank(communicator, &rank) == MPI_SUCCESS);
+  REQUIRE(PMPI_Comm_size(communicator, &size) == MPI_SUCCESS);
+  if (rank != mutation_target_rank) {
+    return;
+  }
+
+  MPI_Aint lower_bound = 0;
+  MPI_Aint extent = 0;
+  REQUIRE(PMPI_Type_get_extent(
+              receive_datatype, &lower_bound, &extent) == MPI_SUCCESS);
+  REQUIRE(lower_bound == 0);
+  for (int source = 0; source < size; ++source) {
+    if (receive_counts[source] <= 0) {
+      continue;
+    }
+    auto* record = static_cast<std::byte*>(receive_buffer) +
+                   static_cast<MPI_Aint>(receive_displacements[source]) *
+                       extent;
+    switch (mutation) {
+      case receive_mutation::label_request_wrong_owner:
+        reinterpret_cast<contraction::label_request*>(record)->old_label =
+            NodeID{2};
+        break;
+      case receive_mutation::quotient_edge_wrong_owner:
+        reinterpret_cast<contraction::bundled_edge*>(record)->source =
+            NodeID{2};
+        break;
+      case receive_mutation::quotient_node_weight_wrong_owner:
+        reinterpret_cast<contraction::node_weight_contribution*>(record)
+            ->coarse_global_id = NodeID{2};
+        break;
+      case receive_mutation::label_reply_bad_correlation:
+        // Rank 0 requested label 3 from source 1 in this fixture. Label 2 is
+        // still in-domain and owned by source 1, but it is not a key rank 0
+        // requested, so only semantic correlation rejects it.
+        reinterpret_cast<contraction::label_reply*>(record)->old_label =
+            NodeID{2};
+        break;
+      case receive_mutation::quotient_edge_sequence_gap:
+        ++reinterpret_cast<contraction::bundled_edge*>(record)
+              ->sender_sequence;
+        break;
+      case receive_mutation::none:
+        break;
+    }
+    return;
+  }
+  FAIL("selected receive mutation found no record on its target rank");
+}
 }  // namespace protocol_probe
 
 extern "C" int MPI_Alltoallv(const void* send_buffer,
@@ -91,15 +193,25 @@ extern "C" int MPI_Alltoallv(const void* send_buffer,
     ++protocol_probe::all_to_all_v_calls;
     protocol_probe::record_payload_extent(send_datatype);
   }
-  return PMPI_Alltoallv(send_buffer,
-                        send_counts,
-                        send_displacements,
-                        send_datatype,
-                        receive_buffer,
-                        receive_counts,
-                        receive_displacements,
-                        receive_datatype,
-                        communicator);
+  auto const payload_ordinal = protocol_probe::dense_payload_collective_calls();
+  auto const result = PMPI_Alltoallv(send_buffer,
+                                     send_counts,
+                                     send_displacements,
+                                     send_datatype,
+                                     receive_buffer,
+                                     receive_counts,
+                                     receive_displacements,
+                                     receive_datatype,
+                                     communicator);
+  if (protocol_probe::active && result == MPI_SUCCESS) {
+    protocol_probe::mutate_received_payload(payload_ordinal,
+                                            receive_buffer,
+                                            receive_counts,
+                                            receive_displacements,
+                                            receive_datatype,
+                                            communicator);
+  }
+  return result;
 }
 
 #if KAHIP_HAVE_MPI_ALLTOALLV_C
@@ -116,15 +228,25 @@ extern "C" int MPI_Alltoallv_c(const void* send_buffer,
     ++protocol_probe::all_to_all_v_c_calls;
     protocol_probe::record_payload_extent(send_datatype);
   }
-  return PMPI_Alltoallv_c(send_buffer,
-                          send_counts,
-                          send_displacements,
-                          send_datatype,
-                          receive_buffer,
-                          receive_counts,
-                          receive_displacements,
-                          receive_datatype,
-                          communicator);
+  auto const payload_ordinal = protocol_probe::dense_payload_collective_calls();
+  auto const result = PMPI_Alltoallv_c(send_buffer,
+                                       send_counts,
+                                       send_displacements,
+                                       send_datatype,
+                                       receive_buffer,
+                                       receive_counts,
+                                       receive_displacements,
+                                       receive_datatype,
+                                       communicator);
+  if (protocol_probe::active && result == MPI_SUCCESS) {
+    protocol_probe::mutate_received_payload(payload_ordinal,
+                                            receive_buffer,
+                                            receive_counts,
+                                            receive_displacements,
+                                            receive_datatype,
+                                            communicator);
+  }
+  return result;
 }
 #endif
 
@@ -222,6 +344,17 @@ void build_label_fixture(parallel_graph_access& graph, int rank, int size) {
 
 void build_empty_label_fixture(parallel_graph_access& graph, int size) {
   graph.start_construction(0, 0, 0, 0, false);
+  graph.set_range(0, 0);
+  auto ranges = std::vector<NodeID>(static_cast<std::size_t>(size) + 1, 0);
+  graph.set_range_array(ranges);
+  graph.finish_construction();
+}
+
+void build_empty_label_fixture_with_global_count(
+    parallel_graph_access& graph,
+    NodeID global_nodes,
+    int size) {
+  graph.start_construction(0, 0, global_nodes, 0, false);
   graph.set_range(0, 0);
   auto ranges = std::vector<NodeID>(static_cast<std::size_t>(size) + 1, 0);
   graph.set_range_array(ranges);
@@ -369,6 +502,84 @@ TEST_CASE("label mapping rejects an out-of-domain local label collectively",
       size);
 }
 
+TEST_CASE("label mapping rejects an empty-payload global-count mismatch collectively",
+          "[unit][mpi][contraction][label-mapping][failure][domain]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_empty_label_fixture_with_global_count(
+      graph, rank == 0 ? NodeID{2} : NodeID{3}, size);
+
+  require_collective_validation_failure(
+      [&] {
+        static_cast<void>(
+            parallel_contraction_test_access::compute_label_mapping(
+                MPI_COMM_WORLD, graph));
+      },
+      "label global node count agreement failed",
+      size);
+}
+
+TEST_CASE("label request receive validation rejects a valid wrong-owner record collectively",
+          "[unit][mpi][contraction][label-mapping][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_label_fixture(graph, rank, size);
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::label_request_wrong_owner, 1};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        static_cast<void>(
+            parallel_contraction_test_access::compute_label_mapping(
+                MPI_COMM_WORLD, graph));
+      },
+      "label request owner validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
+TEST_CASE("label reply receive validation rejects bad keyed correlation collectively",
+          "[unit][mpi][contraction][label-mapping][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_label_fixture(graph, rank, size);
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::label_reply_bad_correlation, 2};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        static_cast<void>(
+            parallel_contraction_test_access::compute_label_mapping(
+                MPI_COMM_WORLD, graph));
+      },
+      "label reply validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
 TEST_CASE("quotient edges use one dense keyed exchange and aggregate exactly",
           "[unit][mpi][contraction][quotient-edges]") {
   int rank = 0;
@@ -421,12 +632,10 @@ TEST_CASE("quotient edges use one dense keyed exchange and aggregate exactly",
   }
   std::ranges::sort(actual);
 
-  auto const owner_divisor = static_cast<NodeID>(
-      std::ceil(coarse_nodes / static_cast<double>(size)));
-  auto const first = std::min(
-      coarse_nodes, static_cast<NodeID>(rank) * owner_divisor);
-  auto const end = std::min(
-      coarse_nodes, static_cast<NodeID>(rank + 1) * owner_divisor);
+  auto const ownership = mpi::contiguous_owner_layout<NodeID>{
+      coarse_nodes, static_cast<std::size_t>(size)};
+  auto const first = ownership.begin(static_cast<std::size_t>(rank));
+  auto const end = ownership.end(static_cast<std::size_t>(rank));
   auto expected = std::vector<std::tuple<NodeID, NodeID, EdgeWeight>>{};
   auto const edge_0_2_weight = static_cast<EdgeWeight>(
       size * (size + 1));
@@ -518,6 +727,104 @@ TEST_CASE("quotient node weights use one dense keyed exchange and sum exactly",
               protocol_probe::recv_tags, 8, size) == 0);
 }
 
+TEST_CASE("quotient edge receive validation rejects a valid wrong-owner source collectively",
+          "[unit][mpi][contraction][quotient-edges][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph local_edges;
+  local_edges[hashed_edge{coarse_nodes, 0, 2}].weight = 4;
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::quotient_edge_wrong_owner, 1};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            local_edges,
+            no_node_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient edge received validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
+TEST_CASE("quotient edge receive validation rejects a sender-sequence gap collectively",
+          "[unit][mpi][contraction][quotient-edges][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph local_edges;
+  local_edges[hashed_edge{coarse_nodes, 0, 2}].weight = 4;
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::quotient_edge_sequence_gap, 1};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            local_edges,
+            no_node_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient edge received validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
+TEST_CASE("quotient node-weight receive validation rejects a valid wrong-owner ID collectively",
+          "[unit][mpi][contraction][quotient-node-weights][failure][receive]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph no_edges;
+  std::unordered_map<NodeID, NodeWeight> local_weights{{0, 1}};
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  protocol_probe::reset();
+  protocol_probe::scoped_receive_mutation mutation{
+      protocol_probe::receive_mutation::quotient_node_weight_wrong_owner, 2};
+  protocol_probe::active = true;
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            no_edges,
+            local_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient node-weight received validation failed",
+      size);
+  protocol_probe::active = false;
+}
+
 TEST_CASE("zero coarse-node redistribution remains an empty dense exchange",
           "[unit][mpi][contraction][quotient][zero]") {
   int size = 0;
@@ -540,6 +847,34 @@ TEST_CASE("zero coarse-node redistribution remains an empty dense exchange",
   REQUIRE(quotient.get_from_range() == 0);
   REQUIRE(quotient.get_to_range() == 0);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+}
+
+TEST_CASE("quotient redistribution rejects an empty-payload coarse-count mismatch collectively",
+          "[unit][mpi][contraction][quotient][failure][domain]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  hashed_graph no_edges;
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            no_edges,
+            no_node_weights,
+            rank == 0 ? NodeID{2} : NodeID{3},
+            quotient);
+      },
+      "quotient coarse node count agreement failed",
+      size);
+  REQUIRE(quotient.number_of_local_nodes() == 0);
 }
 
 TEST_CASE("quotient redistribution rejects a tail-padding edge source collectively",

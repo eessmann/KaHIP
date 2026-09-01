@@ -4,6 +4,7 @@
 
 #include <exception>
 #include <functional>
+#include <source_location>
 #include <string_view>
 #include <utility>
 
@@ -25,4 +26,20 @@ void run_with_exception_barrier(Operation&& operation,
     MPI_Comm communicator,
     std::string_view boundary,
     std::exception_ptr failure = std::current_exception()) noexcept;
+
+[[noreturn]] void abort_on_mpi_error(
+    MPI_Comm communicator,
+    int error_code,
+    std::string_view context,
+    std::source_location location = std::source_location::current()) noexcept;
+
+inline void check_or_abort(
+    int error_code,
+    MPI_Comm communicator,
+    std::string_view context,
+    std::source_location location = std::source_location::current()) noexcept {
+  if (error_code != MPI_SUCCESS) {
+    abort_on_mpi_error(communicator, error_code, context, location);
+  }
+}
 }  // namespace parhip::mpi

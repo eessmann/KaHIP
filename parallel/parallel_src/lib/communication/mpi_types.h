@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "communication/mpi_error.h"
+#include "communication/mpi_failure.h"
 
 namespace parhip::mpi {
 namespace detail {
@@ -101,12 +102,16 @@ public:
   datatype(datatype&& other) noexcept;
   auto operator=(datatype&& other) noexcept -> datatype&;
 
-  [[nodiscard]] static auto borrowed(MPI_Datatype handle) noexcept
+  [[nodiscard]] static auto borrowed(
+      MPI_Datatype handle,
+      MPI_Comm failure_communicator = MPI_COMM_WORLD) noexcept
       -> datatype {
-    return datatype{handle, false};
+    return datatype{handle, false, failure_communicator};
   }
-  [[nodiscard]] static auto owned(MPI_Datatype handle) noexcept -> datatype {
-    return datatype{handle, true};
+  [[nodiscard]] static auto owned(
+      MPI_Datatype handle,
+      MPI_Comm failure_communicator = MPI_COMM_WORLD) noexcept -> datatype {
+    return datatype{handle, true, failure_communicator};
   }
 
   [[nodiscard]] auto native_handle() const noexcept -> MPI_Datatype {
@@ -115,26 +120,34 @@ public:
   [[nodiscard]] auto owns_handle() const noexcept -> bool { return owns_; }
 
 private:
-  explicit datatype(MPI_Datatype handle, bool owns) noexcept
-      : handle_(handle), owns_(owns) {}
+  explicit datatype(MPI_Datatype handle,
+                    bool owns,
+                    MPI_Comm failure_communicator) noexcept
+      : handle_(handle),
+        owns_(owns),
+        failure_communicator_(failure_communicator) {}
   void reset() noexcept;
 
   MPI_Datatype handle_ = MPI_DATATYPE_NULL;
   bool owns_ = false;
+  MPI_Comm failure_communicator_ = MPI_COMM_WORLD;
 };
 
 template <mpi_datatype T>
-[[nodiscard]] auto make_mpi_datatype() -> datatype {
+[[nodiscard]] auto make_mpi_datatype(
+    MPI_Comm failure_communicator = MPI_COMM_WORLD) -> datatype {
   using value_type = detail::unqualified_t<T>;
   if constexpr (mpi_native_datatype<value_type>) {
-    return datatype::borrowed(detail::native_mpi_handle<value_type>());
+    return datatype::borrowed(
+        detail::native_mpi_handle<value_type>(), failure_communicator);
   } else {
     alignas(value_type) std::array<std::byte, sizeof(value_type)> sample_storage;
     auto* sample =
         std::start_lifetime_as<value_type>(sample_storage.data());
     MPI_Aint sample_address = 0;
-    check(MPI_Get_address(sample, &sample_address),
-          "MPI_Get_address(wire record)");
+    check_or_abort(MPI_Get_address(sample, &sample_address),
+                   failure_communicator,
+                   "MPI_Get_address(wire record)");
 
     std::vector<int> block_lengths;
     std::vector<MPI_Aint> offsets;
@@ -144,33 +157,40 @@ template <mpi_datatype T>
       static_assert(mpi_native_datatype<member_type>,
                     "wire record members must use native MPI types");
       MPI_Aint member_address = 0;
-      check(MPI_Get_address(std::addressof(sample->*member), &member_address),
-            "MPI_Get_address(wire member)");
+      check_or_abort(
+          MPI_Get_address(std::addressof(sample->*member), &member_address),
+          failure_communicator,
+          "MPI_Get_address(wire member)");
       block_lengths.push_back(1);
       offsets.push_back(member_address - sample_address);
       member_types.push_back(detail::native_mpi_handle<member_type>());
     });
 
     MPI_Datatype structure = MPI_DATATYPE_NULL;
-    check(MPI_Type_create_struct(static_cast<int>(block_lengths.size()),
-                                 block_lengths.data(),
-                                 offsets.data(),
-                                 member_types.data(),
-                                 &structure),
-          "MPI_Type_create_struct");
+    check_or_abort(MPI_Type_create_struct(
+                       static_cast<int>(block_lengths.size()),
+                       block_lengths.data(),
+                       offsets.data(),
+                       member_types.data(),
+                       &structure),
+                   failure_communicator,
+                   "MPI_Type_create_struct");
 
     MPI_Datatype resized = MPI_DATATYPE_NULL;
-    auto const resize_result = MPI_Type_create_resized(
-        structure, 0, static_cast<MPI_Aint>(sizeof(value_type)), &resized);
-    MPI_Type_free(&structure);
-    check(resize_result, "MPI_Type_create_resized");
-
-    auto const commit_result = MPI_Type_commit(&resized);
-    if (commit_result != MPI_SUCCESS) {
-      MPI_Type_free(&resized);
-      check(commit_result, "MPI_Type_commit");
-    }
-    return datatype::owned(resized);
+    check_or_abort(MPI_Type_create_resized(
+                       structure,
+                       0,
+                       static_cast<MPI_Aint>(sizeof(value_type)),
+                       &resized),
+                   failure_communicator,
+                   "MPI_Type_create_resized");
+    check_or_abort(MPI_Type_free(&structure),
+                   failure_communicator,
+                   "MPI_Type_free(wire structure)");
+    check_or_abort(MPI_Type_commit(&resized),
+                   failure_communicator,
+                   "MPI_Type_commit");
+    return datatype::owned(resized, failure_communicator);
   }
 }
 
