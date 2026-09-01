@@ -76,20 +76,36 @@ void parallel_contraction::compute_label_mapping(
     parallel_graph_access& G,
     NodeID& global_num_distinct_ids,
     std::unordered_map<NodeID, NodeID>& label_mapping) {
-  PEID size;
+  PEID rank, size;
+  MPI_Comm_rank(communicator, &rank);
   MPI_Comm_size(communicator, &size);
 
-  NodeID divisor = ceil(G.number_of_global_nodes() / static_cast<double>(size));
+  auto const number_of_global_nodes = G.number_of_global_nodes();
+  NodeID divisor = number_of_global_nodes == 0
+                       ? NodeID{1}
+                       : ceil(number_of_global_nodes /
+                              static_cast<double>(size));
 
   auto requests_by_destination =
       std::vector<std::vector<contraction::label_request>>(
           static_cast<std::size_t>(size));
   std::unordered_set<NodeID> requested_labels;
 
+  auto local_requests_are_valid = true;
+  forall_local_nodes(G, node) {
+    local_requests_are_valid =
+        local_requests_are_valid &&
+        G.getNodeLabel(node) < number_of_global_nodes;
+  } endfor
+  mpi::validate_collectively(
+      local_requests_are_valid,
+      mpi::communicator_view{communicator},
+      "label request local validation failed");
+
   forall_local_nodes(G, node) {
     auto const old_label = G.getNodeLabel(node);
     auto const destination = static_cast<std::size_t>(old_label / divisor);
-    requests_by_destination.at(destination).push_back({old_label});
+    requests_by_destination[destination].push_back({old_label});
     requested_labels.insert(old_label);
   } endfor
 
@@ -106,6 +122,21 @@ void parallel_contraction::compute_label_mapping(
       mpi::segmented_buffer<contraction::label_request>::from_segments(
           requests_by_destination),
       mpi::communicator_view{communicator});
+
+  auto incoming_requests_are_valid = true;
+  for (std::size_t source = 0; source < incoming_requests.segment_count();
+       ++source) {
+    for (auto const& request : incoming_requests.segment(source)) {
+      incoming_requests_are_valid =
+          incoming_requests_are_valid &&
+          request.old_label < number_of_global_nodes &&
+          static_cast<PEID>(request.old_label / divisor) == rank;
+    }
+  }
+  mpi::validate_collectively(
+      incoming_requests_are_valid,
+      mpi::communicator_view{communicator},
+      "label request owner validation failed");
 
   std::vector<NodeID> local_labels;
   local_labels.reserve(incoming_requests.storage().size());
@@ -175,22 +206,32 @@ void parallel_contraction::compute_label_mapping(
       mpi::segmented_buffer<contraction::label_reply>::from_segments(
           replies_by_destination),
       mpi::communicator_view{communicator});
+  auto incoming_replies_are_valid = true;
   for (std::size_t source = 0; source < incoming_replies.segment_count();
        ++source) {
     for (auto const& reply : incoming_replies.segment(source)) {
-      if (!requested_labels.contains(reply.old_label)) {
-        throw std::logic_error{"label reply has an unknown old label"};
+      if (reply.old_label >= number_of_global_nodes) {
+        incoming_replies_are_valid = false;
+        continue;
       }
-      auto const [position, inserted] = label_mapping.try_emplace(
-          reply.old_label, reply.coarse_global_id);
-      if (!inserted && position->second != reply.coarse_global_id) {
-        throw std::logic_error{"label reply conflicts with an earlier reply"};
+      incoming_replies_are_valid =
+          incoming_replies_are_valid &&
+          static_cast<std::size_t>(reply.old_label / divisor) == source &&
+          reply.coarse_global_id < global_num_distinct_ids &&
+          requested_labels.contains(reply.old_label);
+      if (requested_labels.erase(reply.old_label) == 0) {
+        incoming_replies_are_valid = false;
       }
-      requested_labels.erase(reply.old_label);
     }
   }
-  if (!requested_labels.empty()) {
-    throw std::logic_error{"label reply is missing"};
+  incoming_replies_are_valid =
+      incoming_replies_are_valid && requested_labels.empty();
+  mpi::validate_collectively(
+      incoming_replies_are_valid,
+      mpi::communicator_view{communicator},
+      "label reply validation failed");
+  for (auto const& reply : incoming_replies.storage()) {
+    label_mapping[reply.old_label] = reply.coarse_global_id;
   }
 }
 
@@ -308,7 +349,42 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         MPI_Comm_rank( communicator, &rank);
         MPI_Comm_size( communicator, &size);
 
-        NodeID divisor          = ceil( number_of_cnodes/(double)size);
+        auto local_edges_are_valid = true;
+        for (auto const& [edge, data] : hG) {
+                static_cast<void>(data);
+                local_edges_are_valid =
+                    local_edges_are_valid &&
+                    edge.source < number_of_cnodes &&
+                    edge.target < number_of_cnodes;
+        }
+        mpi::validate_collectively(
+            local_edges_are_valid,
+            mpi::communicator_view{communicator},
+            "quotient edge local validation failed");
+
+        auto local_weights_are_valid = true;
+        for (auto const& [coarse_global_id, weight] : node_weights) {
+                static_cast<void>(weight);
+                local_weights_are_valid =
+                    local_weights_are_valid &&
+                    coarse_global_id < number_of_cnodes;
+        }
+        mpi::validate_collectively(
+            local_weights_are_valid,
+            mpi::communicator_view{communicator},
+            "quotient node-weight local validation failed");
+
+        NodeID divisor = number_of_cnodes == 0
+                             ? NodeID{1}
+                             : ceil(number_of_cnodes /
+                                    static_cast<double>(size));
+        auto const from = std::min(
+            number_of_cnodes, static_cast<NodeID>(rank) * divisor);
+        auto const end = std::min(
+            number_of_cnodes, static_cast<NodeID>(rank + 1) * divisor);
+        auto const local_num_cnodes = end - from;
+        auto const to = local_num_cnodes == 0 ? from : end - 1;
+        Q.set_range(from, to);
 
         auto edges_by_destination =
             std::vector<std::vector<contraction::bundled_edge>>(
@@ -320,16 +396,16 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                     static_cast<std::size_t>(edge.source / divisor);
                 auto const target_owner =
                     static_cast<std::size_t>(edge.target / divisor);
-                edges_by_destination.at(source_owner).push_back(
+                edges_by_destination[source_owner].push_back(
                     {edge.source,
                      edge.target,
                      data.weight,
-                     sender_sequences.at(source_owner)++});
-                edges_by_destination.at(target_owner).push_back(
+                     sender_sequences[source_owner]++});
+                edges_by_destination[target_owner].push_back(
                     {edge.target,
                      edge.source,
                      data.weight,
-                     sender_sequences.at(target_owner)++});
+                     sender_sequences[target_owner]++});
         }
         for (auto& edges : edges_by_destination) {
                 std::ranges::stable_sort(edges, {}, [](auto const& edge) {
@@ -342,19 +418,17 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                 edges_by_destination),
             mpi::communicator_view{communicator});
 
-        hashed_graph local_graph;
+        auto incoming_edges_are_valid = true;
         for (std::size_t source = 0;
              source < incoming_edges.segment_count();
              ++source) {
-                auto source_edges = std::vector<contraction::bundled_edge>(
-                    incoming_edges.segment(source).begin(),
-                    incoming_edges.segment(source).end());
+                auto source_edges = incoming_edges.segment(source);
                 // The pinned upstream build materializes each source rank's
                 // unordered hashed_graph iteration order. Preserve that
                 // sender-local sequence after the semantic wire sort so the
                 // quotient adjacency (and its downstream traversal order)
                 // remains exactly compatible with that build.
-                std::ranges::stable_sort(
+                std::ranges::sort(
                     source_edges, {}, [](auto const& edge) {
                             return std::tie(edge.sender_sequence,
                                             edge.source,
@@ -363,16 +437,31 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                 for (std::size_t index = 0; index < source_edges.size();
                      ++index) {
                         auto const& edge = source_edges[index];
-                        if (edge.sender_sequence !=
-                            static_cast<NodeID>(index)) {
-                                throw std::logic_error{
-                                    "quotient edge sender sequence has a gap "
-                                    "or duplicate"};
+                        incoming_edges_are_valid =
+                            incoming_edges_are_valid &&
+                            edge.sender_sequence ==
+                                static_cast<NodeID>(index);
+                        if (edge.source >= number_of_cnodes ||
+                            edge.target >= number_of_cnodes) {
+                                incoming_edges_are_valid = false;
+                                continue;
                         }
-                        if (static_cast<PEID>(edge.source / divisor) != rank) {
-                                throw std::logic_error{
-                                    "quotient edge reached the wrong owner"};
-                        }
+                        incoming_edges_are_valid =
+                            incoming_edges_are_valid &&
+                            static_cast<PEID>(edge.source / divisor) == rank &&
+                            Q.is_local_node_from_global_id(edge.source);
+                }
+        }
+        mpi::validate_collectively(
+            incoming_edges_are_valid,
+            mpi::communicator_view{communicator},
+            "quotient edge received validation failed");
+
+        hashed_graph local_graph;
+        for (std::size_t source = 0;
+             source < incoming_edges.segment_count();
+             ++source) {
+                for (auto const& edge : incoming_edges.segment(source)) {
                         hashed_edge local_edge;
                         local_edge.k = number_of_cnodes;
                         local_edge.source = edge.source;
@@ -380,13 +469,6 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                         local_graph[local_edge].weight += edge.weight;
                 }
         }
-
-        ULONG from = rank     * ceil(number_of_cnodes / (double)size);
-        ULONG to   = (rank+1) * ceil(number_of_cnodes / (double)size) - 1;
-        // handle the case where we dont have local edges
-        from = std::min(from, number_of_cnodes);
-        to   = std::min(to, number_of_cnodes - 1);
-        ULONG local_num_cnodes = to - from + 1;
 
         std::vector < std::vector< std::pair<NodeID, NodeWeight > > > sorted_graph;
         sorted_graph.resize( local_num_cnodes );
@@ -425,7 +507,9 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
 
         std::vector< NodeID > vertex_dist( size+1, 0 );
         for( PEID peID = 0; peID <= size; peID++) {
-                vertex_dist[peID] = std::min(number_of_cnodes, (NodeID) (peID * ceil(number_of_cnodes / (double)size))); // from positions
+                vertex_dist[peID] = std::min(
+                    number_of_cnodes,
+                    static_cast<NodeID>(peID) * divisor);
         }
         //vertex_dist[size] = std::min(to, number_of_cnodes - 1);
         Q.set_range_array(vertex_dist);
@@ -451,7 +535,7 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
         for (auto const& [coarse_global_id, weight] : node_weights) {
                 auto const destination =
                     static_cast<std::size_t>(coarse_global_id / divisor);
-                weights_by_destination.at(destination).push_back(
+                weights_by_destination[destination].push_back(
                     {coarse_global_id, weight});
         }
         for (auto& weights : weights_by_destination) {
@@ -465,18 +549,35 @@ void parallel_contraction::redistribute_hased_graph_and_build_graph_locally( MPI
                 contraction::node_weight_contribution>::from_segments(
                     weights_by_destination),
             mpi::communicator_view{communicator});
+        auto incoming_weights_are_valid = true;
         for (std::size_t source = 0;
              source < incoming_weights.segment_count();
              ++source) {
                 for (auto const& contribution :
                      incoming_weights.segment(source)) {
-                        if (static_cast<PEID>(
-                                contribution.coarse_global_id / divisor) !=
-                            rank) {
-                                throw std::logic_error{
-                                    "quotient node weight reached the wrong "
-                                    "owner"};
+                        if (contribution.coarse_global_id >=
+                            number_of_cnodes) {
+                                incoming_weights_are_valid = false;
+                                continue;
                         }
+                        incoming_weights_are_valid =
+                            incoming_weights_are_valid &&
+                            static_cast<PEID>(
+                                contribution.coarse_global_id / divisor) ==
+                                rank &&
+                            Q.is_local_node_from_global_id(
+                                contribution.coarse_global_id);
+                }
+        }
+        mpi::validate_collectively(
+            incoming_weights_are_valid,
+            mpi::communicator_view{communicator},
+            "quotient node-weight received validation failed");
+        for (std::size_t source = 0;
+             source < incoming_weights.segment_count();
+             ++source) {
+                for (auto const& contribution :
+                     incoming_weights.segment(source)) {
                         auto const node =
                             contribution.coarse_global_id - from;
                         Q.setNodeWeight(

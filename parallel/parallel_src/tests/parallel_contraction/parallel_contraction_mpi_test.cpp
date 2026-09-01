@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <numeric>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -18,6 +20,7 @@
 #include <fmt/ranges.h>
 
 #include "kahip_mpi_capabilities.h"
+#include "communication/mpi_error.h"
 #include "communication/mpi_tools.h"
 #include "parallel_contraction_projection/parallel_contraction.h"
 
@@ -216,6 +219,57 @@ void build_label_fixture(parallel_graph_access& graph, int rank, int size) {
   }
   graph.finish_construction();
 }
+
+void build_empty_label_fixture(parallel_graph_access& graph, int size) {
+  graph.start_construction(0, 0, 0, 0, false);
+  graph.set_range(0, 0);
+  auto ranges = std::vector<NodeID>(static_cast<std::size_t>(size) + 1, 0);
+  graph.set_range_array(ranges);
+  graph.finish_construction();
+}
+
+template <typename Operation>
+void require_collective_validation_failure(Operation&& operation,
+                                           std::string_view expected_context,
+                                           int size) {
+  auto caught = 0;
+  auto structured = 0;
+  auto context_matches = 0;
+  try {
+    std::invoke(std::forward<Operation>(operation));
+  } catch (mpi::mpi_error const& error) {
+    caught = 1;
+    structured = 1;
+    context_matches = error.context().find(expected_context) !=
+                              std::string_view::npos
+                          ? 1
+                          : 0;
+  } catch (std::exception const&) {
+    caught = 1;
+  }
+
+  auto caught_by_all = 0;
+  auto structured_by_all = 0;
+  auto context_matches_all = 0;
+  REQUIRE(MPI_Allreduce(
+              &caught, &caught_by_all, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD) ==
+          MPI_SUCCESS);
+  REQUIRE(MPI_Allreduce(&structured,
+                        &structured_by_all,
+                        1,
+                        MPI_INT,
+                        MPI_SUM,
+                        MPI_COMM_WORLD) == MPI_SUCCESS);
+  REQUIRE(MPI_Allreduce(&context_matches,
+                        &context_matches_all,
+                        1,
+                        MPI_INT,
+                        MPI_SUM,
+                        MPI_COMM_WORLD) == MPI_SUCCESS);
+  REQUIRE(caught_by_all == size);
+  REQUIRE(structured_by_all == size);
+  REQUIRE(context_matches_all == size);
+}
 }  // namespace
 
 TEST_CASE("label mapping uses explicit semantic replies and preserves contiguous IDs",
@@ -258,6 +312,61 @@ TEST_CASE("label mapping uses explicit semantic replies and preserves contiguous
                                 static_cast<MPI_Aint>(2 * sizeof(NodeID))});
   REQUIRE(protocol_probe::isend_calls == 0);
   REQUIRE(protocol_probe::probe_calls == 0);
+  REQUIRE(protocol_probe::recv_calls == 0);
+}
+
+TEST_CASE("global-zero label mapping keeps empty keyed exchanges exact",
+          "[unit][mpi][contraction][label-mapping][zero]") {
+  int size = 0;
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_empty_label_fixture(graph, size);
+
+  protocol_probe::reset();
+  protocol_probe::active = true;
+  auto [global_num_distinct_ids, mapping] =
+      parallel_contraction_test_access::compute_label_mapping(
+          MPI_COMM_WORLD, graph);
+  protocol_probe::active = false;
+
+  REQUIRE(global_num_distinct_ids == 0);
+  REQUIRE(mapping.empty());
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+  REQUIRE(protocol_probe::payload_extents ==
+          std::vector<MPI_Aint>{static_cast<MPI_Aint>(sizeof(NodeID)),
+                                static_cast<MPI_Aint>(2 * sizeof(NodeID))});
+  REQUIRE(protocol_probe::isend_calls == 0);
+  REQUIRE(protocol_probe::probe_calls == 0);
+  REQUIRE(protocol_probe::recv_calls == 0);
+}
+
+TEST_CASE("label mapping rejects an out-of-domain local label collectively",
+          "[unit][mpi][contraction][label-mapping][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_label_fixture(graph, rank, size);
+  if (rank == 0) {
+    graph.setNodeLabel(0, graph.number_of_global_nodes());
+  }
+
+  require_collective_validation_failure(
+      [&] {
+        static_cast<void>(
+            parallel_contraction_test_access::compute_label_mapping(
+                MPI_COMM_WORLD, graph));
+      },
+      "label request local validation",
+      size);
 }
 
 TEST_CASE("quotient edges use one dense keyed exchange and aggregate exactly",
@@ -407,6 +516,129 @@ TEST_CASE("quotient node weights use one dense keyed exchange and sum exactly",
               protocol_probe::probe_tags, 8, size) == 0);
   REQUIRE(protocol_probe::calls_in_tag_phase(
               protocol_probe::recv_tags, 8, size) == 0);
+}
+
+TEST_CASE("zero coarse-node redistribution remains an empty dense exchange",
+          "[unit][mpi][contraction][quotient][zero]") {
+  int size = 0;
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  hashed_graph no_edges;
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+
+  protocol_probe::reset();
+  protocol_probe::active = true;
+  parallel_contraction_test_access::redistribute_quotient(
+      MPI_COMM_WORLD, no_edges, no_node_weights, 0, quotient);
+  protocol_probe::active = false;
+
+  REQUIRE(quotient.number_of_local_nodes() == 0);
+  REQUIRE(quotient.number_of_local_edges() == 0);
+  REQUIRE(quotient.get_from_range() == 0);
+  REQUIRE(quotient.get_to_range() == 0);
+  REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
+}
+
+TEST_CASE("quotient redistribution rejects a tail-padding edge source collectively",
+          "[unit][mpi][contraction][quotient-edges][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph local_edges;
+  if (rank == 0) {
+    local_edges[hashed_edge{coarse_nodes, coarse_nodes, 0}].weight = 4;
+  }
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            local_edges,
+            no_node_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient edge local validation",
+      size);
+  REQUIRE(quotient.number_of_local_nodes() == 0);
+  REQUIRE(quotient.number_of_local_edges() == 0);
+}
+
+TEST_CASE("quotient redistribution rejects a tail-padding edge target collectively",
+          "[unit][mpi][contraction][quotient-edges][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph local_edges;
+  if (rank == 0) {
+    local_edges[hashed_edge{coarse_nodes, 0, coarse_nodes}].weight = 4;
+  }
+  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            local_edges,
+            no_node_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient edge local validation",
+      size);
+  REQUIRE(quotient.number_of_local_nodes() == 0);
+  REQUIRE(quotient.number_of_local_edges() == 0);
+}
+
+TEST_CASE("quotient redistribution rejects a tail-padding node weight collectively",
+          "[unit][mpi][contraction][quotient-node-weights][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{4};
+  hashed_graph no_edges;
+  std::unordered_map<NodeID, NodeWeight> local_weights;
+  if (rank == 0) {
+    local_weights[coarse_nodes] = 7;
+  }
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD,
+            no_edges,
+            local_weights,
+            coarse_nodes,
+            quotient);
+      },
+      "quotient node-weight local validation",
+      size);
+  REQUIRE(quotient.number_of_local_nodes() == 0);
+  REQUIRE(quotient.number_of_local_edges() == 0);
 }
 
 TEST_CASE("all to all vector of vectors", "[unit][mpi]") {

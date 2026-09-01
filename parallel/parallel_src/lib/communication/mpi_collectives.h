@@ -28,17 +28,25 @@ struct collective_options {
 };
 
 namespace detail {
-inline void validate_dense_layout(bool local_layout_is_valid,
-                                  communicator_view communicator) {
-  int local_valid = local_layout_is_valid ? 1 : 0;
+inline void validate_collective_predicate(bool local_is_valid,
+                                          communicator_view communicator,
+                                          std::string_view context) {
+  int local_valid = local_is_valid ? 1 : 0;
   int all_valid = 0;
   check(MPI_Allreduce(&local_valid, &all_valid, 1, MPI_INT, MPI_MIN,
                       communicator.native_handle()),
-        "MPI_Allreduce(dense collective input validation)");
+        "MPI_Allreduce(collective validation)");
   if (all_valid == 0) {
-    throw mpi_error{MPI_ERR_ARG,
-                    "all_to_all_v collective input validation failed"};
+    throw mpi_error{MPI_ERR_ARG, std::string{context}};
   }
+}
+
+inline void validate_dense_layout(bool local_layout_is_valid,
+                                  communicator_view communicator) {
+  validate_collective_predicate(
+      local_layout_is_valid,
+      communicator,
+      "all_to_all_v collective input validation failed");
 }
 
 inline auto validate_collective_options(collective_options options,
@@ -219,6 +227,14 @@ inline auto checked_mpi_aint(std::size_t value, std::string_view context)
 }
 #endif
 }  // namespace detail
+
+inline void validate_collectively(bool local_is_valid,
+                                  communicator_view communicator,
+                                  std::string_view context) {
+  auto owned_communicator = parhip::mpi::communicator{communicator};
+  detail::validate_collective_predicate(
+      local_is_valid, owned_communicator.view(), context);
+}
 
 template <mpi_datatype T>
 [[nodiscard]] auto all_to_all_v(

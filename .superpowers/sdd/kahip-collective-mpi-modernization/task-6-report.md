@@ -179,3 +179,108 @@ The shared `m_send_buffers` storage used by sparse paths was preserved. Only
 the dense-path `m_messages`/`m_out_messages`, sentinels, non-waited request
 state, and tags 7, 8, and 10 were removed. No unrelated production files were
 changed.
+
+## Fix round 1: collective semantic validation
+
+### Scope and review findings
+
+This fix round starts from reviewed Task 6 commit
+`3d2d985a452efb5b3d75244fc8afd1e3214540f4` and addresses all three Important
+findings and both Minor test gaps from the scoped review. It does not migrate
+any Task 7 sparse path.
+
+The adapter now exposes a thin `validate_collectively` operation. It duplicates
+the affected communicator, installs `MPI_ERRORS_RETURN` through the existing
+RAII communicator, reduces the local validity predicate, and gives every rank
+the same structured `mpi_error` context when any rank rejects a record. The
+duplication is diagnostic isolation: `MPI_ERRORS_RETURN` is not a recovery
+contract.
+
+KaHIP retains a fail-fast HPC policy. In production, the structured exception
+propagates to the existing application/interface exception barrier, which logs
+through `spdlog::critical` and calls `MPI_Abort` on the affected communicator.
+No validation failure recovers, continues, returns a partial graph, or applies
+partial state. The focused test harness catches the structured exception only
+to prove that every rank reaches the same common fail-fast point without a
+hang; it does not model production recovery.
+
+### RED/GREEN evidence
+
+1. **Local block conflicts.** RED used a real three-rank fixture with two fine
+   nodes on rank 0 contributing different blocks for the same coarse ID. Only
+   one of three ranks caught the old owner-local exception. GREEN preserves
+   every local `{coarse_global_id, block}` contribution, stable-sorts it, and
+   collectively rejects differing duplicates before any payload exchange.
+   Identical duplicates remain valid.
+
+2. **Full coarse-ID domains and zero work.** The `N=4,size=3,ID=4` REDs showed
+   that an invalid label and invalid node-weight contribution were silently
+   admitted, invalid edge source/target records reached unsafe graph indexing,
+   and an invalid block ID was not rejected. The zero-coarse-node fixture also
+   exposed the old underflowed owner range. GREEN validates every edge source
+   and target, node-weight ID, and block ID against the full half-open domain
+   before division/routing, then validates received domain, semantic owner,
+   and `Q.is_local_node_from_global_id` again before indexing or application.
+   A divisor of one is used only as an empty-domain routing guard, so `N==0`
+   performs empty collective exchanges without division by zero or sentinels.
+
+3. **Collective failure symmetry.** All semantic scans now accumulate validity
+   without `.at`, division, local graph indexing, or application on malformed
+   records. Receiver-side label correlation, sender-sequence reconstruction,
+   and block conflict/missing scans reuse and sort the already-received storage
+   in place; malformed semantic fields do not drive an extra map or per-source
+   vector allocation before the common validation decision. Label request
+   owner/domain and reply domain/owner/known/conflict/
+   missing checks, edge sequence/owner/domain checks, node-weight owner/domain
+   checks, and block owner/domain/conflict/missing checks all converge through
+   the collective validator. Edge receive validation occurs before
+   `local_graph` materialization and before the existing edge-count
+   `MPI_Allreduce`. The three-rank block REDs separately observed tail ID
+   caught by 0/3 ranks, cross-rank conflict caught by 1/3, and missing updates
+   caught by 0/3. GREEN makes all ranks catch the same structured context in
+   every failure fixture; every dedicated malformed-input CTest has a
+   five-second timeout.
+
+4. **Minor coverage gaps.** A ranks-1--5 global-zero label fixture now requires
+   exact count zero, an empty map, two empty dense payload exchanges, and zero
+   `MPI_Isend`, `MPI_Probe`, or `MPI_Recv`. The normal label PMPI protocol test
+   now also explicitly requires `MPI_Recv == 0`.
+
+The valid block fixture now supplies all four coarse IDs from every rank. This
+retains identical duplicate coverage while independently asserting the exact
+block on each local coarse node, including uneven ownership and ranks with zero
+local coarse nodes. The sender-sequence reconstruction, semantic wire sorting,
+source-canonical processing, quotient `/4` and `/2` mathematics, node-weight
+sums, and sparse deferrals are unchanged.
+
+### Fix-round verification
+
+Every shell command used the required `systemd-run --user --scope` memory
+limits, and every build used at most two jobs.
+
+- Trace-ON debug full build: passed; full CTest **65/65 passed**.
+- Default-OFF release full build: passed; full CTest **60/60 passed**. The
+  reused Ninja log emitted its known recoverable premature-EOF regeneration
+  warning; generation, compilation, linking, and all tests completed.
+- Focused trace-ON matrix: **24/24 passed**: adapter ranks 1--5, contraction
+  ranks 1--5, block-owner ranks 1--5, projection, and all eight collective
+  failure cases.
+- Generated capability readback in both builds:
+  `KAHIP_HAVE_MPI_ALLTOALLV_C 0`; debug cache has tracing ON and release cache
+  has the default tracing OFF.
+- Post-fix exact pinned tuple: partition SHA-256
+  `a600acd0029ee9342e4f7c5b041d224a308b874c85fd35bdbcd3a5a73d48cdd0`,
+  canonical 436,721-record aggregate SHA-256
+  `a179bb30213dbb26638657a1d611e951a8bf900b817647fc03d4c700a83f0a18`.
+  Both remain exact.
+- Production protocol search still shows the five Task 6 dense
+  `all_to_all_v` payloads and no tag-7, tag-8, or tag-10 dense
+  `MPI_Isend`/`MPI_Probe`/`MPI_Recv`/sentinel protocol. Required sparse tag-6,
+  tag-9, and tag-11 paths remain present.
+- `git diff --check`: passed before the final commit.
+
+The deliberately deferred list above remains exact: in particular,
+`get_nodes_to_cnodes_ghost_nodes`, `update_ghost_nodes_weights`, and
+`update_ghost_nodes_blocks` remain sparse P2P for Task 7, and graph ghost
+messaging, consistency checks, DSPAC, `mpi_tools` root gather, and asynchronous
+evolutionary gossip were not changed.

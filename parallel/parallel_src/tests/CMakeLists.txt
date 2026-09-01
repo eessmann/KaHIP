@@ -69,6 +69,64 @@ foreach(mpi_ranks RANGE 1 5)
     )
 endforeach()
 
+add_test(
+    NAME unit-parallel-label-invalid-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "label mapping rejects an out-of-domain local label collectively"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-label-invalid-3-rank
+    PROPERTIES
+        PROCESSORS 3
+        RUN_SERIAL TRUE
+        TIMEOUT 5
+)
+
+foreach(
+    failure_case
+    IN ITEMS
+        edge-source
+        edge-target
+        node-weight
+)
+    if(failure_case STREQUAL "edge-source")
+        set(
+            failure_filter
+            "quotient redistribution rejects a tail-padding edge source collectively"
+        )
+    elseif(failure_case STREQUAL "edge-target")
+        set(
+            failure_filter
+            "quotient redistribution rejects a tail-padding edge target collectively"
+        )
+    else()
+        set(
+            failure_filter
+            "quotient redistribution rejects a tail-padding node weight collectively"
+        )
+    endif()
+    add_test(
+        NAME unit-parallel-quotient-invalid-${failure_case}-3-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_contraction_mpi_test>
+            "${failure_filter}"
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-parallel-quotient-invalid-${failure_case}-3-rank
+        PROPERTIES
+            PROCESSORS 3
+            RUN_SERIAL TRUE
+            TIMEOUT 5
+    )
+endforeach()
+
 add_executable(
     parallel_projection_mpi_test
     parallel_projection/parallel_projection_mpi_test.cpp
@@ -109,6 +167,64 @@ foreach(mpi_ranks RANGE 1 5)
             PROCESSORS ${mpi_ranks}
             RUN_SERIAL TRUE
             TIMEOUT 10
+    )
+endforeach()
+
+add_test(
+    NAME unit-parallel-block-owner-local-conflict-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_projection_mpi_test>
+        "block-down rejects a rank-local conflicting coarse block collectively"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-block-owner-local-conflict-3-rank
+    PROPERTIES
+        PROCESSORS 3
+        RUN_SERIAL TRUE
+        TIMEOUT 5
+)
+
+foreach(
+    failure_case
+    IN ITEMS
+        invalid-id
+        cross-rank-conflict
+        missing
+)
+    if(failure_case STREQUAL "invalid-id")
+        set(
+            failure_filter
+            "block-down rejects a tail-padding coarse ID collectively"
+        )
+    elseif(failure_case STREQUAL "cross-rank-conflict")
+        set(
+            failure_filter
+            "block-down rejects a cross-rank conflicting coarse block collectively"
+        )
+    else()
+        set(
+            failure_filter
+            "block-down rejects a missing coarse block collectively"
+        )
+    endif()
+    add_test(
+        NAME unit-parallel-block-owner-${failure_case}-3-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_projection_mpi_test>
+            "${failure_filter}"
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-parallel-block-owner-${failure_case}-3-rank
+        PROPERTIES
+            PROCESSORS 3
+            RUN_SERIAL TRUE
+            TIMEOUT 5
     )
 endforeach()
 

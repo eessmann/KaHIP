@@ -8,8 +8,6 @@
 #include "parallel_block_down_propagation.h"
 
 #include <algorithm>
-#include <map>
-#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -29,23 +27,48 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
                                                             parallel_graph_access & Q) {
 
 
-  std::unordered_map< NodeID, NodeID > coarse_block_ids;
-
+  std::vector<block_down::block_update> local_updates;
+  local_updates.reserve(static_cast<std::size_t>(G.number_of_local_nodes()));
   forall_local_nodes(G, node) {
-    NodeID cur_cnode = G.getCNode( node );
-    coarse_block_ids[cur_cnode] = G.getSecondPartitionIndex( node );
+    local_updates.push_back(
+        {G.getCNode(node), G.getSecondPartitionIndex(node)});
   } endfor
 
   PEID rank, size;
   MPI_Comm_rank( communicator, &rank);
   MPI_Comm_size( communicator, &size);
 
-  NodeID divisor          = ceil( Q.number_of_global_nodes()/(double)size);
+  std::ranges::stable_sort(local_updates, {}, [](auto const& update) {
+    return std::tie(update.coarse_global_id, update.block);
+  });
+  auto const number_of_coarse_nodes = Q.number_of_global_nodes();
+  auto local_updates_are_valid = true;
+  for (auto const& update : local_updates) {
+    if (update.coarse_global_id >= number_of_coarse_nodes) {
+      local_updates_are_valid = false;
+    }
+  }
+  for (std::size_t index = 1; index < local_updates.size(); ++index) {
+    auto const& previous = local_updates[index - 1];
+    auto const& current = local_updates[index];
+    if (previous.coarse_global_id == current.coarse_global_id &&
+        previous.block != current.block) {
+      local_updates_are_valid = false;
+    }
+  }
+  mpi::validate_collectively(
+      local_updates_are_valid,
+      mpi::communicator_view{communicator},
+      "block update local validation failed");
+
+  NodeID divisor = number_of_coarse_nodes == 0
+                       ? NodeID{1}
+                       : ceil(number_of_coarse_nodes / (double)size);
 
   auto updates_by_destination =
       std::vector<std::vector<block_down::block_update>>(
           static_cast<std::size_t>(size));
-  for (auto const& [coarse_global_id, block] : coarse_block_ids) {
+  for (auto const& [coarse_global_id, block] : local_updates) {
     auto const destination =
         static_cast<std::size_t>(coarse_global_id / divisor);
     updates_by_destination.at(destination).push_back(
@@ -61,24 +84,62 @@ void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicato
       mpi::segmented_buffer<block_down::block_update>::from_segments(
           updates_by_destination),
       mpi::communicator_view{communicator});
-  std::map<NodeID, NodeID> blocks_by_coarse_node;
+  auto incoming_updates_are_valid = true;
   for (std::size_t source = 0;
        source < incoming_updates.segment_count();
        ++source) {
     for (auto const& update : incoming_updates.segment(source)) {
+      if (update.coarse_global_id >= number_of_coarse_nodes) {
+        incoming_updates_are_valid = false;
+        continue;
+      }
       if (static_cast<PEID>(update.coarse_global_id / divisor) != rank ||
           !Q.is_local_node_from_global_id(update.coarse_global_id)) {
-        throw std::logic_error{"block update reached the wrong owner"};
-      }
-      auto const [position, inserted] = blocks_by_coarse_node.try_emplace(
-          update.coarse_global_id, update.block);
-      if (!inserted && position->second != update.block) {
-        throw std::logic_error{"conflicting block updates for coarse node"};
+        incoming_updates_are_valid = false;
       }
     }
   }
-  for (auto const& [coarse_global_id, block] : blocks_by_coarse_node) {
-    Q.setSecondPartitionIndex(Q.getLocalID(coarse_global_id), block);
+  auto incoming_storage = incoming_updates.storage();
+  std::ranges::sort(incoming_storage, {}, [](auto const& update) {
+    return std::tie(update.coarse_global_id, update.block);
+  });
+  for (std::size_t index = 1; index < incoming_storage.size(); ++index) {
+    auto const& previous = incoming_storage[index - 1];
+    auto const& current = incoming_storage[index];
+    if (previous.coarse_global_id == current.coarse_global_id &&
+        previous.block != current.block) {
+      incoming_updates_are_valid = false;
+    }
+  }
+  auto update_index = std::size_t{0};
+  forall_local_nodes(Q, node) {
+    auto const coarse_global_id = Q.getGlobalID(node);
+    while (update_index < incoming_storage.size() &&
+           incoming_storage[update_index].coarse_global_id <
+               coarse_global_id) {
+      ++update_index;
+    }
+    if (update_index == incoming_storage.size() ||
+        incoming_storage[update_index].coarse_global_id !=
+            coarse_global_id) {
+      incoming_updates_are_valid = false;
+    }
+  } endfor
+  mpi::validate_collectively(
+      incoming_updates_are_valid,
+      mpi::communicator_view{communicator},
+      "block update received validation failed");
+
+  auto first_update_for_node = true;
+  auto previous_coarse_global_id = NodeID{0};
+  for (auto const& update : incoming_storage) {
+    if (first_update_for_node ||
+        update.coarse_global_id != previous_coarse_global_id) {
+      Q.setSecondPartitionIndex(
+          Q.getLocalID(update.coarse_global_id), update.block);
+      previous_coarse_global_id = update.coarse_global_id;
+      first_update_for_node = false;
+    }
   }
 
   forall_local_nodes(Q, node) {

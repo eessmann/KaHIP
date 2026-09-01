@@ -3,14 +3,17 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "data_structure/parallel_graph_access.h"
+#include "communication/mpi_error.h"
 #include "communication/mpi_trace.h"
+#include "data_structure/parallel_graph_access.h"
 #include "kahip_mpi_capabilities.h"
 #include "parallel_label_compress/parallel_label_compress.h"
 #include "parallel_contraction_projection/parallel_block_down_propagation.h"
@@ -196,18 +199,18 @@ void build_two_rank_cross_edge(parhip::parallel_graph_access& graph,
 void build_block_finer(parhip::parallel_graph_access& graph,
                        int rank,
                        int size) {
-  auto const global_nodes = static_cast<parhip::NodeID>(2 * size);
-  auto const first = static_cast<parhip::NodeID>(2 * rank);
-  graph.start_construction(2, 0, global_nodes, 0, false);
-  graph.set_range(first, first + 1);
+  auto const global_nodes = static_cast<parhip::NodeID>(4 * size);
+  auto const first = static_cast<parhip::NodeID>(4 * rank);
+  graph.start_construction(4, 0, global_nodes, 0, false);
+  graph.set_range(first, first + 3);
   auto ranges = std::vector<parhip::NodeID>(
       static_cast<std::size_t>(size) + 1);
   for (int pe = 0; pe <= size; ++pe) {
     ranges[static_cast<std::size_t>(pe)] =
-        static_cast<parhip::NodeID>(2 * pe);
+        static_cast<parhip::NodeID>(4 * pe);
   }
   graph.set_range_array(ranges);
-  for (parhip::NodeID index = 0; index < 2; ++index) {
+  for (parhip::NodeID index = 0; index < 4; ++index) {
     auto const node = graph.new_node();
     graph.setNodeWeight(node, 1);
     graph.setNodeLabel(node, 0);
@@ -241,6 +244,49 @@ void build_block_coarser(parhip::parallel_graph_access& graph,
     graph.setSecondPartitionIndex(node, 0);
   }
   graph.finish_construction();
+}
+
+template <typename Operation>
+void require_collective_validation_failure(Operation&& operation,
+                                           std::string_view expected_context,
+                                           int size) {
+  auto caught = 0;
+  auto structured = 0;
+  auto context_matches = 0;
+  try {
+    std::invoke(std::forward<Operation>(operation));
+  } catch (parhip::mpi::mpi_error const& error) {
+    caught = 1;
+    structured = 1;
+    context_matches = error.context().find(expected_context) !=
+                              std::string_view::npos
+                          ? 1
+                          : 0;
+  } catch (std::exception const&) {
+    caught = 1;
+  }
+
+  auto caught_by_all = 0;
+  auto structured_by_all = 0;
+  auto context_matches_all = 0;
+  REQUIRE(MPI_Allreduce(
+              &caught, &caught_by_all, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD) ==
+          MPI_SUCCESS);
+  REQUIRE(MPI_Allreduce(&structured,
+                        &structured_by_all,
+                        1,
+                        MPI_INT,
+                        MPI_SUM,
+                        MPI_COMM_WORLD) == MPI_SUCCESS);
+  REQUIRE(MPI_Allreduce(&context_matches,
+                        &context_matches_all,
+                        1,
+                        MPI_INT,
+                        MPI_SUM,
+                        MPI_COMM_WORLD) == MPI_SUCCESS);
+  REQUIRE(caught_by_all == size);
+  REQUIRE(structured_by_all == size);
+  REQUIRE(context_matches_all == size);
 }
 }  // namespace
 
@@ -450,11 +496,10 @@ TEST_CASE("block-down dense owner phase uses keyed collective and exact updates"
   build_block_finer(finer, rank, size);
   build_block_coarser(coarser, rank, size);
   finer.allocate_node_to_cnode();
-  finer.setCNode(0, 0);
-  finer.setSecondPartitionIndex(0, 10);
-  auto const second_cnode = static_cast<parhip::NodeID>(rank % 3 + 1);
-  finer.setCNode(1, second_cnode);
-  finer.setSecondPartitionIndex(1, 10 + second_cnode);
+  for (parhip::NodeID node = 0; node < 4; ++node) {
+    finer.setCNode(node, node);
+    finer.setSecondPartitionIndex(node, 10 + node);
+  }
 
   parhip::PPartitionConfig config{};
   parhip::mpi::trace::reset();
@@ -467,13 +512,8 @@ TEST_CASE("block-down dense owner phase uses keyed collective and exact updates"
       MPI_COMM_WORLD, config, finer, coarser);
   protocol_probe::active = false;
 
-  auto expected_block = [&](parhip::NodeID global) {
-    if (global == 0) {
-      return parhip::NodeID{10};
-    }
-    auto const contributor_rank = static_cast<int>(global - 1);
-    return contributor_rank < size ? parhip::NodeID{10} + global
-                                   : parhip::NodeID{0};
+  auto expected_block = [](parhip::NodeID global) {
+    return parhip::NodeID{10} + global;
   };
   for (parhip::NodeID node = 0; node < coarser.number_of_local_nodes();
        ++node) {
@@ -515,4 +555,137 @@ TEST_CASE("block-down dense owner phase uses keyed collective and exact updates"
 #else
   REQUIRE(parhip::mpi::trace::snapshot().empty());
 #endif
+}
+
+TEST_CASE("block-down rejects a rank-local conflicting coarse block collectively",
+          "[mpi][block-propagation][owner][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_block_finer(finer, rank, size);
+  build_block_coarser(coarser, rank, size);
+  finer.allocate_node_to_cnode();
+  finer.setCNode(0, 0);
+  finer.setCNode(1, 0);
+  finer.setCNode(2, 2);
+  finer.setCNode(3, 3);
+  finer.setSecondPartitionIndex(0, 10);
+  finer.setSecondPartitionIndex(1, rank == 0 ? 11 : 10);
+  finer.setSecondPartitionIndex(2, 12);
+  finer.setSecondPartitionIndex(3, 13);
+
+  parhip::PPartitionConfig config{};
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_block_down_propagation{}.propagate_block_down(
+            MPI_COMM_WORLD, config, finer, coarser);
+      },
+      "block update local validation",
+      size);
+}
+
+TEST_CASE("block-down rejects a tail-padding coarse ID collectively",
+          "[mpi][block-propagation][owner][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_block_finer(finer, rank, size);
+  build_block_coarser(coarser, rank, size);
+  finer.allocate_node_to_cnode();
+  finer.setCNode(0, 0);
+  finer.setCNode(1, rank == 0 ? 4 : 1);
+  finer.setCNode(2, 2);
+  finer.setCNode(3, 3);
+  finer.setSecondPartitionIndex(0, 10);
+  finer.setSecondPartitionIndex(1, 11);
+  finer.setSecondPartitionIndex(2, 12);
+  finer.setSecondPartitionIndex(3, 13);
+
+  parhip::PPartitionConfig config{};
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_block_down_propagation{}.propagate_block_down(
+            MPI_COMM_WORLD, config, finer, coarser);
+      },
+      "block update local validation",
+      size);
+  REQUIRE(coarser.number_of_local_edges() == 0);
+}
+
+TEST_CASE("block-down rejects a cross-rank conflicting coarse block collectively",
+          "[mpi][block-propagation][owner][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_block_finer(finer, rank, size);
+  build_block_coarser(coarser, rank, size);
+  finer.allocate_node_to_cnode();
+  finer.setCNode(0, 0);
+  finer.setCNode(1, 1);
+  finer.setCNode(2, 2);
+  finer.setCNode(3, 3);
+  finer.setSecondPartitionIndex(0, rank == 0 ? 11 : 10);
+  finer.setSecondPartitionIndex(1, 11);
+  finer.setSecondPartitionIndex(2, 12);
+  finer.setSecondPartitionIndex(3, 13);
+
+  parhip::PPartitionConfig config{};
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_block_down_propagation{}.propagate_block_down(
+            MPI_COMM_WORLD, config, finer, coarser);
+      },
+      "block update received validation",
+      size);
+}
+
+TEST_CASE("block-down rejects a missing coarse block collectively",
+          "[mpi][block-propagation][owner][failure]") {
+  int rank = 0;
+  int size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  parhip::parallel_graph_access finer{MPI_COMM_WORLD};
+  parhip::parallel_graph_access coarser{MPI_COMM_WORLD};
+  build_block_finer(finer, rank, size);
+  build_block_coarser(coarser, rank, size);
+  finer.allocate_node_to_cnode();
+  for (parhip::NodeID node = 0; node < 4; ++node) {
+    finer.setCNode(node, 0);
+    finer.setSecondPartitionIndex(node, 10);
+  }
+
+  parhip::PPartitionConfig config{};
+  require_collective_validation_failure(
+      [&] {
+        parhip::parallel_block_down_propagation{}.propagate_block_down(
+            MPI_COMM_WORLD, config, finer, coarser);
+      },
+      "block update received validation",
+      size);
 }
