@@ -4,10 +4,12 @@
 #include <array>
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -22,6 +24,7 @@
 #include "parallel_contraction_projection/parallel_block_down_propagation.h"
 #include "parallel_contraction_projection/parallel_projection.h"
 
+// KAHIP_PMPI_CALLBACK_REGION_BEGIN
 namespace protocol_probe {
 inline bool active = false;
 inline int all_to_all_v_calls = 0;
@@ -29,10 +32,8 @@ inline int all_to_all_v_c_calls = 0;
 inline int isend_calls = 0;
 inline int probe_calls = 0;
 inline int recv_calls = 0;
-inline std::vector<MPI_Aint> payload_extents;
-inline std::vector<int> isend_tags;
-inline std::vector<int> probe_tags;
-inline std::vector<int> recv_tags;
+inline bool interposer_error = false;
+inline bool mutation_fired = false;
 
 enum class receive_mutation {
   none,
@@ -45,52 +46,40 @@ inline receive_mutation mutation = receive_mutation::none;
 inline int mutation_payload_ordinal = 0;
 inline int mutation_target_rank = 0;
 
-void reset() {
+void reset() noexcept {
+  active = false;
   all_to_all_v_calls = 0;
   all_to_all_v_c_calls = 0;
   isend_calls = 0;
   probe_calls = 0;
   recv_calls = 0;
-  payload_extents.clear();
-  isend_tags.clear();
-  probe_tags.clear();
-  recv_tags.clear();
+  interposer_error = false;
+  mutation_fired = false;
   mutation = receive_mutation::none;
   mutation_payload_ordinal = 0;
   mutation_target_rank = 0;
 }
 
-[[nodiscard]] auto dense_payload_collective_calls() -> int {
+[[nodiscard]] auto dense_payload_collective_calls() noexcept -> int {
   return all_to_all_v_calls + all_to_all_v_c_calls;
 }
 
-void record_payload_extent(MPI_Datatype datatype) {
-  MPI_Aint lower_bound = 0;
-  MPI_Aint extent = 0;
-  REQUIRE(PMPI_Type_get_extent(datatype, &lower_bound, &extent) == MPI_SUCCESS);
-  REQUIRE(lower_bound == 0);
-  payload_extents.push_back(extent);
-}
-
-class scoped_receive_mutation {
-public:
-  scoped_receive_mutation(receive_mutation selected,
-                          int payload_ordinal,
-                          int target_rank = 0) noexcept {
+class activation final {
+ public:
+  explicit activation(receive_mutation selected = receive_mutation::none,
+                      int payload_ordinal = 0,
+                      int target_rank = 0) noexcept {
+    reset();
     mutation = selected;
     mutation_payload_ordinal = payload_ordinal;
     mutation_target_rank = target_rank;
+    active = true;
   }
 
-  ~scoped_receive_mutation() noexcept {
-    mutation = receive_mutation::none;
-    mutation_payload_ordinal = 0;
-    mutation_target_rank = 0;
-  }
+  ~activation() noexcept { active = false; }
 
-  scoped_receive_mutation(scoped_receive_mutation const&) = delete;
-  auto operator=(scoped_receive_mutation const&)
-      -> scoped_receive_mutation& = delete;
+  activation(activation const&) = delete;
+  auto operator=(activation const&) -> activation& = delete;
 };
 
 template <typename Count, typename Displacement>
@@ -99,7 +88,7 @@ void mutate_received_payload(int payload_ordinal,
                              Count const receive_counts[],
                              Displacement const receive_displacements[],
                              MPI_Datatype receive_datatype,
-                             MPI_Comm communicator) {
+                             MPI_Comm communicator) noexcept {
   if (mutation == receive_mutation::none ||
       payload_ordinal != mutation_payload_ordinal) {
     return;
@@ -107,25 +96,56 @@ void mutate_received_payload(int payload_ordinal,
 
   int rank = 0;
   int size = 0;
-  REQUIRE(PMPI_Comm_rank(communicator, &rank) == MPI_SUCCESS);
-  REQUIRE(PMPI_Comm_size(communicator, &size) == MPI_SUCCESS);
+  if (PMPI_Comm_rank(communicator, &rank) != MPI_SUCCESS ||
+      PMPI_Comm_size(communicator, &size) != MPI_SUCCESS || size < 0) {
+    interposer_error = true;
+    return;
+  }
   if (rank != mutation_target_rank) {
+    return;
+  }
+  if (size != 0 &&
+      (receive_counts == nullptr || receive_displacements == nullptr)) {
+    interposer_error = true;
     return;
   }
 
   MPI_Aint lower_bound = 0;
   MPI_Aint extent = 0;
-  REQUIRE(PMPI_Type_get_extent(
-              receive_datatype, &lower_bound, &extent) == MPI_SUCCESS);
-  REQUIRE(lower_bound == 0);
+  auto const expected_extent =
+      mutation == receive_mutation::projection_request_wrong_owner
+          ? static_cast<MPI_Aint>(sizeof(parhip::projection::request))
+          : static_cast<MPI_Aint>(sizeof(parhip::projection::reply));
+  if (PMPI_Type_get_extent(receive_datatype, &lower_bound, &extent) !=
+          MPI_SUCCESS ||
+      lower_bound != 0 || extent != expected_extent ||
+      !std::in_range<std::ptrdiff_t>(extent)) {
+    interposer_error = true;
+    return;
+  }
   for (int source = 0; source < size; ++source) {
     if (receive_counts[source] <= 0) {
       continue;
     }
+    if (receive_buffer == nullptr ||
+        !std::in_range<MPI_Aint>(receive_displacements[source])) {
+      interposer_error = true;
+      return;
+    }
+    auto const displacement =
+        static_cast<MPI_Aint>(receive_displacements[source]);
+    if (displacement < 0 ||
+        displacement > std::numeric_limits<MPI_Aint>::max() / extent) {
+      interposer_error = true;
+      return;
+    }
+    auto const byte_offset = displacement * extent;
+    if (!std::in_range<std::ptrdiff_t>(byte_offset)) {
+      interposer_error = true;
+      return;
+    }
     auto* first_record = static_cast<std::byte*>(receive_buffer) +
-                         static_cast<MPI_Aint>(
-                             receive_displacements[source]) *
-                             extent;
+                         static_cast<std::ptrdiff_t>(byte_offset);
     switch (mutation) {
       case receive_mutation::projection_request_wrong_owner:
         // The target rank owns coarse IDs 0 and 1 in this fixture. ID 2 is
@@ -133,33 +153,60 @@ void mutate_received_payload(int payload_ordinal,
         // validation rejects the corrupted request.
         reinterpret_cast<parhip::projection::request*>(first_record)
             ->coarse_global_id = parhip::NodeID{2};
+        mutation_fired = true;
         return;
       case receive_mutation::projection_reply_wrong_coarse_id:
         // Rank 0 requested coarse ID 2 from source 1. ID 3 has the same
         // source owner but is not the coarse ID associated with the request.
         reinterpret_cast<parhip::projection::reply*>(first_record)
             ->coarse_global_id = parhip::NodeID{3};
+        mutation_fired = true;
         return;
       case receive_mutation::projection_reply_duplicate_request: {
         if (receive_counts[source] < 2) {
           continue;
         }
+        auto const record_extent = static_cast<std::ptrdiff_t>(extent);
+        if (static_cast<std::ptrdiff_t>(byte_offset) >
+            std::numeric_limits<std::ptrdiff_t>::max() - record_extent) {
+          interposer_error = true;
+          return;
+        }
         auto* first = reinterpret_cast<parhip::projection::reply*>(
             first_record);
         auto* second = reinterpret_cast<parhip::projection::reply*>(
-            first_record + extent);
+            first_record + record_extent);
         second->request_id = first->request_id;
         second->coarse_global_id = first->coarse_global_id;
+        mutation_fired = true;
         return;
       }
       case receive_mutation::none:
+        interposer_error = true;
         return;
     }
   }
-  FAIL("selected projection receive mutation found no record on its target rank");
+  interposer_error = true;
 }
 
 }  // namespace protocol_probe
+
+static_assert(noexcept(protocol_probe::dense_payload_collective_calls()));
+static_assert(noexcept(
+    protocol_probe::mutate_received_payload<int, int>(0,
+                                                      nullptr,
+                                                      nullptr,
+                                                      nullptr,
+                                                      MPI_DATATYPE_NULL,
+                                                      MPI_COMM_NULL)));
+static_assert(
+    noexcept(protocol_probe::mutate_received_payload<MPI_Count, MPI_Aint>(
+        0,
+        nullptr,
+        nullptr,
+        nullptr,
+        MPI_DATATYPE_NULL,
+        MPI_COMM_NULL)));
 
 extern "C" int MPI_Alltoallv(const void* send_buffer,
                              const int send_counts[],
@@ -172,7 +219,6 @@ extern "C" int MPI_Alltoallv(const void* send_buffer,
                              MPI_Comm communicator) {
   if (protocol_probe::active) {
     ++protocol_probe::all_to_all_v_calls;
-    protocol_probe::record_payload_extent(send_datatype);
   }
   auto const payload_ordinal = protocol_probe::dense_payload_collective_calls();
   auto const result = PMPI_Alltoallv(send_buffer,
@@ -207,7 +253,6 @@ extern "C" int MPI_Alltoallv_c(const void* send_buffer,
                                MPI_Comm communicator) {
   if (protocol_probe::active) {
     ++protocol_probe::all_to_all_v_c_calls;
-    protocol_probe::record_payload_extent(send_datatype);
   }
   auto const payload_ordinal = protocol_probe::dense_payload_collective_calls();
   auto const result = PMPI_Alltoallv_c(send_buffer,
@@ -240,7 +285,6 @@ extern "C" int MPI_Isend(const void* buffer,
                          MPI_Request* request) {
   if (protocol_probe::active) {
     ++protocol_probe::isend_calls;
-    protocol_probe::isend_tags.push_back(tag);
   }
   return PMPI_Isend(
       buffer, count, datatype, destination, tag, communicator, request);
@@ -252,7 +296,6 @@ extern "C" int MPI_Probe(int source,
                          MPI_Status* status) {
   if (protocol_probe::active) {
     ++protocol_probe::probe_calls;
-    protocol_probe::probe_tags.push_back(tag);
   }
   return PMPI_Probe(source, tag, communicator, status);
 }
@@ -266,13 +309,28 @@ extern "C" int MPI_Recv(void* buffer,
                         MPI_Status* status) {
   if (protocol_probe::active) {
     ++protocol_probe::recv_calls;
-    protocol_probe::recv_tags.push_back(tag);
   }
   return PMPI_Recv(
       buffer, count, datatype, source, tag, communicator, status);
 }
+// KAHIP_PMPI_CALLBACK_REGION_END
 
 namespace {
+void require_callback_observation_is_safe(int expected_mutations) {
+  auto const local_error =
+      protocol_probe::active || protocol_probe::interposer_error ? 1 : 0;
+  auto error_count = 0;
+  REQUIRE(PMPI_Allreduce(&local_error, &error_count, 1, MPI_INT, MPI_SUM,
+                         MPI_COMM_WORLD) == MPI_SUCCESS);
+  REQUIRE(error_count == 0);
+
+  auto const local_mutation = protocol_probe::mutation_fired ? 1 : 0;
+  auto mutation_count = 0;
+  REQUIRE(PMPI_Allreduce(&local_mutation, &mutation_count, 1, MPI_INT, MPI_SUM,
+                         MPI_COMM_WORLD) == MPI_SUCCESS);
+  REQUIRE(mutation_count == expected_mutations);
+}
+
 void build_edgeless_graph(parhip::parallel_graph_access& graph,
                           int rank,
                           std::array<parhip::NodeID, 2> labels) {
@@ -620,15 +678,16 @@ TEST_CASE("projection uses two dense exchanges and correlates stable request IDs
     finer.setCNode(1, 0);
   }
 
-  protocol_probe::reset();
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
   KAHIP_MPI_TRACE_SET_HIERARCHY(
       7, 3, parhip::mpi::trace::epoch::projection);
-  protocol_probe::active = true;
-  parhip::parallel_projection{}.parallel_project(
-      MPI_COMM_WORLD, finer, coarser);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{};
+    parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                   coarser);
+  }
+  require_callback_observation_is_safe(0);
 
   auto const expected = rank == 0
                             ? std::array<parhip::NodeID, 2>{203, 202}
@@ -699,16 +758,16 @@ TEST_CASE("projection rejects an empty-payload coarse-count mismatch collectivel
   build_empty_graph_with_global_count(
       coarser, rank == 0 ? parhip::NodeID{2} : parhip::NodeID{3}, size);
 
-  protocol_probe::reset();
-  protocol_probe::active = true;
-  require_collective_validation_failure(
-      [&] {
-        parhip::parallel_projection{}.parallel_project(
-            MPI_COMM_WORLD, finer, coarser);
-      },
-      "projection coarse node count agreement failed",
-      size);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{};
+    require_collective_validation_failure(
+        [&] {
+          parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                         coarser);
+        },
+        "projection coarse node count agreement failed", size);
+  }
+  require_callback_observation_is_safe(0);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 0);
 }
 
@@ -728,11 +787,12 @@ TEST_CASE("zero-node projection performs two empty dense exchanges",
                          std::array<parhip::NodeID, 0>{});
   build_projection_coarser(coarser, rank, size, 0);
 
-  protocol_probe::reset();
-  protocol_probe::active = true;
-  parhip::parallel_projection{}.parallel_project(
-      MPI_COMM_WORLD, finer, coarser);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{};
+    parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                   coarser);
+  }
+  require_callback_observation_is_safe(0);
 
   REQUIRE(finer.number_of_local_nodes() == 0);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
@@ -760,16 +820,16 @@ TEST_CASE("projection rejects a tail coarse node before exchanging or mutating",
   build_projection_finer(finer, rank, size, coarse_nodes);
   build_projection_coarser(coarser, rank, size, 5);
 
-  protocol_probe::reset();
-  protocol_probe::active = true;
-  require_collective_validation_failure(
-      [&] {
-        parhip::parallel_projection{}.parallel_project(
-            MPI_COMM_WORLD, finer, coarser);
-      },
-      "projection local coarse-node validation failed",
-      size);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{};
+    require_collective_validation_failure(
+        [&] {
+          parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                         coarser);
+        },
+        "projection local coarse-node validation failed", size);
+  }
+  require_callback_observation_is_safe(0);
 
   require_projection_labels_unchanged<2>(finer, rank);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 0);
@@ -794,11 +854,12 @@ TEST_CASE("projection routes an uneven coarse domain by exact ownership",
   build_projection_finer(finer, rank, size, coarse_nodes);
   build_projection_coarser(coarser, rank, size, 5);
 
-  protocol_probe::reset();
-  protocol_probe::active = true;
-  parhip::parallel_projection{}.parallel_project(
-      MPI_COMM_WORLD, finer, coarser);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{};
+    parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                   coarser);
+  }
+  require_callback_observation_is_safe(0);
 
   for (std::size_t index = 0; index < coarse_nodes.size(); ++index) {
     REQUIRE(finer.getNodeLabel(static_cast<parhip::NodeID>(index)) ==
@@ -825,20 +886,19 @@ TEST_CASE("projection request corruption fails before replies and preserves labe
   build_projection_finer(finer, rank, size, coarse_nodes);
   build_projection_coarser(coarser, rank, size, 4);
 
-  protocol_probe::reset();
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
-  protocol_probe::scoped_receive_mutation mutation{
-      protocol_probe::receive_mutation::projection_request_wrong_owner, 1};
-  protocol_probe::active = true;
-  require_collective_validation_failure(
-      [&] {
-        parhip::parallel_projection{}.parallel_project(
-            MPI_COMM_WORLD, finer, coarser);
-      },
-      "projection request received validation failed",
-      size);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{
+        protocol_probe::receive_mutation::projection_request_wrong_owner, 1};
+    require_collective_validation_failure(
+        [&] {
+          parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                         coarser);
+        },
+        "projection request received validation failed", size);
+  }
+  require_callback_observation_is_safe(1);
 
   require_projection_labels_unchanged<2>(finer, rank);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 1);
@@ -864,20 +924,19 @@ TEST_CASE("projection reply corruption fails transactionally",
   build_projection_finer(finer, rank, size, coarse_nodes);
   build_projection_coarser(coarser, rank, size, 4);
 
-  protocol_probe::reset();
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
-  protocol_probe::scoped_receive_mutation mutation{
-      protocol_probe::receive_mutation::projection_reply_wrong_coarse_id, 2};
-  protocol_probe::active = true;
-  require_collective_validation_failure(
-      [&] {
-        parhip::parallel_projection{}.parallel_project(
-            MPI_COMM_WORLD, finer, coarser);
-      },
-      "projection reply received validation failed",
-      size);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{
+        protocol_probe::receive_mutation::projection_reply_wrong_coarse_id, 2};
+    require_collective_validation_failure(
+        [&] {
+          parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                         coarser);
+        },
+        "projection reply received validation failed", size);
+  }
+  require_callback_observation_is_safe(1);
 
   require_projection_labels_unchanged<2>(finer, rank);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);
@@ -903,21 +962,20 @@ TEST_CASE("projection rejects duplicate replies without partial label writes",
   build_projection_finer(finer, rank, size, coarse_nodes);
   build_projection_coarser(coarser, rank, size, 4);
 
-  protocol_probe::reset();
   parhip::mpi::trace::reset();
   parhip::mpi::trace::set_active(true);
-  protocol_probe::scoped_receive_mutation mutation{
-      protocol_probe::receive_mutation::projection_reply_duplicate_request,
-      2};
-  protocol_probe::active = true;
-  require_collective_validation_failure(
-      [&] {
-        parhip::parallel_projection{}.parallel_project(
-            MPI_COMM_WORLD, finer, coarser);
-      },
-      "projection reply received validation failed",
-      size);
-  protocol_probe::active = false;
+  {
+    protocol_probe::activation probe{
+        protocol_probe::receive_mutation::projection_reply_duplicate_request,
+        2};
+    require_collective_validation_failure(
+        [&] {
+          parhip::parallel_projection{}.parallel_project(MPI_COMM_WORLD, finer,
+                                                         coarser);
+        },
+        "projection reply received validation failed", size);
+  }
+  require_callback_observation_is_safe(1);
 
   require_projection_labels_unchanged<2>(finer, rank);
   REQUIRE(protocol_probe::dense_payload_collective_calls() == 2);

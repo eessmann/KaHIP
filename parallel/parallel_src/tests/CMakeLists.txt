@@ -332,6 +332,15 @@ target_link_libraries(
     parallel_projection_mpi_test
     PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
 )
+add_test(
+    NAME unit-pmpi-callback-safety
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/parallel_projection/parallel_projection_mpi_test.cpp"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(unit-pmpi-callback-safety PROPERTIES TIMEOUT 5)
 
 add_executable(
     parallel_block_down_mpi_test
