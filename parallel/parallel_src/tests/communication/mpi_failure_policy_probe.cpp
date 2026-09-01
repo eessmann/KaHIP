@@ -1,12 +1,36 @@
 #include <mpi.h>
 
+#include <boost/hana/tuple.hpp>
+
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <new>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <vector>
 
 #include "communication/mpi_adapter.h"
+
+namespace failure_probe {
+struct dense_wire_record final {
+  std::uint64_t value;
+
+  auto operator==(dense_wire_record const&) const -> bool = default;
+};
+}  // namespace failure_probe
+
+template <>
+struct parhip::mpi::wire_members<failure_probe::dense_wire_record> {
+  inline static constexpr auto value =
+      boost::hana::make_tuple(&failure_probe::dense_wire_record::value);
+};
+
+static_assert(std::is_standard_layout_v<failure_probe::dense_wire_record>);
+static_assert(std::is_trivially_copyable_v<failure_probe::dense_wire_record>);
 
 namespace {
 enum class failure_mode {
@@ -15,6 +39,8 @@ enum class failure_mode {
   error_string_secondary,
   wrong_topology,
   capacity_resolver,
+  dense_receive_offset_capacity,
+  dense_receive_byte_capacity,
 };
 
 auto selected_mode = failure_mode::pre_init_error;
@@ -26,10 +52,19 @@ auto tracked_communicator = MPI_COMM_NULL;
 auto error_string_attempts = 0;
 auto cleanup_attempts = 0;
 auto capacity_allreduce_attempts = 0;
+auto dense_count_exchange_attempts = 0;
+auto dense_payload_attempts = 0;
+auto dense_datatype_attempts = 0;
 auto cached_rank = -1;
+auto cached_size = -1;
 
 constexpr auto original_backend_error = 17291;
 constexpr auto secondary_formatter_error = 17292;
+
+[[nodiscard]] auto is_dense_capacity_mode() noexcept -> bool {
+  return selected_mode == failure_mode::dense_receive_offset_capacity ||
+         selected_mode == failure_mode::dense_receive_byte_capacity;
+}
 
 void record_pre_initialization_mpi_call(char const* operation) noexcept {
   if (!pre_initialization_control_is_active) {
@@ -59,6 +94,9 @@ void record_pre_initialization_mpi_call(char const* operation) noexcept {
         return "topology";
       case failure_mode::capacity_resolver:
         return "capacity";
+      case failure_mode::dense_receive_offset_capacity:
+      case failure_mode::dense_receive_byte_capacity:
+        return "dense-operation";
       case failure_mode::pre_init_error:
         break;
     }
@@ -151,10 +189,13 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int error_code) {
     std::fprintf(stderr,
                  "observed MPI_Abort rank=%d affected=%.*s "
                  "error-string-attempts=%d cleanup-attempts=%d "
-                 "capacity-allreduce-attempts=%d\n",
+                 "capacity-allreduce-attempts=%d "
+                 "dense-count-exchange-attempts=%d "
+                 "dense-payload-attempts=%d dense-datatype-attempts=%d\n",
                  cached_rank, static_cast<int>(affected.size()),
                  affected.data(), error_string_attempts, cleanup_attempts,
-                 capacity_allreduce_attempts);
+                 capacity_allreduce_attempts, dense_count_exchange_attempts,
+                 dense_payload_attempts, dense_datatype_attempts);
     std::_Exit(86);
   }
   return PMPI_Abort(communicator, error_code);
@@ -167,7 +208,8 @@ extern "C" int MPI_Allreduce(void const* send_buffer,
                              MPI_Op operation,
                              MPI_Comm communicator) {
   if (injection_is_armed) {
-    if (selected_mode != failure_mode::capacity_resolver) {
+    if (selected_mode != failure_mode::capacity_resolver &&
+        !is_dense_capacity_mode()) {
       forbidden_failure_path_call("MPI_Allreduce");
     }
     ++capacity_allreduce_attempts;
@@ -181,6 +223,136 @@ extern "C" int MPI_Allreduce(void const* send_buffer,
                         communicator);
 }
 
+extern "C" int MPI_Alltoall(void const* send_buffer,
+                            int send_count,
+                            MPI_Datatype send_datatype,
+                            void* receive_buffer,
+                            int receive_count,
+                            MPI_Datatype receive_datatype,
+                            MPI_Comm communicator) {
+  auto const result =
+      PMPI_Alltoall(send_buffer, send_count, send_datatype, receive_buffer,
+                    receive_count, receive_datatype, communicator);
+  if (!is_dense_capacity_mode()) {
+    return result;
+  }
+
+  ++dense_count_exchange_attempts;
+  if (result != MPI_SUCCESS || dense_count_exchange_attempts != 1 ||
+      cached_size != 2 || receive_buffer == nullptr || send_count != 1 ||
+      receive_count != 1 || send_datatype != MPI_UINT64_T ||
+      receive_datatype != MPI_UINT64_T ||
+      communicator != tracked_communicator) {
+    forbidden_failure_path_call("MPI_Alltoall(dense count exchange shape)");
+  }
+
+  if (cached_rank == 0) {
+    auto* counts = static_cast<std::uint64_t*>(receive_buffer);
+    static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
+    if (selected_mode == failure_mode::dense_receive_offset_capacity) {
+      counts[0] = std::numeric_limits<std::size_t>::max();
+      counts[1] = std::uint64_t{1};
+      std::fputs("injected rank-zero dense receive offset capacity\n", stderr);
+    } else {
+      counts[0] = std::numeric_limits<std::size_t>::max() /
+                      sizeof(failure_probe::dense_wire_record) +
+                  std::uint64_t{1};
+      counts[1] = std::uint64_t{0};
+      std::fputs("injected rank-zero dense receive byte capacity\n", stderr);
+    }
+  }
+  injection_is_armed = true;
+  return result;
+}
+
+extern "C" int MPI_Alltoallv(void const* send_buffer,
+                             int const* send_counts,
+                             int const* send_displacements,
+                             MPI_Datatype send_datatype,
+                             void* receive_buffer,
+                             int const* receive_counts,
+                             int const* receive_displacements,
+                             MPI_Datatype receive_datatype,
+                             MPI_Comm communicator) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_payload_attempts;
+    forbidden_failure_path_call("MPI_Alltoallv(dense payload)");
+  }
+  return PMPI_Alltoallv(send_buffer, send_counts, send_displacements,
+                        send_datatype, receive_buffer, receive_counts,
+                        receive_displacements, receive_datatype, communicator);
+}
+
+#if KAHIP_HAVE_MPI_ALLTOALLV_C
+extern "C" int MPI_Alltoallv_c(void const* send_buffer,
+                               MPI_Count const* send_counts,
+                               MPI_Aint const* send_displacements,
+                               MPI_Datatype send_datatype,
+                               void* receive_buffer,
+                               MPI_Count const* receive_counts,
+                               MPI_Aint const* receive_displacements,
+                               MPI_Datatype receive_datatype,
+                               MPI_Comm communicator) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_payload_attempts;
+    forbidden_failure_path_call("MPI_Alltoallv_c(dense payload)");
+  }
+  return PMPI_Alltoallv_c(send_buffer, send_counts, send_displacements,
+                          send_datatype, receive_buffer, receive_counts,
+                          receive_displacements, receive_datatype,
+                          communicator);
+}
+#endif
+
+extern "C" int MPI_Get_address(void const* location, MPI_Aint* address) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_datatype_attempts;
+    forbidden_failure_path_call("MPI_Get_address");
+  }
+  return PMPI_Get_address(location, address);
+}
+
+extern "C" int MPI_Type_create_struct(int count,
+                                      int const block_lengths[],
+                                      MPI_Aint const displacements[],
+                                      MPI_Datatype const datatypes[],
+                                      MPI_Datatype* new_datatype) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_datatype_attempts;
+    forbidden_failure_path_call("MPI_Type_create_struct");
+  }
+  return PMPI_Type_create_struct(count, block_lengths, displacements, datatypes,
+                                 new_datatype);
+}
+
+extern "C" int MPI_Type_create_resized(MPI_Datatype old_datatype,
+                                       MPI_Aint lower_bound,
+                                       MPI_Aint extent,
+                                       MPI_Datatype* new_datatype) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_datatype_attempts;
+    forbidden_failure_path_call("MPI_Type_create_resized");
+  }
+  return PMPI_Type_create_resized(old_datatype, lower_bound, extent,
+                                  new_datatype);
+}
+
+extern "C" int MPI_Type_commit(MPI_Datatype* datatype) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_datatype_attempts;
+    forbidden_failure_path_call("MPI_Type_commit");
+  }
+  return PMPI_Type_commit(datatype);
+}
+
+extern "C" int MPI_Type_free(MPI_Datatype* datatype) {
+  if (injection_is_armed && is_dense_capacity_mode()) {
+    ++dense_datatype_attempts;
+    forbidden_failure_path_call("MPI_Type_free");
+  }
+  return PMPI_Type_free(datatype);
+}
+
 extern "C" int MPI_Comm_dup(MPI_Comm communicator,
                             MPI_Comm* duplicate_communicator) {
   auto const result = PMPI_Comm_dup(communicator, duplicate_communicator);
@@ -188,8 +360,12 @@ extern "C" int MPI_Comm_dup(MPI_Comm communicator,
       duplicate_communicator != nullptr) {
     tracked_communicator = *duplicate_communicator;
     track_next_duplicate = false;
-    injection_is_armed = true;
-    std::fputs("captured wrong-topology internal duplicate\n", stderr);
+    if (selected_mode == failure_mode::wrong_topology) {
+      injection_is_armed = true;
+      std::fputs("captured wrong-topology internal duplicate\n", stderr);
+    } else if (is_dense_capacity_mode()) {
+      std::fputs("captured dense operation duplicate\n", stderr);
+    }
   }
   return result;
 }
@@ -290,6 +466,21 @@ auto run_pre_initialization_control() -> int {
       "capacity resolver probe"));
   returned_from_failure("capacity-resolver");
 }
+
+[[noreturn]] void run_dense_receive_capacity_failure(char const* mode) {
+  auto segments = std::vector<std::vector<failure_probe::dense_wire_record>>(
+      static_cast<std::size_t>(cached_size));
+  for (auto& segment : segments) {
+    segment.push_back(failure_probe::dense_wire_record{
+        .value = static_cast<std::uint64_t>(cached_rank + 1)});
+  }
+  auto sends = parhip::mpi::segmented_buffer<
+      failure_probe::dense_wire_record>::from_segments(segments);
+  track_next_duplicate = true;
+  static_cast<void>(parhip::mpi::all_to_all_v(
+      std::move(sends), parhip::mpi::communicator_view{MPI_COMM_WORLD}));
+  returned_from_failure(mode);
+}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -310,6 +501,10 @@ int main(int argc, char* argv[]) {
     selected_mode = failure_mode::wrong_topology;
   } else if (mode == "capacity-resolver") {
     selected_mode = failure_mode::capacity_resolver;
+  } else if (mode == "dense-receive-offset-capacity") {
+    selected_mode = failure_mode::dense_receive_offset_capacity;
+  } else if (mode == "dense-receive-byte-capacity") {
+    selected_mode = failure_mode::dense_receive_byte_capacity;
   } else {
     std::fprintf(stderr, "unknown failure-policy mode: %s\n", argv[1]);
     return 64;
@@ -325,6 +520,10 @@ int main(int argc, char* argv[]) {
     std::fputs("PMPI_Comm_rank failed before failure injection\n", stderr);
     return 70;
   }
+  if (PMPI_Comm_size(MPI_COMM_WORLD, &cached_size) != MPI_SUCCESS) {
+    std::fputs("PMPI_Comm_size failed before failure injection\n", stderr);
+    return 70;
+  }
 
   switch (selected_mode) {
     case failure_mode::semantic_factory_resource:
@@ -335,6 +534,10 @@ int main(int argc, char* argv[]) {
       run_wrong_topology_failure();
     case failure_mode::capacity_resolver:
       run_capacity_resolver_failure();
+    case failure_mode::dense_receive_offset_capacity:
+      run_dense_receive_capacity_failure("dense-receive-offset-capacity");
+    case failure_mode::dense_receive_byte_capacity:
+      run_dense_receive_capacity_failure("dense-receive-byte-capacity");
     case failure_mode::pre_init_error:
       break;
   }

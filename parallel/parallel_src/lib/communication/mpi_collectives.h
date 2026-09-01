@@ -76,9 +76,14 @@ inline auto validate_collective_options(collective_options options,
                   static_cast<std::size_t>(std::numeric_limits<int>::max()));
 }
 
+struct dense_count_exchange final {
+  std::vector<std::size_t> counts;
+  capacity_result capacity;
+};
+
 inline auto exchange_counts(std::vector<std::size_t> const& send_counts,
                             communicator_view communicator)
-    -> std::vector<std::size_t> {
+    -> dense_count_exchange {
   static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
   std::vector<std::uint64_t> send(send_counts.begin(), send_counts.end());
   std::vector<std::uint64_t> receive(send_counts.size());
@@ -87,29 +92,97 @@ inline auto exchange_counts(std::vector<std::size_t> const& send_counts,
                  communicator.native_handle(),
                  "MPI_Alltoall(exchange dense counts)");
 
-  std::vector<std::size_t> result;
-  result.reserve(receive.size());
-  for (auto count : receive) {
-    if (count > std::numeric_limits<std::size_t>::max()) {
-      throw mpi_error{MPI_ERR_COUNT, "received dense count exceeds size_t"};
+  auto result = std::vector<std::size_t>(receive.size());
+  auto capacity = capacity_result{};
+  for (std::size_t index = 0; index < receive.size(); ++index) {
+    if (!std::in_range<std::size_t>(receive[index])) {
+      capacity = with_fatal_capacity_issue(
+          capacity, capacity_issue::received_count_not_representable);
+      continue;
     }
-    result.push_back(static_cast<std::size_t>(count));
+    result[index] = static_cast<std::size_t>(receive[index]);
   }
-  return result;
+  return dense_count_exchange{
+      .counts = std::move(result),
+      .capacity = capacity,
+  };
 }
 
+struct dense_receive_layout final {
+  std::vector<std::size_t> offsets;
+  std::size_t element_count;
+  capacity_result capacity;
+};
+
 inline auto canonical_offsets(std::vector<std::size_t> const& counts)
-    -> std::vector<std::size_t> {
+    -> dense_receive_layout {
   std::vector<std::size_t> offsets(counts.size());
+  auto capacity = capacity_result{};
   std::size_t total = 0;
+  auto remains_representable = true;
   for (std::size_t index = 0; index < counts.size(); ++index) {
-    if (counts[index] > std::numeric_limits<std::size_t>::max() - total) {
-      throw mpi_error{MPI_ERR_COUNT, "dense receive size exceeds size_t"};
+    if (!remains_representable) {
+      continue;
     }
     offsets[index] = total;
+    if (counts[index] > std::numeric_limits<std::size_t>::max() - total) {
+      capacity = with_fatal_capacity_issue(
+          capacity, capacity_issue::cumulative_offset_overflow);
+      remains_representable = false;
+      continue;
+    }
     total += counts[index];
   }
-  return offsets;
+  return dense_receive_layout{
+      .offsets = std::move(offsets),
+      .element_count = total,
+      .capacity = capacity,
+  };
+}
+
+[[nodiscard]] constexpr auto combine_capacity_results(
+    capacity_result left,
+    capacity_result right) noexcept -> capacity_result {
+  return capacity_result{
+      .fatal_issues = left.fatal_issues | right.fatal_issues,
+      .bounded_fallback_issues =
+          left.bounded_fallback_issues | right.bounded_fallback_issues,
+  };
+}
+
+template <typename T>
+[[nodiscard]] constexpr auto dense_capacity_preflight(
+    capacity_result local,
+    std::size_t receive_element_count,
+    bool mpi4_is_candidate,
+    bool mpi4_layout_is_representable) noexcept -> capacity_result {
+  if (receive_element_count >
+      std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+    local = with_fatal_capacity_issue(
+        local, capacity_issue::storage_byte_size_overflow);
+  }
+  if (mpi4_is_candidate && !mpi4_layout_is_representable) {
+    local = with_bounded_capacity_issue(
+        local, capacity_issue::collective_layout_not_representable);
+  }
+  return local;
+}
+
+template <typename T>
+[[nodiscard]] auto dense_mpi4_layout_is_representable(
+    segmented_buffer<T> const& sends,
+    std::vector<std::size_t> const& receive_counts,
+    std::vector<std::size_t> const& receive_offsets) noexcept -> bool {
+  auto const counts_are_representable = [](std::size_t value) noexcept {
+    return std::in_range<MPI_Count>(value);
+  };
+  auto const offsets_are_representable = [](std::size_t value) noexcept {
+    return std::in_range<MPI_Aint>(value);
+  };
+  return std::ranges::all_of(sends.counts(), counts_are_representable) &&
+         std::ranges::all_of(receive_counts, counts_are_representable) &&
+         std::ranges::all_of(sends.offsets(), offsets_are_representable) &&
+         std::ranges::all_of(receive_offsets, offsets_are_representable);
 }
 
 inline auto checked_int(std::size_t value, std::string_view context) -> int {
@@ -302,22 +375,34 @@ template <mpi_datatype T>
               "all_to_all_v collective options must match and use a "
               "nonzero MPI-3 ceiling";
         } else {
-          auto receive_counts =
+          auto count_exchange =
               detail::exchange_counts(sends.counts(), collective_communicator);
-          auto receive_offsets = detail::canonical_offsets(receive_counts);
-          auto const receive_size =
-              receive_counts.empty()
-                  ? std::size_t{0}
-                  : receive_offsets.back() + receive_counts.back();
+          auto receive_layout =
+              detail::canonical_offsets(count_exchange.counts);
+          auto local_capacity = detail::combine_capacity_results(
+              count_exchange.capacity, receive_layout.capacity);
+          auto const mpi4_is_candidate =
+              capabilities::has_alltoallv_c && !options.force_mpi3;
+          auto const mpi4_layout_is_representable =
+              !mpi4_is_candidate ||
+              detail::dense_mpi4_layout_is_representable(
+                  sends, count_exchange.counts, receive_layout.offsets);
+          local_capacity = detail::dense_capacity_preflight<T>(
+              local_capacity, receive_layout.element_count, mpi4_is_candidate,
+              mpi4_layout_is_representable);
+          auto const route = resolve_capacity_collectively(
+              local_capacity, collective_communicator.native_handle(),
+              collective_communicator.native_handle(), "all_to_all_v");
           auto received = segmented_buffer<T>::uninitialized(
-              receive_size, std::move(receive_counts),
-              std::move(receive_offsets));
+              receive_layout.element_count, std::move(count_exchange.counts),
+              std::move(receive_layout.offsets));
           auto datatype =
               make_mpi_datatype<T>(collective_communicator.native_handle());
           auto payload_complete = false;
 
 #if KAHIP_HAVE_MPI_ALLTOALLV_C
-          if (!options.force_mpi3) {
+          if (route == parhip::mpi::capacity_route::direct &&
+              !options.force_mpi3) {
             std::vector<MPI_Count> send_counts;
             std::vector<MPI_Count> receive_counts_c;
             std::vector<MPI_Aint> send_offsets;
@@ -349,6 +434,14 @@ template <mpi_datatype T>
           }
 #endif
 
+          if (!payload_complete &&
+              route == parhip::mpi::capacity_route::bounded) {
+            detail::mpi3_bounded_all_to_all_v(
+                sends, received.storage(), received.counts(),
+                received.offsets(), datatype.native_handle(), *mpi3_ceiling,
+                collective_communicator);
+            payload_complete = true;
+          }
           if (!payload_complete &&
               detail::needs_bounded_rounds(sends, received.counts(),
                                            received.offsets(), *mpi3_ceiling,

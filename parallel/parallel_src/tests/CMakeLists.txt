@@ -728,6 +728,22 @@ add_mpi_failure_policy_death_test(
     "injected rank-zero fatal capacity issue"
     "affected=capacity error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1"
 )
+add_mpi_failure_policy_death_test(
+    dense-receive-offset-capacity-failure
+    dense-receive-offset-capacity
+    "MPI adapter capacity failure:"
+    "all_to_all_v: cumulative element offset exceeds local size_t capacity"
+    "injected rank-zero dense receive offset capacity"
+    "affected=dense-operation error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=1 dense-payload-attempts=0 dense-datatype-attempts=0"
+)
+add_mpi_failure_policy_death_test(
+    dense-receive-byte-capacity-failure
+    dense-receive-byte-capacity
+    "MPI adapter capacity failure:"
+    "all_to_all_v: element storage byte size exceeds local size_t capacity"
+    "injected rank-zero dense receive byte capacity"
+    "affected=dense-operation error-string-attempts=0 cleanup-attempts=0 capacity-allreduce-attempts=1 dense-count-exchange-attempts=1 dense-payload-attempts=0 dense-datatype-attempts=0"
+)
 
 add_executable(
     parallel_graph_consistency_mpi_test

@@ -640,6 +640,71 @@ TEST_CASE("capacity resolver performs one BOR and agrees direct or bounded",
   }
 }
 
+TEST_CASE("dense preflight routes synthetic MPI-4 layout fallback collectively",
+          "[unit][mpi][failure-policy][capacity][dense]") {
+  constexpr auto count_failure = with_fatal_capacity_issue(
+      capacity_result{}, capacity_issue::received_count_not_representable);
+  constexpr auto offset_failure = with_fatal_capacity_issue(
+      capacity_result{}, capacity_issue::cumulative_offset_overflow);
+  constexpr auto all_failures =
+      parhip::mpi::detail::dense_capacity_preflight<std::uint64_t>(
+          parhip::mpi::detail::combine_capacity_results(count_failure,
+                                                        offset_failure),
+          std::numeric_limits<std::size_t>::max(), true, false);
+  STATIC_REQUIRE(has_fatal_capacity_issue(
+      all_failures, capacity_issue::received_count_not_representable));
+  STATIC_REQUIRE(has_fatal_capacity_issue(
+      all_failures, capacity_issue::cumulative_offset_overflow));
+  STATIC_REQUIRE(has_fatal_capacity_issue(
+      all_failures, capacity_issue::storage_byte_size_overflow));
+  STATIC_REQUIRE(has_bounded_capacity_issue(
+      all_failures, capacity_issue::collective_layout_not_representable));
+  STATIC_REQUIRE(first_fatal_capacity_issue(all_failures) ==
+                 capacity_issue::received_count_not_representable);
+
+  communicator_view const world{MPI_COMM_WORLD};
+
+  auto require_dense_route = [&](bool local_layout_is_representable,
+                                 capacity_route expected) {
+    auto const local =
+        parhip::mpi::detail::dense_capacity_preflight<std::uint64_t>(
+            capacity_result{}, std::size_t{0}, true,
+            local_layout_is_representable);
+    auto allreduce_calls = 0;
+    auto signature_matches = 0;
+    auto error_string_calls = 0;
+    auto route = capacity_route::direct;
+    {
+      semantic_error_protocol_probe::activation error_observation{};
+      capacity_protocol_probe::activation collective_observation{};
+      route = resolve_capacity_collectively(
+          local, world.native_handle(), world.native_handle(),
+          "dense synthetic MPI-4 layout preflight");
+      allreduce_calls = capacity_protocol_probe::allreduce_calls;
+      signature_matches = capacity_protocol_probe::signature_matches ? 1 : 0;
+      error_string_calls = semantic_error_protocol_probe::error_string_calls;
+    }
+
+    auto const local_result =
+        std::array{route == expected ? 1 : 0, allreduce_calls,
+                   signature_matches, error_string_calls};
+    auto global_result = std::array{0, 0, 0, 0};
+    REQUIRE(PMPI_Allreduce(local_result.data(), global_result.data(),
+                           static_cast<int>(local_result.size()), MPI_INT,
+                           MPI_SUM, world.native_handle()) == MPI_SUCCESS);
+    REQUIRE(global_result ==
+            std::array{world.size(), world.size(), world.size(), 0});
+  };
+
+  SECTION("representable layout remains direct") {
+    require_dense_route(true, capacity_route::direct);
+  }
+
+  SECTION("one unrepresentable MPI-4 layout selects bounded") {
+    require_dense_route(world.rank() != 0, capacity_route::bounded);
+  }
+}
+
 TEST_CASE("contiguous ownership uses exact integer boundaries",
           "[unit][mpi][ownership]") {
   using id_type = std::uint64_t;
