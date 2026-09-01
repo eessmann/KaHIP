@@ -252,8 +252,8 @@ target_link_libraries(parallel PUBLIC kahip_version)
 target_link_libraries(parallel PUBLIC MPI::MPI_CXX)
 target_link_libraries(
     parallel
-    PRIVATE fmt::fmt spdlog::spdlog
-    PUBLIC Boost::hana Boost::mp11
+    PRIVATE spdlog::spdlog
+    PUBLIC fmt::fmt Boost::hana Boost::mp11
 )
 
 set(LIBGRAPH2BGF_SOURCE_FILES
@@ -303,7 +303,7 @@ target_link_libraries(
         kahip_options
         kahip_warnings
 )
-target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3)
+target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3 fmt::fmt)
 target_include_directories(
     libedgelist
     BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
@@ -320,13 +320,14 @@ kahip_add_private_header_set(
     ${PARHIP_DSPAC_HEADERS}
 )
 kahip_configure_parhip_object(parhip_dspac_obj)
+target_link_libraries(parhip_dspac_obj PRIVATE fmt::fmt)
 
 add_library(libdspac STATIC)
 target_link_libraries(
     libdspac
     PRIVATE parhip_dspac_obj kahip_options kahip_warnings
 )
-target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
+target_link_libraries(libdspac PUBLIC MPI::MPI_CXX fmt::fmt)
 target_include_directories(
     libdspac
     BEFORE PUBLIC ${PARHIP_PRIVATE_INCLUDE_DIRS}
