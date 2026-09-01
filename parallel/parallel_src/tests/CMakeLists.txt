@@ -112,6 +112,62 @@ set_tests_properties(
 )
 
 add_test(
+    NAME unit-parallel-ghost-weight-transaction-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "ghost weight receive failures preserve every weight and trace"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-ghost-weight-transaction-3-rank
+    PROPERTIES PROCESSORS 3 RUN_SERIAL TRUE TIMEOUT 20
+)
+
+add_test(
+    NAME unit-parallel-ghost-weight-asymmetric-2-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 2
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "asymmetric ghost-weight topology fails commonly before payload"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-ghost-weight-asymmetric-2-rank
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 10
+)
+
+add_test(
+    NAME unit-parallel-ghost-weight-reuse-2-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 2
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "ghost weight exchange reuses a prewarmed plan and refreshes values"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-ghost-weight-reuse-2-rank
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 10
+)
+
+add_test(
+    NAME unit-parallel-quotient-arithmetic-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "[arithmetic]"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-quotient-arithmetic-3-rank
+    PROPERTIES PROCESSORS 3 RUN_SERIAL TRUE TIMEOUT 15
+)
+
+add_test(
     NAME unit-parallel-label-invalid-3-rank
     COMMAND
         "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3

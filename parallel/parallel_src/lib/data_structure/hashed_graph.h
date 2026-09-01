@@ -29,11 +29,9 @@ struct compare_hashed_edge {
 };
 
 struct data_hashed_edge{
-        NodeWeight weight;
+  EdgeWeight weight;
 
-        data_hashed_edge() {
-                weight = 0;
-        }
+  data_hashed_edge() { weight = 0; }
 };
 
 struct hash_hashed_edge {

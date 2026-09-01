@@ -108,6 +108,10 @@ enum class receive_mutation {
   ghost_cnode_duplicate_replacing_missing,
   ghost_cnode_missing_extra,
   ghost_cnode_coarse_id_out_of_domain,
+  ghost_weight_unknown_id,
+  ghost_weight_wrong_source,
+  ghost_weight_duplicate_replacing_missing,
+  ghost_weight_missing_extra,
 };
 
 inline receive_mutation mutation = receive_mutation::none;
@@ -296,6 +300,10 @@ void mutate_received_payload(int payload_ordinal,
       case receive_mutation::ghost_cnode_duplicate_replacing_missing:
       case receive_mutation::ghost_cnode_missing_extra:
       case receive_mutation::ghost_cnode_coarse_id_out_of_domain:
+      case receive_mutation::ghost_weight_unknown_id:
+      case receive_mutation::ghost_weight_wrong_source:
+      case receive_mutation::ghost_weight_duplicate_replacing_missing:
+      case receive_mutation::ghost_weight_missing_extra:
         interposer_error = true;
         return;
       case receive_mutation::none:
@@ -362,12 +370,18 @@ void mutate_neighbor_payload(void* receive_buffer,
                              Displacement const receive_displacements[],
                              MPI_Datatype receive_datatype,
                              MPI_Comm communicator) noexcept {
-  auto const is_ghost_mutation =
+  auto const is_cnode_mutation =
       mutation == receive_mutation::ghost_cnode_unknown_id ||
       mutation == receive_mutation::ghost_cnode_wrong_source ||
       mutation == receive_mutation::ghost_cnode_duplicate_replacing_missing ||
       mutation == receive_mutation::ghost_cnode_missing_extra ||
       mutation == receive_mutation::ghost_cnode_coarse_id_out_of_domain;
+  auto const is_weight_mutation =
+      mutation == receive_mutation::ghost_weight_unknown_id ||
+      mutation == receive_mutation::ghost_weight_wrong_source ||
+      mutation == receive_mutation::ghost_weight_duplicate_replacing_missing ||
+      mutation == receive_mutation::ghost_weight_missing_extra;
+  auto const is_ghost_mutation = is_cnode_mutation || is_weight_mutation;
   if (!active || !is_ghost_mutation) {
     return;
   }
@@ -395,8 +409,11 @@ void mutate_neighbor_payload(void* receive_buffer,
   if (PMPI_Type_get_extent(receive_datatype, &lower_bound, &extent) !=
           MPI_SUCCESS ||
       lower_bound != 0 ||
-      extent !=
-          static_cast<MPI_Aint>(sizeof(contraction::ghost_cnode_assignment))) {
+      (is_cnode_mutation &&
+       extent != static_cast<MPI_Aint>(
+                     sizeof(contraction::ghost_cnode_assignment))) ||
+      (is_weight_mutation && extent != static_cast<MPI_Aint>(sizeof(
+                                           contraction::ghost_node_weight)))) {
     interposer_error = true;
     return;
   }
@@ -413,8 +430,6 @@ void mutate_neighbor_payload(void* receive_buffer,
     return;
   }
 
-  auto* records =
-      static_cast<contraction::ghost_cnode_assignment*>(receive_buffer);
   auto const first = nonempty[0];
   if (!std::in_range<std::size_t>(receive_displacements[first])) {
     interposer_error = true;
@@ -422,6 +437,44 @@ void mutate_neighbor_payload(void* receive_buffer,
   }
   auto const first_offset =
       static_cast<std::size_t>(receive_displacements[first]);
+  if (is_weight_mutation) {
+    auto* records =
+        static_cast<contraction::ghost_node_weight*>(receive_buffer);
+    switch (mutation) {
+      case receive_mutation::ghost_weight_unknown_id:
+        records[first_offset].global_id = std::numeric_limits<NodeID>::max();
+        ghost_corruption_fired = true;
+        return;
+      case receive_mutation::ghost_weight_wrong_source:
+        if (nonempty_count < 2 ||
+            !std::in_range<std::size_t>(receive_displacements[nonempty[1]])) {
+          interposer_error = true;
+          return;
+        }
+        records[first_offset] = records[static_cast<std::size_t>(
+            receive_displacements[nonempty[1]])];
+        ghost_corruption_fired = true;
+        return;
+      case receive_mutation::ghost_weight_duplicate_replacing_missing:
+        if (receive_counts[first] < 2) {
+          interposer_error = true;
+          return;
+        }
+        records[first_offset + 1] = records[first_offset];
+        ghost_corruption_fired = true;
+        return;
+      case receive_mutation::ghost_weight_missing_extra:
+        records[first_offset].global_id = ghost_replacement_global_id;
+        ghost_corruption_fired = true;
+        return;
+      default:
+        interposer_error = true;
+        return;
+    }
+  }
+
+  auto* records =
+      static_cast<contraction::ghost_cnode_assignment*>(receive_buffer);
   switch (mutation) {
     case receive_mutation::ghost_cnode_unknown_id:
       records[first_offset].global_id = std::numeric_limits<NodeID>::max();
@@ -461,6 +514,10 @@ void mutate_neighbor_payload(void* receive_buffer,
     case receive_mutation::quotient_edge_target_out_of_domain:
     case receive_mutation::quotient_edge_sequence_gap:
     case receive_mutation::quotient_node_weight_wrong_owner:
+    case receive_mutation::ghost_weight_unknown_id:
+    case receive_mutation::ghost_weight_wrong_source:
+    case receive_mutation::ghost_weight_duplicate_replacing_missing:
+    case receive_mutation::ghost_weight_missing_extra:
       interposer_error = true;
       break;
   }
@@ -1039,6 +1096,24 @@ struct parallel_contraction_test_access {
     contraction.redistribute_hased_graph_and_build_graph_locally(
         communicator, graph, node_weights, number_of_cnodes, quotient);
   }
+
+  static void update_ghost_weights(MPI_Comm communicator,
+                                   parallel_graph_access& graph) {
+    parallel_contraction contraction;
+    contraction.update_ghost_nodes_weights(communicator, graph);
+  }
+
+  static void build_local_quotient(
+      MPI_Comm communicator,
+      parallel_graph_access& graph,
+      NodeID number_of_cnodes,
+      hashed_graph& quotient_edges,
+      std::unordered_map<NodeID, NodeWeight>& quotient_node_weights) {
+    parallel_contraction contraction;
+    contraction.build_quotient_graph_locally(communicator, graph,
+                                             number_of_cnodes, quotient_edges,
+                                             quotient_node_weights);
+  }
 };
 }  // namespace parhip
 
@@ -1140,6 +1215,43 @@ void build_cnode_fixture(parallel_graph_access& graph,
   graph.finish_construction();
 }
 
+void build_local_aggregation_fixture(
+    parallel_graph_access& graph,
+    int rank,
+    int size,
+    std::array<NodeWeight, 2> node_weights,
+    std::array<EdgeWeight, 2> parallel_edge_weights,
+    std::array<NodeID, 2> coarse_nodes) {
+  auto ranges =
+      std::vector<NodeID>(static_cast<std::size_t>(size) + 1, NodeID{2});
+  ranges[0] = 0;
+  auto const local_nodes = rank == 0 ? NodeID{2} : NodeID{0};
+  auto const local_edges = rank == 0 ? EdgeID{2} : EdgeID{0};
+  graph.start_construction(local_nodes, local_edges, NodeID{2}, EdgeID{2},
+                           false);
+  graph.set_range(rank == 0 ? NodeID{0} : NodeID{2},
+                  rank == 0 ? NodeID{1} : NodeID{2});
+  graph.set_range_array(ranges);
+  if (rank == 0) {
+    auto const first = graph.new_node();
+    graph.setNodeWeight(first, node_weights[0]);
+    graph.setNodeLabel(first, 0);
+    for (auto const weight : parallel_edge_weights) {
+      auto const edge = graph.new_edge(first, NodeID{1});
+      graph.setEdgeWeight(edge, weight);
+    }
+    auto const second = graph.new_node();
+    graph.setNodeWeight(second, node_weights[1]);
+    graph.setNodeLabel(second, 1);
+  }
+  graph.finish_construction();
+  graph.allocate_node_to_cnode();
+  if (rank == 0) {
+    graph.setCNode(NodeID{0}, coarse_nodes[0]);
+    graph.setCNode(NodeID{1}, coarse_nodes[1]);
+  }
+}
+
 [[nodiscard]] auto paired_label_mapping(cnode_fixture const& fixture)
     -> std::unordered_map<NodeID, NodeID> {
   auto result = std::unordered_map<NodeID, NodeID>{};
@@ -1160,6 +1272,46 @@ void build_cnode_fixture(parallel_graph_access& graph,
   auto result = std::vector<NodeID>(graph.node_to_cnode_storage_size());
   for (auto index = std::size_t{0}; index < result.size(); ++index) {
     result[index] = graph.getCNode(static_cast<NodeID>(index));
+  }
+  return result;
+}
+
+[[nodiscard]] auto snapshot_weights(parallel_graph_access& graph)
+    -> std::vector<NodeWeight> {
+  auto result = std::vector<NodeWeight>(graph.node_to_cnode_storage_size());
+  for (auto index = std::size_t{0}; index < result.size(); ++index) {
+    result[index] = graph.getNodeWeight(static_cast<NodeID>(index));
+  }
+  return result;
+}
+
+void seed_all_weights(parallel_graph_access& graph,
+                      NodeWeight first = NodeWeight{900}) {
+  for (auto index = std::size_t{0}; index < graph.node_to_cnode_storage_size();
+       ++index) {
+    graph.setNodeWeight(static_cast<NodeID>(index),
+                        first + static_cast<NodeWeight>(index));
+  }
+}
+
+void set_owner_weights(parallel_graph_access& graph,
+                       NodeWeight first = NodeWeight{100}) {
+  forall_local_nodes(graph, node) {
+    graph.setNodeWeight(node, first + graph.getGlobalID(node));
+  }
+  endfor
+}
+
+[[nodiscard]] auto ghost_weights_match_owners(parallel_graph_access& graph,
+                                              NodeWeight first = NodeWeight{
+                                                  100}) -> bool {
+  auto result = true;
+  for (auto local = graph.number_of_local_nodes() + NodeID{1};
+       local < graph.number_of_local_nodes() + NodeID{1} +
+                   graph.number_of_ghost_nodes();
+       ++local) {
+    result = result &&
+             graph.getNodeWeight(local) == first + graph.getGlobalID(local);
   }
   return result;
 }
@@ -1253,6 +1405,487 @@ TEST_CASE("ghost CNode assignment wire datatype has exact extent",
   REQUIRE(lower_bound == 0);
   REQUIRE(extent ==
           static_cast<MPI_Aint>(sizeof(contraction::ghost_cnode_assignment)));
+}
+
+TEST_CASE("ghost node weight wire datatype has exact extent",
+          "[unit][mpi][contraction][ghost-weight][datatype]") {
+  STATIC_REQUIRE(std::is_standard_layout_v<contraction::ghost_node_weight>);
+  STATIC_REQUIRE(std::is_trivially_copyable_v<contraction::ghost_node_weight>);
+  auto datatype = mpi::make_mpi_datatype<contraction::ghost_node_weight>();
+  auto lower_bound = MPI_Aint{0};
+  auto extent = MPI_Aint{0};
+  REQUIRE(MPI_Type_get_extent(datatype.native_handle(), &lower_bound,
+                              &extent) == MPI_SUCCESS);
+  REQUIRE(lower_bound == 0);
+  REQUIRE(extent ==
+          static_cast<MPI_Aint>(sizeof(contraction::ghost_node_weight)));
+}
+
+TEST_CASE("checked quotient additions preserve the exact unsigned boundary",
+          "[unit][mpi][contraction][quotient][arithmetic][boundary]") {
+  constexpr auto node_max = std::numeric_limits<NodeWeight>::max();
+  constexpr auto edge_weight_max = std::numeric_limits<EdgeWeight>::max();
+  constexpr auto edge_count_max = std::numeric_limits<EdgeID>::max();
+  constexpr auto sender_sequence_max = std::numeric_limits<NodeID>::max();
+  STATIC_REQUIRE(contraction::checked_add(node_max, NodeWeight{0}) == node_max);
+  STATIC_REQUIRE(
+      !contraction::checked_add(node_max, NodeWeight{1}).has_value());
+  STATIC_REQUIRE(contraction::checked_add(edge_weight_max, EdgeWeight{0}) ==
+                 edge_weight_max);
+  STATIC_REQUIRE(
+      !contraction::checked_add(edge_weight_max, EdgeWeight{1}).has_value());
+  STATIC_REQUIRE(contraction::checked_add(edge_count_max, EdgeID{0}) ==
+                 edge_count_max);
+  STATIC_REQUIRE(
+      !contraction::checked_add(edge_count_max, EdgeID{1}).has_value());
+  STATIC_REQUIRE(contraction::checked_local_edge_count_increment(
+                     edge_count_max - EdgeID{1}, false) == edge_count_max);
+  STATIC_REQUIRE(
+      !contraction::checked_local_edge_count_increment(edge_count_max, false)
+           .has_value());
+  STATIC_REQUIRE(contraction::checked_local_edge_count_increment(
+                     edge_count_max - EdgeID{2}, true) == edge_count_max);
+  STATIC_REQUIRE(!contraction::checked_local_edge_count_increment(
+                      edge_count_max - EdgeID{1}, true)
+                      .has_value());
+  STATIC_REQUIRE(contraction::checked_add(sender_sequence_max, NodeID{0}) ==
+                 sender_sequence_max);
+  STATIC_REQUIRE(
+      !contraction::checked_add(sender_sequence_max, NodeID{1}).has_value());
+  constexpr auto exact_global_counts = std::array{edge_count_max, EdgeID{0}};
+  constexpr auto overflowing_global_counts =
+      std::array{edge_count_max, EdgeID{1}};
+  STATIC_REQUIRE(contraction::checked_sum<EdgeID>(exact_global_counts) ==
+                 edge_count_max);
+  STATIC_REQUIRE(
+      !contraction::checked_sum<EdgeID>(overflowing_global_counts).has_value());
+}
+
+TEST_CASE("ghost node weights use one blocking neighborhood exchange",
+          "[unit][mpi][contraction][ghost-weight][protocol]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  auto const fixture = contraction_cnode_fixture(size);
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_cnode_fixture(graph, fixture, rank);
+  forall_local_nodes(graph, node) {
+    auto const global_id = graph.getGlobalID(node);
+    graph.setNodeWeight(
+        node, global_id == 0 ? NodeWeight{0} : NodeWeight{17} + global_id);
+  }
+  endfor
+
+  mpi::trace::reset();
+  mpi::trace::set_active(true);
+#if KAHIP_ENABLE_MPI_TRACE
+  mpi::trace::append(mpi::trace::quotient_node_weight(
+      mpi::trace::current_hierarchy(), 777, rank, 23));
+#endif
+  auto const trace_before = mpi::trace::snapshot();
+
+  {
+    auto probe = protocol_probe::activation{};
+    parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD,
+                                                           graph);
+
+    auto local_is_valid = mpi::trace::snapshot() == trace_before;
+    for (auto local = graph.number_of_local_nodes() + NodeID{1};
+         local < graph.number_of_local_nodes() + NodeID{1} +
+                     graph.number_of_ghost_nodes();
+         ++local) {
+      local_is_valid = local_is_valid &&
+                       graph.getNodeWeight(local) ==
+                           (graph.getGlobalID(local) == 0
+                                ? NodeWeight{0}
+                                : NodeWeight{17} + graph.getGlobalID(local));
+    }
+
+    auto const& plan = graph.ghost_plan();
+    local_is_valid = local_is_valid && !protocol_probe::interposer_error &&
+                     !protocol_probe::payload_extents.overflowed() &&
+                     !protocol_probe::neighbor_sources.overflowed() &&
+                     !protocol_probe::neighbor_destinations.overflowed() &&
+                     !protocol_probe::neighbor_send_counts.overflowed() &&
+                     std::ranges::equal(protocol_probe::neighbor_sources,
+                                        plan.topology().sources()) &&
+                     std::ranges::equal(protocol_probe::neighbor_destinations,
+                                        plan.topology().destinations()) &&
+                     protocol_probe::neighbor_send_counts.size() ==
+                         plan.topology().destinations().size();
+    if (protocol_probe::neighbor_send_counts.size() ==
+        plan.topology().destinations().size()) {
+      for (auto index = std::size_t{0};
+           index < plan.topology().destinations().size(); ++index) {
+        local_is_valid =
+            local_is_valid &&
+            *std::next(protocol_probe::neighbor_send_counts.begin(),
+                       static_cast<std::ptrdiff_t>(index)) ==
+                plan.outgoing_local_nodes(index).size();
+      }
+    }
+
+#if KAHIP_HAVE_MPI_NEIGHBOR_ALLTOALLV_C
+    auto const payload_path_is_exact =
+        protocol_probe::neighbor_payload_calls == 0 &&
+        protocol_probe::neighbor_payload_c_calls == 1;
+#else
+    auto const payload_path_is_exact =
+        protocol_probe::neighbor_payload_calls == 1 &&
+        protocol_probe::neighbor_payload_c_calls == 0;
+#endif
+    local_is_valid =
+        local_is_valid && protocol_probe::topology_create_calls == 1 &&
+        protocol_probe::neighbor_count_exchange_calls == 1 &&
+        protocol_probe::blocking_neighbor_payload_calls() == 1 &&
+        protocol_probe::payload_extents.size() == 1 &&
+        *protocol_probe::payload_extents.begin() ==
+            static_cast<MPI_Aint>(sizeof(contraction::ghost_node_weight)) &&
+        payload_path_is_exact && protocol_probe::point_to_point_calls == 0 &&
+        protocol_probe::isend_calls == 0 && protocol_probe::probe_calls == 0 &&
+        protocol_probe::recv_calls == 0 &&
+        protocol_probe::immediate_neighbor_calls == 0 &&
+        protocol_probe::persistent_calls == 0 &&
+        protocol_probe::completion_calls == 0 &&
+        protocol_probe::barrier_calls == 0 &&
+        protocol_probe::dense_payload_collective_calls() == 0;
+    require_common_probe_result(local_is_valid);
+  }
+  mpi::trace::set_active(false);
+  mpi::trace::reset();
+}
+
+TEST_CASE("ghost weight exchange reuses a prewarmed plan and refreshes values",
+          "[unit][mpi][contraction][ghost-weight][reuse]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  auto const fixture = contraction_cnode_fixture(size);
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_cnode_fixture(graph, fixture, rank);
+  seed_all_weights(graph);
+  set_owner_weights(graph, NodeWeight{37});
+
+  auto probe = protocol_probe::activation{};
+  static_cast<void>(graph.ghost_plan());
+  require_common_probe_result(protocol_probe::topology_create_calls == 1);
+
+  protocol_probe::reset();
+  parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD, graph);
+  require_common_probe_result(
+      ghost_weights_match_owners(graph, NodeWeight{37}) &&
+      protocol_probe::topology_create_calls == 0 &&
+      protocol_probe::neighbor_count_exchange_calls == 1 &&
+      protocol_probe::blocking_neighbor_payload_calls() == 1 &&
+      protocol_probe::point_to_point_calls == 0);
+
+  forall_local_nodes(graph, node) {
+    graph.setNodeWeight(node, std::numeric_limits<NodeWeight>::max());
+  }
+  endfor protocol_probe::reset();
+  parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD, graph);
+  auto local_is_exact =
+      protocol_probe::topology_create_calls == 0 &&
+      protocol_probe::neighbor_count_exchange_calls == 1 &&
+      protocol_probe::blocking_neighbor_payload_calls() == 1 &&
+      protocol_probe::point_to_point_calls == 0;
+  for (auto local = graph.number_of_local_nodes() + NodeID{1};
+       local < graph.number_of_local_nodes() + NodeID{1} +
+                   graph.number_of_ghost_nodes();
+       ++local) {
+    local_is_exact =
+        local_is_exact &&
+        graph.getNodeWeight(local) == std::numeric_limits<NodeWeight>::max();
+  }
+  require_common_probe_result(local_is_exact);
+}
+
+TEST_CASE("ghost weight receive failures preserve every weight and trace",
+          "[unit][mpi][contraction][ghost-weight][failure][transaction]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  auto const modes =
+      std::array{protocol_probe::receive_mutation::ghost_weight_unknown_id,
+                 protocol_probe::receive_mutation::ghost_weight_wrong_source,
+                 protocol_probe::receive_mutation::
+                     ghost_weight_duplicate_replacing_missing,
+                 protocol_probe::receive_mutation::ghost_weight_missing_extra};
+  for (auto const mode : modes) {
+    auto const fixture = contraction_validation_fixture(size);
+    parallel_graph_access graph{MPI_COMM_WORLD};
+    build_cnode_fixture(graph, fixture, rank);
+    seed_all_weights(graph);
+    set_owner_weights(graph);
+    auto const before_weights = snapshot_weights(graph);
+
+    mpi::trace::reset();
+    mpi::trace::set_active(true);
+#if KAHIP_ENABLE_MPI_TRACE
+    mpi::trace::append(mpi::trace::quotient_node_weight(
+        mpi::trace::current_hierarchy(), 777, rank, 23));
+#endif
+    auto const before_trace = mpi::trace::snapshot();
+
+    auto probe = protocol_probe::activation{mode, 1, NodeID{0}, NodeID{3}};
+    require_collective_validation_failure(
+        [&] {
+          parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD,
+                                                                 graph);
+        },
+        "contraction ghost-weight received validation failed", size);
+
+    auto const local_fired = protocol_probe::ghost_corruption_fired ? 1 : 0;
+    auto fired_total = 0;
+    REQUIRE(PMPI_Allreduce(&local_fired, &fired_total, 1, MPI_INT, MPI_SUM,
+                           MPI_COMM_WORLD) == MPI_SUCCESS);
+    require_common_probe_result(
+        fired_total == 1 && !protocol_probe::interposer_error &&
+        snapshot_weights(graph) == before_weights &&
+        mpi::trace::snapshot() == before_trace &&
+        protocol_probe::topology_create_calls == 1 &&
+        protocol_probe::neighbor_count_exchange_calls == 1 &&
+        protocol_probe::blocking_neighbor_payload_calls() == 1 &&
+        protocol_probe::point_to_point_calls == 0 &&
+        protocol_probe::immediate_neighbor_calls == 0 &&
+        protocol_probe::persistent_calls == 0 &&
+        protocol_probe::completion_calls == 0 &&
+        protocol_probe::barrier_calls == 0);
+
+    protocol_probe::mutation = protocol_probe::receive_mutation::none;
+    protocol_probe::ghost_corruption_fired = false;
+    parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD,
+                                                           graph);
+    require_common_probe_result(
+        ghost_weights_match_owners(graph) &&
+        mpi::trace::snapshot() == before_trace &&
+        protocol_probe::topology_create_calls == 1 &&
+        protocol_probe::neighbor_count_exchange_calls == 2 &&
+        protocol_probe::blocking_neighbor_payload_calls() == 2 &&
+        protocol_probe::point_to_point_calls == 0);
+    mpi::trace::set_active(false);
+    mpi::trace::reset();
+  }
+}
+
+TEST_CASE("ghost weights reject similar communicators before topology",
+          "[unit][mpi][contraction][ghost-weight][communicator][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size < 2) {
+    return;
+  }
+
+  auto const fixture = contraction_cnode_fixture(size);
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_cnode_fixture(graph, fixture, rank);
+  seed_all_weights(graph);
+  auto const before = snapshot_weights(graph);
+  auto similar = MPI_COMM_NULL;
+  REQUIRE(MPI_Comm_split(MPI_COMM_WORLD, 0, size - rank, &similar) ==
+          MPI_SUCCESS);
+  {
+    auto probe = protocol_probe::activation{};
+    require_collective_validation_failure(
+        [&] {
+          parallel_contraction_test_access::update_ghost_weights(similar,
+                                                                 graph);
+        },
+        "contraction ghost-weight communicator validation failed", size);
+    require_common_probe_result(
+        snapshot_weights(graph) == before &&
+        protocol_probe::topology_create_calls == 0 &&
+        protocol_probe::neighbor_count_exchange_calls == 0 &&
+        protocol_probe::blocking_neighbor_payload_calls() == 0);
+  }
+  REQUIRE(MPI_Comm_free(&similar) == MPI_SUCCESS);
+}
+
+TEST_CASE("ghost weights accept a congruent caller communicator",
+          "[unit][mpi][contraction][ghost-weight][communicator]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  auto const fixture = contraction_cnode_fixture(size);
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_cnode_fixture(graph, fixture, rank);
+  seed_all_weights(graph);
+  set_owner_weights(graph, NodeWeight{53});
+  auto duplicate = MPI_COMM_NULL;
+  REQUIRE(MPI_Comm_dup(MPI_COMM_WORLD, &duplicate) == MPI_SUCCESS);
+  {
+    auto probe = protocol_probe::activation{};
+    parallel_contraction_test_access::update_ghost_weights(duplicate, graph);
+    require_common_probe_result(
+        ghost_weights_match_owners(graph, NodeWeight{53}) &&
+        protocol_probe::topology_create_calls == 1 &&
+        protocol_probe::neighbor_count_exchange_calls == 1 &&
+        protocol_probe::blocking_neighbor_payload_calls() == 1 &&
+        protocol_probe::point_to_point_calls == 0);
+  }
+  REQUIRE(MPI_Comm_free(&duplicate) == MPI_SUCCESS);
+}
+
+TEST_CASE("ghost weights agree the graph global count before topology",
+          "[unit][mpi][contraction][ghost-weight][domain][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  auto const fixture = contraction_cnode_fixture(size);
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  auto const actual_global = static_cast<NodeID>(fixture.adjacency.size());
+  build_cnode_fixture(graph, fixture, rank,
+                      rank == 0 ? actual_global + NodeID{1} : actual_global);
+  seed_all_weights(graph);
+  auto const before = snapshot_weights(graph);
+  auto probe = protocol_probe::activation{};
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD,
+                                                               graph);
+      },
+      "contraction ghost-weight global count agreement failed", size);
+  require_common_probe_result(
+      snapshot_weights(graph) == before &&
+      protocol_probe::topology_create_calls == 0 &&
+      protocol_probe::neighbor_count_exchange_calls == 0 &&
+      protocol_probe::blocking_neighbor_payload_calls() == 0);
+}
+
+TEST_CASE("asymmetric ghost-weight topology fails commonly before payload",
+          "[unit][mpi][contraction][ghost-weight][asymmetric][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  auto const fixture = asymmetric_cnode_fixture(size);
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_cnode_fixture(graph, fixture, rank);
+  seed_all_weights(graph);
+  auto const before = snapshot_weights(graph);
+  auto probe = protocol_probe::activation{};
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::update_ghost_weights(MPI_COMM_WORLD,
+                                                               graph);
+      },
+      "ghost exchange plan semantic validation failed", size);
+  require_common_probe_result(
+      snapshot_weights(graph) == before &&
+      protocol_probe::topology_create_calls == 1 &&
+      protocol_probe::neighbor_count_exchange_calls == 0 &&
+      protocol_probe::blocking_neighbor_payload_calls() == 0 &&
+      protocol_probe::point_to_point_calls == 0);
+}
+
+TEST_CASE("local quotient node-weight aggregation rejects exact overflow",
+          "[unit][mpi][contraction][quotient][arithmetic][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_local_aggregation_fixture(
+      graph, rank, size,
+      {std::numeric_limits<NodeWeight>::max(), NodeWeight{1}},
+      {EdgeWeight{0}, EdgeWeight{0}}, {NodeID{0}, NodeID{0}});
+  hashed_graph local_edges;
+  std::unordered_map<NodeID, NodeWeight> local_node_weights;
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::build_local_quotient(
+            MPI_COMM_WORLD, graph, NodeID{2}, local_edges, local_node_weights);
+      },
+      "local quotient node-weight aggregation overflow", size);
+}
+
+TEST_CASE("local quotient edge-weight aggregation rejects exact overflow",
+          "[unit][mpi][contraction][quotient][arithmetic][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_local_aggregation_fixture(
+      graph, rank, size, {NodeWeight{0}, NodeWeight{0}},
+      {std::numeric_limits<EdgeWeight>::max(), EdgeWeight{1}},
+      {NodeID{0}, NodeID{1}});
+  hashed_graph local_edges;
+  std::unordered_map<NodeID, NodeWeight> local_node_weights;
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::build_local_quotient(
+            MPI_COMM_WORLD, graph, NodeID{2}, local_edges, local_node_weights);
+      },
+      "local quotient edge-weight aggregation overflow", size);
+}
+
+TEST_CASE("exact maximum local quotient weights remain representable",
+          "[unit][mpi][contraction][quotient][arithmetic]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  parallel_graph_access graph{MPI_COMM_WORLD};
+  build_local_aggregation_fixture(
+      graph, rank, size,
+      {std::numeric_limits<NodeWeight>::max(), NodeWeight{0}},
+      {std::numeric_limits<EdgeWeight>::max(), EdgeWeight{0}},
+      {NodeID{0}, NodeID{1}});
+  hashed_graph local_edges;
+  std::unordered_map<NodeID, NodeWeight> local_node_weights;
+  parallel_contraction_test_access::build_local_quotient(
+      MPI_COMM_WORLD, graph, NodeID{2}, local_edges, local_node_weights);
+
+  auto local_is_exact = local_edges.empty() && local_node_weights.empty();
+  if (rank == 0) {
+    auto const edge = local_edges.find(hashed_edge{NodeID{2}, 0, 1});
+    local_is_exact =
+        edge != local_edges.end() &&
+        edge->second.weight == std::numeric_limits<EdgeWeight>::max() &&
+        local_node_weights.at(0) == std::numeric_limits<NodeWeight>::max() &&
+        local_node_weights.at(1) == NodeWeight{0};
+  }
+  require_common_probe_result(local_is_exact);
 }
 
 TEST_CASE("graph CNode storage replacement is exact and transactional",
@@ -1964,17 +2597,18 @@ TEST_CASE("quotient edges use one dense keyed exchange and aggregate exactly",
   if (rank % 2 == 0) {
     local_edges[hashed_edge{coarse_nodes, 1, 2}].weight += 8;
   }
-  std::unordered_map<NodeID, NodeWeight> no_node_weights;
+  std::unordered_map<NodeID, NodeWeight> zero_node_weights;
+  if (rank == 0) {
+    for (auto coarse = NodeID{0}; coarse < coarse_nodes; ++coarse) {
+      zero_node_weights.emplace(coarse, NodeWeight{0});
+    }
+  }
   parallel_graph_access quotient{MPI_COMM_WORLD};
 
   protocol_probe::reset();
   protocol_probe::active = true;
   parallel_contraction_test_access::redistribute_quotient(
-      MPI_COMM_WORLD,
-      local_edges,
-      no_node_weights,
-      coarse_nodes,
-      quotient);
+      MPI_COMM_WORLD, local_edges, zero_node_weights, coarse_nodes, quotient);
   protocol_probe::active = false;
 
   auto actual = std::vector<std::tuple<NodeID, NodeID, EdgeWeight>>{};
@@ -2055,6 +2689,9 @@ TEST_CASE("quotient node weights use one dense keyed exchange and sum exactly",
   if (rank % 2 == 0) {
     local_weights[1] = 5;
   }
+  if (rank == 0) {
+    local_weights[3] = 0;
+  }
   parallel_graph_access quotient{MPI_COMM_WORLD};
 
   protocol_probe::reset();
@@ -2093,6 +2730,148 @@ TEST_CASE("quotient node weights use one dense keyed exchange and sum exactly",
               protocol_probe::probe_tags, 8, size) == 0);
   REQUIRE(protocol_probe::calls_in_tag_phase(
               protocol_probe::recv_tags, 8, size) == 0);
+}
+
+TEST_CASE("received quotient edge aggregation rejects exact overflow",
+          "[unit][mpi][contraction][quotient-edges][arithmetic][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{2};
+  hashed_graph local_edges;
+  if (rank == 0) {
+    local_edges[hashed_edge{coarse_nodes, 0, 1}].weight =
+        std::numeric_limits<EdgeWeight>::max();
+  } else if (rank == 1) {
+    local_edges[hashed_edge{coarse_nodes, 0, 1}].weight = EdgeWeight{1};
+  }
+  std::unordered_map<NodeID, NodeWeight> zero_node_weights;
+  if (rank == 0) {
+    zero_node_weights.emplace(NodeID{0}, NodeWeight{0});
+    zero_node_weights.emplace(NodeID{1}, NodeWeight{0});
+  }
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD, local_edges, zero_node_weights, coarse_nodes,
+            quotient);
+      },
+      "quotient received edge-weight aggregation overflow", size);
+  require_common_probe_result(quotient.number_of_local_nodes() == 0 &&
+                              quotient.number_of_local_edges() == 0);
+}
+
+TEST_CASE(
+    "received owner node-weight aggregation rejects exact overflow before "
+    "assignment",
+    "[unit][mpi][contraction][quotient-node-weights][arithmetic][failure]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{2};
+  hashed_graph no_edges;
+  std::unordered_map<NodeID, NodeWeight> local_weights;
+  if (rank == 0) {
+    local_weights.emplace(NodeID{0}, std::numeric_limits<NodeWeight>::max());
+    local_weights.emplace(NodeID{1}, NodeWeight{0});
+  } else if (rank == 1) {
+    local_weights.emplace(NodeID{0}, NodeWeight{1});
+  }
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD, no_edges, local_weights, coarse_nodes, quotient);
+      },
+      "quotient owner node-weight aggregation overflow", size);
+
+  auto local_weights_are_uncommitted = true;
+  forall_local_nodes(quotient, node) {
+    local_weights_are_uncommitted =
+        local_weights_are_uncommitted &&
+        quotient.getNodeWeight(node) == NodeWeight{0};
+  }
+  endfor require_common_probe_result(local_weights_are_uncommitted);
+}
+
+TEST_CASE("received quotient weights preserve an exact maximum plus zero",
+          "[unit][mpi][contraction][quotient][arithmetic][boundary]") {
+  auto rank = 0;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 3) {
+    return;
+  }
+
+  constexpr auto coarse_nodes = NodeID{2};
+  hashed_graph local_edges;
+  if (rank == 0) {
+    local_edges[hashed_edge{coarse_nodes, 0, 1}].weight =
+        std::numeric_limits<EdgeWeight>::max();
+  } else if (rank == 1) {
+    local_edges[hashed_edge{coarse_nodes, 0, 1}].weight = EdgeWeight{0};
+  }
+  std::unordered_map<NodeID, NodeWeight> local_weights;
+  if (rank == 0) {
+    local_weights.emplace(NodeID{0}, std::numeric_limits<NodeWeight>::max());
+    local_weights.emplace(NodeID{1}, NodeWeight{0});
+  } else if (rank == 1) {
+    local_weights.emplace(NodeID{0}, NodeWeight{0});
+  }
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  parallel_contraction_test_access::redistribute_quotient(
+      MPI_COMM_WORLD, local_edges, local_weights, coarse_nodes, quotient);
+
+  auto local_is_exact = true;
+  forall_local_nodes(quotient, node) {
+    auto const global_id = quotient.getGlobalID(node);
+    local_is_exact =
+        local_is_exact &&
+        quotient.getNodeWeight(node) ==
+            (global_id == 0 ? std::numeric_limits<NodeWeight>::max()
+                            : NodeWeight{0});
+    forall_out_edges(quotient, edge, node) {
+      local_is_exact =
+          local_is_exact &&
+          quotient.getEdgeWeight(edge) ==
+              std::numeric_limits<EdgeWeight>::max() / EdgeWeight{2};
+    }
+    endfor
+  }
+  endfor require_common_probe_result(local_is_exact);
+}
+
+TEST_CASE(
+    "quotient owner node weights require exact local coverage",
+    "[unit][mpi][contraction][quotient-node-weights][coverage][failure]") {
+  auto size = 0;
+  REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  REQUIRE(size >= 1);
+  REQUIRE(size <= 5);
+
+  constexpr auto coarse_nodes = NodeID{2};
+  hashed_graph no_edges;
+  std::unordered_map<NodeID, NodeWeight> missing_weights{
+      {NodeID{0}, NodeWeight{7}}};
+  parallel_graph_access quotient{MPI_COMM_WORLD};
+  require_collective_validation_failure(
+      [&] {
+        parallel_contraction_test_access::redistribute_quotient(
+            MPI_COMM_WORLD, no_edges, missing_weights, coarse_nodes, quotient);
+      },
+      "quotient owner node-weight coverage failed", size);
 }
 
 TEST_CASE("quotient edge receive validation rejects a valid wrong-owner source collectively",

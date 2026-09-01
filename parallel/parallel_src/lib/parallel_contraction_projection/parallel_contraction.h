@@ -8,6 +8,10 @@
 #ifndef PARALLEL_CONTRACTION_64O127GD
 #define PARALLEL_CONTRACTION_64O127GD
 
+#include <concepts>
+#include <limits>
+#include <optional>
+#include <ranges>
 #include <type_traits>
 #include <unordered_map>
 
@@ -41,6 +45,7 @@ private:
       std::unordered_map<NodeID, NodeID> const& label_mapping);
 
   void build_quotient_graph_locally(
+      MPI_Comm communicator,
       parallel_graph_access& G,
       NodeID number_of_distinct_labels,
       hashed_graph& hG,
@@ -55,9 +60,6 @@ private:
 
   void update_ghost_nodes_weights(MPI_Comm communicator,
                                   parallel_graph_access& G);
-
-  // some send buffers
-  std::vector<std::vector<NodeID>> m_send_buffers;  // buffers to send messages
 };
 
 // Comm types
@@ -74,7 +76,7 @@ struct label_reply {
 struct bundled_edge {
   NodeID source;
   NodeID target;
-  NodeWeight weight;
+  EdgeWeight weight;
   NodeID sender_sequence;
 };
 
@@ -87,6 +89,42 @@ struct ghost_cnode_assignment {
   NodeID global_id;
   NodeID coarse_global_id;
 };
+
+struct ghost_node_weight {
+  NodeID global_id;
+  NodeWeight weight;
+};
+
+template <std::unsigned_integral T>
+[[nodiscard]] constexpr auto checked_add(T lhs, T rhs) noexcept
+    -> std::optional<T> {
+  if (rhs > std::numeric_limits<T>::max() - lhs) {
+    return std::nullopt;
+  }
+  return lhs + rhs;
+}
+
+[[nodiscard]] constexpr auto checked_local_edge_count_increment(
+    EdgeID count,
+    bool target_is_local) noexcept -> std::optional<EdgeID> {
+  return checked_add(count, target_is_local ? EdgeID{2} : EdgeID{1});
+}
+
+template <std::unsigned_integral T, std::ranges::input_range Range>
+  requires std::
+      same_as<std::remove_cvref_t<std::ranges::range_reference_t<Range>>, T>
+    [[nodiscard]] constexpr auto checked_sum(Range&& values)
+        -> std::optional<T> {
+  auto sum = T{0};
+  for (auto const value : values) {
+    auto const next = checked_add(sum, value);
+    if (!next.has_value()) {
+      return std::nullopt;
+    }
+    sum = *next;
+  }
+  return sum;
+}
 }  // namespace contraction
 
 static_assert(std::is_standard_layout_v<contraction::label_request>);
@@ -102,6 +140,8 @@ static_assert(
 static_assert(std::is_standard_layout_v<contraction::ghost_cnode_assignment>);
 static_assert(
     std::is_trivially_copyable_v<contraction::ghost_cnode_assignment>);
+static_assert(std::is_standard_layout_v<contraction::ghost_node_weight>);
+static_assert(std::is_trivially_copyable_v<contraction::ghost_node_weight>);
 }
 
 template <>
@@ -139,5 +179,12 @@ struct parhip::mpi::wire_members<parhip::contraction::ghost_cnode_assignment> {
   inline static constexpr auto value = boost::hana::make_tuple(
       &parhip::contraction::ghost_cnode_assignment::global_id,
       &parhip::contraction::ghost_cnode_assignment::coarse_global_id);
+};
+
+template <>
+struct parhip::mpi::wire_members<parhip::contraction::ghost_node_weight> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &parhip::contraction::ghost_node_weight::global_id,
+      &parhip::contraction::ghost_node_weight::weight);
 };
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */
