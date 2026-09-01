@@ -1,5 +1,13 @@
-if(NOT DEFINED PROBE OR NOT DEFINED MODE OR NOT DEFINED EXPECTED_QUERY)
-    message(FATAL_ERROR "PROBE, MODE, and EXPECTED_QUERY are required")
+if(
+    NOT DEFINED PROBE
+    OR NOT DEFINED MODE
+    OR NOT DEFINED EXPECTED_QUERY
+    OR NOT DEFINED EXPECTED_ERROR_CODE
+)
+    message(
+        FATAL_ERROR
+        "PROBE, MODE, EXPECTED_QUERY, and EXPECTED_ERROR_CODE are required"
+    )
 endif()
 
 execute_process(
@@ -21,10 +29,14 @@ set(probe_output "${probe_stdout}\n${probe_stderr}")
 if(probe_output MATCHES "forbidden MPI call")
     message(FATAL_ERROR "${probe_output}")
 endif()
-if(NOT probe_output MATCHES "MPI lifecycle query failure: ${EXPECTED_QUERY} returned raw error")
+if(
+    NOT probe_output
+        MATCHES
+        "MPI lifecycle query failure: ${EXPECTED_QUERY} returned raw error ${EXPECTED_ERROR_CODE}([^0-9]|$)"
+)
     message(
         FATAL_ERROR
-        "missing raw lifecycle diagnostic for ${EXPECTED_QUERY}\n${probe_output}"
+        "missing exact raw lifecycle diagnostic for ${EXPECTED_QUERY} code ${EXPECTED_ERROR_CODE}\n${probe_output}"
     )
 endif()
 if(NOT probe_output MATCHES "observed SIGABRT from lifecycle-query failure")

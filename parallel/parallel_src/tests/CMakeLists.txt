@@ -463,6 +463,7 @@ foreach(lifecycle_query IN ITEMS Initialized Finalized)
             "-DPROBE=$<TARGET_FILE:mpi_lifecycle_failure_probe>"
             "-DMODE=${lifecycle_mode}"
             "-DEXPECTED_QUERY=MPI_${lifecycle_query}"
+            "-DEXPECTED_ERROR_CODE=17293"
             -P
             "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_lifecycle_failure.cmake"
     )

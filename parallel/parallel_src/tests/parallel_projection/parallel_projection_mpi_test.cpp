@@ -128,8 +128,8 @@ void mutate_received_payload(int payload_ordinal,
     switch (mutation) {
       case receive_mutation::projection_request_wrong_owner:
         // The target rank owns coarse IDs 0 and 1 in this fixture. ID 2 is
-        // in-domain but owned by the sender, so only receive-side ownership
-        // validation rejects it.
+        // in-domain but owned by the sender, so the grouped receiver
+        // validation rejects the corrupted request.
         reinterpret_cast<parhip::projection::request*>(first_record)
             ->coarse_global_id = parhip::NodeID{2};
         return;

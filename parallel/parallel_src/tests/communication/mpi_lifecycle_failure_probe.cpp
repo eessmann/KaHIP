@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
+#include <unistd.h>
 
 #include "communication/mpi_failure.h"
 
@@ -15,6 +16,9 @@ enum class failure_mode {
 };
 
 auto selected_mode = failure_mode::initialized_query;
+constexpr auto injected_query_error = 17293;
+auto initialized_calls = 0;
+auto finalized_calls = 0;
 
 [[noreturn]] void forbidden_mpi_call(char const* name) noexcept {
   std::fprintf(stderr, "forbidden MPI call after lifecycle-query failure: %s\n",
@@ -23,30 +27,47 @@ auto selected_mode = failure_mode::initialized_query;
 }
 
 [[noreturn]] void observed_abort(int) noexcept {
-  std::fputs("observed SIGABRT from lifecycle-query failure\n", stderr);
+  constexpr char message[] =
+      "observed SIGABRT from lifecycle-query failure\n";
+  static_assert(sizeof(message) - 1 < 512);
+  // One short write is below POSIX's minimum atomic pipe-write size. If it
+  // nevertheless fails or is incomplete, the verifier fails closed because
+  // the complete marker is absent.
+  static_cast<void>(::write(STDERR_FILENO, message, sizeof(message) - 1));
   std::_Exit(86);
 }
 }  // namespace
 
 extern "C" int MPI_Initialized(int* flag) {
+  ++initialized_calls;
   if (selected_mode == failure_mode::initialized_query) {
-    return MPI_ERR_OTHER;
+    if (initialized_calls != 1) {
+      forbidden_mpi_call("MPI_Initialized retry");
+    }
+    return injected_query_error;
   }
-  if (selected_mode == failure_mode::passthrough) {
-    return PMPI_Initialized(flag);
+  if (selected_mode == failure_mode::finalized_query) {
+    if (initialized_calls != 1) {
+      forbidden_mpi_call("MPI_Initialized retry");
+    }
+    *flag = 1;
+    return MPI_SUCCESS;
   }
-  *flag = 1;
-  return MPI_SUCCESS;
+  return PMPI_Initialized(flag);
 }
 
 extern "C" int MPI_Finalized(int* flag) {
+  ++finalized_calls;
   if (selected_mode == failure_mode::finalized_query) {
-    return MPI_ERR_OTHER;
+    if (initialized_calls != 1 || finalized_calls != 1) {
+      forbidden_mpi_call("MPI_Finalized retry or out-of-sequence query");
+    }
+    return injected_query_error;
   }
-  if (selected_mode == failure_mode::passthrough) {
-    return PMPI_Finalized(flag);
+  if (selected_mode == failure_mode::initialized_query) {
+    forbidden_mpi_call("MPI_Finalized after MPI_Initialized failure");
   }
-  forbidden_mpi_call("MPI_Finalized");
+  return PMPI_Finalized(flag);
 }
 
 extern "C" int MPI_Error_string(int, char*, int*) {

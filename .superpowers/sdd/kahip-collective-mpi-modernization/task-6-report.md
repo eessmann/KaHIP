@@ -510,3 +510,52 @@ Every configure, build, test, oracle, and audit command used the required
   deadlock, or partial-state defect after the lifecycle and trace-transaction
   coverage gaps were closed.
 - `git diff --check` passed before the final commit.
+
+## Fix round 4: lifecycle-probe test-quality closure
+
+This final narrow round starts from fix-round-3 commit
+`bc9e17bc56758bc3f0fd1bdfac7b57aad20db435` and changes only test code,
+CTest wiring, one test comment, and this report. Production and trace sources
+are unchanged.
+
+The SIGABRT observer no longer calls the stdio-based `fputs` from a signal
+handler. It emits its fixed short marker with one async-signal-safe POSIX
+`write(STDERR_FILENO, literal, sizeof(literal) - 1)` and immediately calls
+`_Exit(86)`. The marker is statically below the POSIX minimum atomic pipe-write
+size; any failed or incomplete write makes the verifier fail closed because
+the complete marker is required.
+
+The interposer now returns the distinctive synthetic raw code `17293` rather
+than relying on the implementation-specific numeric value of `MPI_ERR_OTHER`.
+CTest passes the same expected code to the verifier, which requires that exact
+numeric diagnostic. Per-query counters additionally make a retry, an
+unexpected `MPI_Finalized` after an initialized-query failure, or an
+out-of-sequence finalized query print the existing forbidden-call marker and
+exit through a nonmatching status. The original traps still prove that neither
+`MPI_Error_string` nor `MPI_Abort` is called while lifecycle state is unknown.
+
+The exact-code assertion went RED in both failure modes against the prior
+probe: this Open MPI returned raw code `16`, while the verifier required
+`17293`. With the synthetic code and counters in place, all four lifecycle
+tests are GREEN. The projection mutation comment now accurately describes the
+grouped receiver validation; it no longer claims that only one predicate can
+reject the deliberately malformed request.
+
+Every command used the required `systemd-run --user --scope` limits and every
+build used at most two jobs. Final evidence:
+
+- focused lifecycle, exact projection, and request-corruption matrix:
+  **6/6 passed**;
+- trace-ON debug full build and CTest: **87/87 passed**, including the MPI
+  trace integration smoke;
+- default trace-OFF release full build and CTest: **82/82 passed**; Ninja's
+  known recoverable premature-EOF warning was followed by successful
+  regeneration, compilation, and linking;
+- the exact partition/trace oracle was not rerun because no production or
+  trace source changed; the full trace integration smoke is fresh and the
+  fix-round-3 exact `a600`/`a179`/436,721-record evidence remains the applicable
+  production result;
+- final self-review found no production behavior change or test seam that can
+  accept a retry, wrong raw code, forbidden MPI call, arbitrary nonzero exit,
+  or incomplete SIGABRT marker; and
+- `git diff --check` passed before the focused commit.
