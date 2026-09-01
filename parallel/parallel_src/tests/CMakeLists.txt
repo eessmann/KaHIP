@@ -1174,6 +1174,196 @@ set_tests_properties(
 )
 
 add_executable(
+    evolutionary_collectives_mpi_test
+    communication/evolutionary_collectives_mpi_test.cpp
+)
+target_sources(
+    evolutionary_collectives_mpi_test
+    PRIVATE
+        FILE_SET shared_evolutionary_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+        FILES
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_collectives.h"
+)
+target_link_libraries(
+    evolutionary_collectives_mpi_test
+    PRIVATE
+        catch_mpi_runner
+        MPI::MPI_CXX
+        spdlog::spdlog
+        kahip_options
+        kahip_warnings
+)
+add_test(
+    NAME unit-pmpi-callback-safety-evolutionary
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/communication/evolutionary_collectives_mpi_test.cpp"
+        "-DPROFILE=evolutionary"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-evolutionary
+    PROPERTIES TIMEOUT 5
+)
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-evolutionary-collectives-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:evolutionary_collectives_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-evolutionary-collectives-${mpi_ranks}-rank
+        PROPERTIES PROCESSORS ${mpi_ranks} RUN_SERIAL TRUE TIMEOUT 12
+    )
+endforeach()
+
+add_executable(
+    evolutionary_collectives_failure_probe
+    communication/evolutionary_collectives_failure_probe.cpp
+)
+target_sources(
+    evolutionary_collectives_failure_probe
+    PRIVATE
+        FILE_SET shared_evolutionary_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+        FILES
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_collectives.h"
+)
+target_link_libraries(
+    evolutionary_collectives_failure_probe
+    PRIVATE MPI::MPI_CXX spdlog::spdlog kahip_options kahip_warnings
+)
+add_test(
+    NAME unit-pmpi-callback-safety-evolutionary-failure
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/communication/evolutionary_collectives_failure_probe.cpp"
+        "-DPROFILE=evolutionary-failure"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-evolutionary-failure
+    PROPERTIES TIMEOUT 5
+)
+foreach(
+    failure_mode
+    IN ITEMS
+        permutation
+        rank
+        communicator-size
+        feasibility
+        objective
+        weight
+        root
+        signature-minimum
+        signature-maximum
+        signature-validity
+        payload
+        count-mismatch
+        null-payload
+)
+    if(failure_mode STREQUAL "permutation")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Bcast(evolutionary permutation)"
+        )
+    elseif(failure_mode STREQUAL "rank")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Comm_rank(evolutionary best partition)"
+        )
+    elseif(failure_mode STREQUAL "communicator-size")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Comm_size(evolutionary partition broadcast)"
+        )
+    elseif(failure_mode STREQUAL "feasibility")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary feasibility)"
+        )
+    elseif(failure_mode STREQUAL "objective")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary objective)"
+        )
+    elseif(failure_mode STREQUAL "weight")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary maximum block weight)"
+        )
+    elseif(failure_mode STREQUAL "root")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary broadcaster rank)"
+        )
+    elseif(failure_mode STREQUAL "signature-minimum")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary partition signature minimum)"
+        )
+    elseif(failure_mode STREQUAL "signature-maximum")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary partition signature maximum)"
+        )
+    elseif(failure_mode STREQUAL "signature-validity")
+        set(
+            expected_diagnostic
+            "MPI backend failure: MPI_Allreduce(evolutionary partition signature validity)"
+        )
+    elseif(failure_mode STREQUAL "payload")
+        if(KAHIP_HAVE_MPI_BCAST_C)
+            set(
+                expected_diagnostic
+                "MPI backend failure: MPI_Bcast_c(evolutionary best partition)"
+            )
+        else()
+            set(
+                expected_diagnostic
+                "MPI backend failure: MPI_Bcast(evolutionary best partition MPI-3 round)"
+            )
+        endif()
+    elseif(failure_mode STREQUAL "count-mismatch")
+        set(
+            expected_diagnostic
+            "partition broadcast arguments differ across communicator"
+        )
+    else()
+        set(
+            expected_diagnostic
+            "partition broadcast arguments are invalid"
+        )
+    endif()
+    add_test(
+        NAME unit-evolutionary-collectives-${failure_mode}-failure
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DPROBE=$<TARGET_FILE:evolutionary_collectives_failure_probe>"
+            "-DMODE=${failure_mode}"
+            "-DEXPECTED_DIAGNOSTIC=${expected_diagnostic}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_evolutionary_collectives_failure.cmake"
+    )
+    set_tests_properties(
+        unit-evolutionary-collectives-${failure_mode}-failure
+        PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+    )
+endforeach()
+
+add_executable(
     parallel_graph_lifecycle_probe
     distributed_consistency/parallel_graph_lifecycle_probe.cpp
 )

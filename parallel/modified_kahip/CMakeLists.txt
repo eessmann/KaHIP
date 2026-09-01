@@ -131,10 +131,11 @@ kahip_add_private_header_set(
 target_sources(
     modified_kahip_collective_obj
     PRIVATE
-        FILE_SET shared_population_size_headers
+        FILE_SET shared_parallel_mh_headers
         TYPE HEADERS
         BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
         FILES
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_collectives.h"
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
 )
 kahip_configure_modified_object(modified_kahip_collective_obj)

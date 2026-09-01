@@ -8,6 +8,7 @@
 #include <mpi.h>
 
 #include "exchanger.h"
+#include "parallel_mh/evolutionary_collectives.h"
 #include "tools/quality_metrics.h"
 #include "tools/random_functions.h"
 
@@ -81,7 +82,8 @@ void exchanger::diversify_population( PartitionConfig & config, graph_access & G
                 random_functions::circular_permutation(permutation); 
         }
 
-        MPI_Bcast(&permutation[0], comm_size, MPI_INT, ROOT, m_communicator);
+        kahip::parallel_mh::broadcast_permutation(
+                m_communicator, permutation, ROOT);
 
         int from = 0;
         int to   = permutation[rank];
@@ -292,4 +294,3 @@ void exchanger::recv_incoming( PartitionConfig & config, graph_access & G, popul
                 MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_communicator, &flag, &st);
         }
 }
-

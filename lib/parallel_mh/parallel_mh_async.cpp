@@ -18,6 +18,7 @@
 #include "graph_io.h"
 #include "graph_partitioner.h"
 #include "parallel_mh_async.h"
+#include "parallel_mh/evolutionary_collectives.h"
 #include "parallel_mh/population_size_broadcast.h"
 #include "quality_metrics.h"
 #include "random_functions.h"
@@ -151,11 +152,7 @@ EdgeWeight parallel_mh_async::collect_best_partitioning(graph_access & G, const 
         EdgeWeight min_objective = 0;
         m_island->apply_fittest(G, min_objective);
 
-        int best_local_objective  = min_objective;
-        int best_local_objective_m  = min_objective;
-        int best_global_objective = 0; 
-
-        PartitionID* best_local_map = new PartitionID[G.number_of_nodes()];
+        std::vector<PartitionID> best_local_map(G.number_of_nodes());
         std::vector< NodeWeight > block_sizes(G.get_partition_count(),0);
 
         forall_nodes(G, node) {
@@ -170,36 +167,18 @@ EdgeWeight parallel_mh_async::collect_best_partitioning(graph_access & G, const 
                 }
         }
 
-        if( max_domain_weight > config.upper_bound_partition ) {
-                best_local_objective_m = std::numeric_limits< int >::max();
-        }
-
-        MPI_Allreduce(&best_local_objective_m, &best_global_objective, 1, MPI_INT, MPI_MIN, m_communicator);
-
-        if( best_global_objective == std::numeric_limits< int >::max()) {
-                //no partition is feasible
-                MPI_Allreduce(&best_local_objective, &best_global_objective, 1, MPI_INT, MPI_MIN, m_communicator);
-        }
-
-        int my_domain_weight   = best_local_objective == best_global_objective ? 
-                max_domain_weight : std::numeric_limits<int>::max();
-        int best_domain_weight = max_domain_weight;
-
-        MPI_Allreduce(&my_domain_weight, &best_domain_weight, 1, MPI_INT, MPI_MIN, m_communicator);
-
-        // now we know what the best objective is ... find the best balance
-        int bcaster = best_local_objective == best_global_objective  
-                && my_domain_weight == best_domain_weight ? m_rank : std::numeric_limits<int>::max();
-        int g_bcaster = 0;
-
-        MPI_Allreduce(&bcaster, &g_bcaster, 1, MPI_INT, MPI_MIN, m_communicator);
-        MPI_Bcast(best_local_map, G.number_of_nodes(), MPI_INT, g_bcaster, m_communicator);
+        auto const best_global_objective =
+                kahip::parallel_mh::select_and_broadcast_best_partition(
+                        m_communicator,
+                        min_objective,
+                        max_domain_weight,
+                        config.upper_bound_partition,
+                        best_local_map.data(),
+                        best_local_map.size());
 
         forall_nodes(G, node) {
                 G.setPartitionIndex(node, best_local_map[node]);
         } endfor
-
-        delete[] best_local_map;
 
         return best_global_objective;
 }
@@ -305,4 +284,3 @@ EdgeWeight parallel_mh_async::perform_local_partitioning(PartitionConfig & worki
 
         return min_objective;
 }
-

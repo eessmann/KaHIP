@@ -136,6 +136,34 @@ elseif(PROFILE STREQUAL "population-size-failure")
         [=[static_assert *\( *noexcept *\( *population_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
         [=[static_assert *\( *noexcept *\( *population_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
     )
+elseif(PROFILE STREQUAL "evolutionary")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+reset\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+record\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *evolutionary_probe::reset *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_probe::record *\([^)]*\) *\) *\) *[;]]=]
+    )
+elseif(PROFILE STREQUAL "evolutionary-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[auto[ \t\r\n]+objective_datatype\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+MPI_Datatype]=]
+        [=[auto[ \t\r\n]+valid_allreduce\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[auto[ \t\r\n]+expected_abort_state\([^)]*\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::objective_datatype *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::valid_allreduce *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *evolutionary_failure_probe::expected_abort_state *\([^)]*\) *\) *\) *[;]]=]
+    )
 else()
     message(FATAL_ERROR "unknown PMPI callback audit PROFILE: ${PROFILE}")
 endif()

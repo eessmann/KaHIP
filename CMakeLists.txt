@@ -76,6 +76,28 @@ if(NOT NOMPI)
     find_package(MPI 3.1 REQUIRED COMPONENTS C CXX)
     find_package(spdlog CONFIG REQUIRED)
 
+    include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    set(CMAKE_REQUIRED_LIBRARIES MPI::MPI_CXX)
+    check_cxx_source_compiles(
+        [=[
+            #include <mpi.h>
+            int main() {
+                return MPI_Bcast_c(
+                    nullptr, MPI_Count{0}, MPI_BYTE, 0, MPI_COMM_WORLD
+                );
+            }
+        ]=]
+        KAHIP_HAVE_MPI_BCAST_C
+    )
+    cmake_pop_check_state()
+    target_compile_definitions(
+        kahip_options
+        INTERFACE
+            KAHIP_HAVE_MPI_BCAST_C=$<BOOL:${KAHIP_HAVE_MPI_BCAST_C}>
+    )
+
     if(${MPI_C_FOUND})
         message(
             "MPI detected (can use MPI_HOME hint to direct the detection...)"
