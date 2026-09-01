@@ -8,223 +8,396 @@
 #include "parallel_block_down_propagation.h"
 
 #include <algorithm>
+#include <exception>
+#include <limits>
+#include <optional>
+#include <ranges>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
-#include "communication/mpi_adapter.h"
 #include "communication/contiguous_owner_layout.h"
+#include "communication/ghost_exchange_plan.h"
+#include "communication/mpi_adapter.h"
 #include "communication/mpi_trace.h"
+
 namespace parhip {
-parallel_block_down_propagation::parallel_block_down_propagation() {
-                
-}
-
-parallel_block_down_propagation::~parallel_block_down_propagation() {
-                
-}
-
-void parallel_block_down_propagation::propagate_block_down( MPI_Comm communicator, PPartitionConfig & config, 
-                                                            parallel_graph_access & G, 
-                                                            parallel_graph_access & Q) {
-
-
-  std::vector<block_down::block_update> local_updates;
-  local_updates.reserve(static_cast<std::size_t>(G.number_of_local_nodes()));
-  forall_local_nodes(G, node) {
-    local_updates.push_back(
-        {G.getCNode(node), G.getSecondPartitionIndex(node)});
-  } endfor
-
-  auto const communicator_view = mpi::communicator_view{communicator};
-  auto const rank = communicator_view.rank();
-  auto const size = communicator_view.size();
+void parallel_block_down_propagation::propagate_block_down(
+    MPI_Comm communicator,
+    PPartitionConfig& config,
+    parallel_graph_access& G,
+    parallel_graph_access& Q) {
+  auto const graph_communicator = mpi::communicator_view{Q.getCommunicator()};
+  auto const rank = graph_communicator.rank();
+  auto const size = graph_communicator.size();
   auto const rank_index = static_cast<std::size_t>(rank);
 
-  std::ranges::stable_sort(local_updates, {}, [](auto const& update) {
-    return std::tie(update.coarse_global_id, update.block);
-  });
-  auto const number_of_coarse_nodes = mpi::agree_collectively(
-      Q.number_of_global_nodes(),
-      communicator_view,
-      "block coarse node count agreement failed");
+  auto communicators_are_compatible =
+      communicator != MPI_COMM_NULL && G.getCommunicator() != MPI_COMM_NULL;
+  if (communicators_are_compatible) {
+    auto graph_comparison = int{MPI_UNEQUAL};
+    auto quotient_comparison = int{MPI_UNEQUAL};
+    mpi::check_or_abort(
+        MPI_Comm_compare(communicator, G.getCommunicator(), &graph_comparison),
+        Q.getCommunicator(), "MPI_Comm_compare(block-down finer graph)");
+    mpi::check_or_abort(MPI_Comm_compare(communicator, Q.getCommunicator(),
+                                         &quotient_comparison),
+                        Q.getCommunicator(),
+                        "MPI_Comm_compare(block-down quotient graph)");
+    communicators_are_compatible =
+        (graph_comparison == MPI_IDENT || graph_comparison == MPI_CONGRUENT) &&
+        (quotient_comparison == MPI_IDENT ||
+         quotient_comparison == MPI_CONGRUENT);
+  }
+  mpi::validate_collectively(communicators_are_compatible, graph_communicator,
+                             "block-down communicator validation failed");
+
+  auto const number_of_blocks = mpi::agree_collectively(
+      config.k, graph_communicator, "block-down block-count agreement failed");
+  mpi::validate_collectively(number_of_blocks > PartitionID{0},
+                             graph_communicator,
+                             "block-down requires a positive block count");
+  auto const number_of_coarse_nodes =
+      mpi::agree_collectively(Q.number_of_global_nodes(), graph_communicator,
+                              "block-down coarse-node count agreement failed");
   auto const ownership = mpi::contiguous_owner_layout<NodeID>{
       number_of_coarse_nodes, static_cast<std::size_t>(size)};
-  auto local_updates_are_valid = true;
-  for (auto const& update : local_updates) {
-    if (!ownership.owner(update.coarse_global_id).has_value()) {
-      local_updates_are_valid = false;
-    }
-  }
-  for (std::size_t index = 1; index < local_updates.size(); ++index) {
-    auto const& previous = local_updates[index - 1];
-    auto const& current = local_updates[index];
-    if (previous.coarse_global_id == current.coarse_global_id &&
-        previous.block != current.block) {
-      local_updates_are_valid = false;
-    }
+  auto const expected_from = ownership.begin(rank_index);
+  auto const expected_end = ownership.end(rank_index);
+  auto const expected_local_nodes = expected_end - expected_from;
+  auto const expected_to =
+      expected_local_nodes == 0 ? expected_from : expected_end - NodeID{1};
+
+  auto ownership_metadata_is_valid =
+      Q.number_of_local_nodes() == expected_local_nodes &&
+      Q.get_from_range() == expected_from && Q.get_to_range() == expected_to &&
+      std::in_range<std::size_t>(Q.number_of_local_nodes()) &&
+      std::in_range<std::size_t>(Q.number_of_ghost_nodes()) &&
+      Q.number_of_local_nodes() < std::numeric_limits<NodeID>::max() &&
+      Q.number_of_ghost_nodes() <= std::numeric_limits<NodeID>::max() -
+                                       (Q.number_of_local_nodes() + NodeID{1});
+  auto const& range_array = Q.get_range_array();
+  ownership_metadata_is_valid =
+      ownership_metadata_is_valid &&
+      range_array.size() == static_cast<std::size_t>(size) + std::size_t{1};
+  auto const range_limit = std::min(
+      range_array.size(), static_cast<std::size_t>(size) + std::size_t{1});
+  for (auto boundary = std::size_t{0}; boundary < range_limit; ++boundary) {
+    ownership_metadata_is_valid =
+        ownership_metadata_is_valid &&
+        range_array[boundary] == ownership.boundary(boundary);
   }
   mpi::validate_collectively(
-      local_updates_are_valid,
-      mpi::communicator_view{communicator},
-      "block update local validation failed");
+      ownership_metadata_is_valid, graph_communicator,
+      "block-down quotient ownership metadata validation failed");
 
-  auto updates_by_destination =
-      std::vector<std::vector<block_down::block_update>>(
-          static_cast<std::size_t>(size));
-  for (auto const& [coarse_global_id, block] : local_updates) {
-    auto const destination = ownership.owner(coarse_global_id).value();
-    updates_by_destination.at(destination).push_back(
-        {coarse_global_id, block});
-  }
-  for (auto& updates : updates_by_destination) {
-    std::ranges::stable_sort(updates, {}, [](auto const& update) {
+  auto local_updates = std::vector<block_down::block_update>{};
+  auto local_updates_are_valid =
+      std::in_range<std::size_t>(G.number_of_local_nodes());
+  try {
+    if (local_updates_are_valid) {
+      local_updates.reserve(
+          static_cast<std::size_t>(G.number_of_local_nodes()));
+    }
+    for (auto node = NodeID{0}; node < G.number_of_local_nodes(); ++node) {
+      auto const coarse_global_id = G.getCNode(node);
+      auto const raw_block = G.getSecondPartitionIndex(node);
+      auto const block_is_representable = std::in_range<PartitionID>(raw_block);
+      auto const block = block_is_representable
+                             ? static_cast<PartitionID>(raw_block)
+                             : PartitionID{0};
+      auto const local_global_id = G.getGlobalID(node);
+      local_updates_are_valid = local_updates_are_valid &&
+                                ownership.owner(coarse_global_id).has_value() &&
+                                block_is_representable &&
+                                block < number_of_blocks &&
+                                G.find_local_id(local_global_id) == node;
+      local_updates.push_back({coarse_global_id, block});
+    }
+    std::ranges::stable_sort(local_updates, {}, [](auto const& update) {
       return std::tie(update.coarse_global_id, update.block);
     });
+    for (auto index = std::size_t{1}; index < local_updates.size(); ++index) {
+      auto const& previous = local_updates[index - std::size_t{1}];
+      auto const& current = local_updates[index];
+      local_updates_are_valid =
+          local_updates_are_valid &&
+          (previous.coarse_global_id != current.coarse_global_id ||
+           previous.block == current.block);
+    }
+  } catch (...) {
+    mpi::abort_on_exception(Q.getCommunicator(),
+                            "block-down local update staging");
   }
+  mpi::validate_collectively(local_updates_are_valid, graph_communicator,
+                             "block-down local update validation failed");
 
-  auto incoming_updates = mpi::all_to_all_v(
-      mpi::segmented_buffer<block_down::block_update>::from_segments(
-          updates_by_destination),
-      mpi::communicator_view{communicator});
-  auto incoming_updates_are_valid = true;
-  for (std::size_t source = 0;
-       source < incoming_updates.segment_count();
-       ++source) {
-    for (auto const& update : incoming_updates.segment(source)) {
-      auto const owner = ownership.owner(update.coarse_global_id);
-      if (!owner.has_value()) {
-        incoming_updates_are_valid = false;
-        continue;
+  auto const& plan = Q.ghost_plan();
+  auto make_semantic_error = [&](std::string_view context) {
+    auto error = std::exception_ptr{};
+    try {
+      error = std::make_exception_ptr(
+          mpi::mpi_error{MPI_ERR_ARG, std::string{context}});
+    } catch (...) {
+      mpi::abort_on_exception(plan.topology().native_handle(),
+                              "block-down semantic error construction");
+    }
+    return error;
+  };
+
+  auto dense_sends = mpi::segmented_buffer<block_down::block_update>{};
+  try {
+    auto updates_by_destination =
+        std::vector<std::vector<block_down::block_update>>(
+            static_cast<std::size_t>(size));
+    for (auto const& update : local_updates) {
+      auto const destination = ownership.owner(update.coarse_global_id);
+      if (!destination.has_value()) {
+        mpi::abort_on_programming_error(
+            plan.topology().native_handle(),
+            "validated block-down update has no owner");
       }
-      if (*owner != rank_index ||
-          !Q.is_local_node_from_global_id(update.coarse_global_id)) {
-        incoming_updates_are_valid = false;
-      }
+      updates_by_destination[*destination].push_back(update);
     }
-  }
-  auto incoming_storage = incoming_updates.storage();
-  std::ranges::sort(incoming_storage, {}, [](auto const& update) {
-    return std::tie(update.coarse_global_id, update.block);
-  });
-  for (std::size_t index = 1; index < incoming_storage.size(); ++index) {
-    auto const& previous = incoming_storage[index - 1];
-    auto const& current = incoming_storage[index];
-    if (previous.coarse_global_id == current.coarse_global_id &&
-        previous.block != current.block) {
-      incoming_updates_are_valid = false;
-    }
-  }
-  auto update_index = std::size_t{0};
-  forall_local_nodes(Q, node) {
-    auto const coarse_global_id = Q.getGlobalID(node);
-    while (update_index < incoming_storage.size() &&
-           incoming_storage[update_index].coarse_global_id <
-               coarse_global_id) {
-      ++update_index;
-    }
-    if (update_index == incoming_storage.size() ||
-        incoming_storage[update_index].coarse_global_id !=
-            coarse_global_id) {
-      incoming_updates_are_valid = false;
-    }
-  } endfor
-  mpi::validate_collectively(
-      incoming_updates_are_valid,
-      mpi::communicator_view{communicator},
-      "block update received validation failed");
-
-  auto first_update_for_node = true;
-  auto previous_coarse_global_id = NodeID{0};
-  for (auto const& update : incoming_storage) {
-    if (first_update_for_node ||
-        update.coarse_global_id != previous_coarse_global_id) {
-      Q.setSecondPartitionIndex(
-          Q.getLocalID(update.coarse_global_id), update.block);
-      previous_coarse_global_id = update.coarse_global_id;
-      first_update_for_node = false;
-    }
+    dense_sends =
+        mpi::segmented_buffer<block_down::block_update>::from_segments(
+            updates_by_destination);
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(),
+                            "block-down dense send staging");
   }
 
-  forall_local_nodes(Q, node) {
-    KAHIP_MPI_TRACE(mpi::trace::block_propagation(
-        mpi::trace::current_hierarchy(), Q.getGlobalID(node), rank, rank,
-        Q.getSecondPartitionIndex(node)));
-  } endfor
-
-  update_ghost_nodes_blocks( communicator, Q );
-}
-
-void parallel_block_down_propagation::update_ghost_nodes_blocks( MPI_Comm communicator, parallel_graph_access & G ) {
-  PEID rank, size;
-  MPI_Comm_rank( communicator, &rank);
-  MPI_Comm_size( communicator, &size);
-
-  m_send_buffers.resize(size);
-  std::vector< bool > PE_packed(size, false);
-  forall_local_nodes(G, node) {
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if( !G.is_local_node(target)  ) {
-        PEID peID = G.getTargetPE(target);
-        if( !PE_packed[peID] ) { // make sure a node is sent at most once
-          m_send_buffers[peID].push_back(G.getGlobalID(node));
-          m_send_buffers[peID].push_back(G.getSecondPartitionIndex(node));
-          PE_packed[peID] = true;
+  auto dense_received = mpi::all_to_all_v(std::move(dense_sends),
+                                          mpi::communicator_view{communicator});
+  auto owned_blocks = std::vector<PartitionID>{};
+  auto owned_assigned = std::vector<unsigned char>{};
+  auto dense_received_is_valid =
+      dense_received.segment_count() == static_cast<std::size_t>(size);
+  try {
+    auto const local_count = static_cast<std::size_t>(expected_local_nodes);
+    owned_blocks.assign(local_count, PartitionID{0});
+    owned_assigned.assign(local_count, static_cast<unsigned char>(0));
+    auto const source_limit = std::min(dense_received.segment_count(),
+                                       static_cast<std::size_t>(size));
+    for (auto source = std::size_t{0}; source < source_limit; ++source) {
+      for (auto const& update : dense_received.segment(source)) {
+        auto const owner = ownership.owner(update.coarse_global_id);
+        auto const local_id = Q.find_local_id(update.coarse_global_id);
+        auto const local_id_is_representable =
+            local_id.has_value() && std::in_range<std::size_t>(*local_id);
+        auto const index = local_id_is_representable
+                               ? static_cast<std::size_t>(*local_id)
+                               : std::size_t{0};
+        auto const record_is_valid =
+            owner.has_value() && *owner == rank_index &&
+            local_id_is_representable && index < owned_blocks.size() &&
+            update.coarse_global_id < number_of_coarse_nodes &&
+            update.block < number_of_blocks;
+        dense_received_is_valid = dense_received_is_valid && record_is_valid;
+        if (!record_is_valid) {
+          continue;
+        }
+        dense_received_is_valid =
+            dense_received_is_valid &&
+            Q.getGlobalID(*local_id) == update.coarse_global_id &&
+            (owned_assigned[index] == 0 || owned_blocks[index] == update.block);
+        if (owned_assigned[index] == 0) {
+          owned_blocks[index] = update.block;
+          owned_assigned[index] = 1;
         }
       }
-    } endfor
-    forall_out_edges(G, e, node) {
-      NodeID target = G.getEdgeTarget(e);
-      if( !G.is_local_node(target)  ) {
-        PE_packed[G.getTargetPE(target)] = false;
+    }
+    dense_received_is_valid =
+        dense_received_is_valid &&
+        std::ranges::all_of(owned_assigned,
+                            [](auto assigned) { return assigned != 0; });
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(),
+                            "block-down dense receive staging");
+  }
+  if (!mpi::detail::collective_predicate(dense_received_is_valid,
+                                         plan.topology().view())) {
+    std::rethrow_exception(
+        make_semantic_error("block-down dense received validation failed"));
+  }
+
+  auto neighbor_sends = mpi::segmented_buffer<block_down::block_update>{};
+  auto neighbor_outgoing_is_valid = true;
+  try {
+    auto updates_by_destination =
+        std::vector<std::vector<block_down::block_update>>(
+            plan.topology().destinations().size());
+    for (auto destination_index = std::size_t{0};
+         destination_index < plan.topology().destinations().size();
+         ++destination_index) {
+      auto const local_nodes = plan.outgoing_local_nodes(destination_index);
+      auto& updates = updates_by_destination[destination_index];
+      updates.reserve(local_nodes.size());
+      auto previous = std::optional<NodeID>{};
+      for (auto const local : local_nodes) {
+        auto const local_is_representable = std::in_range<std::size_t>(local);
+        auto const index = local_is_representable
+                               ? static_cast<std::size_t>(local)
+                               : std::size_t{0};
+        auto const local_is_valid =
+            local_is_representable && local < Q.number_of_local_nodes() &&
+            index < owned_blocks.size() && owned_assigned[index] != 0 &&
+            (!previous.has_value() || *previous < local);
+        neighbor_outgoing_is_valid =
+            neighbor_outgoing_is_valid && local_is_valid;
+        if (!local_is_valid) {
+          continue;
+        }
+        auto const global_id = Q.getGlobalID(local);
+        neighbor_outgoing_is_valid = neighbor_outgoing_is_valid &&
+                                     Q.is_interface_node(local) &&
+                                     global_id < number_of_coarse_nodes &&
+                                     Q.find_local_id(global_id) == local &&
+                                     owned_blocks[index] < number_of_blocks;
+        updates.push_back({global_id, owned_blocks[index]});
+        previous = local;
       }
-    } endfor
-} endfor
-
-//send all neighbors their packages using Isends
-//a neighbor that does not receive something gets a specific token
-for( PEID peID = 0; peID < (PEID)m_send_buffers.size(); peID++) {
-  if( G.is_adjacent_PE(peID) ) {
-    //now we have to send a message
-    if( m_send_buffers[peID].size() == 0 ){
-      // length 1 encode no message
-      m_send_buffers[peID].push_back(0);
     }
-
-    MPI_Request rq;
-    MPI_Isend( &m_send_buffers[peID][0],
-                m_send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+11*size, communicator, &rq);
+    neighbor_sends =
+        mpi::segmented_buffer<block_down::block_update>::from_segments(
+            updates_by_destination);
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(),
+                            "block-down neighbor send staging");
   }
-}
+  if (!mpi::detail::collective_predicate(neighbor_outgoing_is_valid,
+                                         plan.topology().view())) {
+    std::rethrow_exception(
+        make_semantic_error("block-down neighbor outgoing validation failed"));
+  }
 
-  //receive incomming
-  PEID counter = 0;
-  while( counter < G.getNumberOfAdjacentPEs()) {
-    // wait for incomming message of an adjacent processor
-    MPI_Status st;
-    MPI_Probe(MPI_ANY_SOURCE, rank+11*size, communicator, &st);
+  auto neighbor_received =
+      mpi::neighbor_all_to_all_v(std::move(neighbor_sends), plan.topology());
+  using pending_ghost_update = std::tuple<NodeID, PEID, NodeID, PartitionID>;
+  auto pending_ghost_updates = std::vector<pending_ghost_update>{};
+  auto ghost_blocks = std::vector<PartitionID>{};
+  auto ghost_assigned = std::vector<unsigned char>{};
+  auto neighbor_received_is_valid =
+      neighbor_received.segment_count() == plan.topology().sources().size();
+  try {
+    auto const ghost_count =
+        static_cast<std::size_t>(Q.number_of_ghost_nodes());
+    auto const ghost_begin = Q.number_of_local_nodes() + NodeID{1};
+    ghost_blocks.assign(ghost_count, PartitionID{0});
+    ghost_assigned.assign(ghost_count, static_cast<unsigned char>(0));
+    pending_ghost_updates.reserve(ghost_count);
+    auto const source_limit = std::min(neighbor_received.segment_count(),
+                                       plan.topology().sources().size());
+    for (auto source_index = std::size_t{0}; source_index < source_limit;
+         ++source_index) {
+      auto const source = plan.topology().sources()[source_index];
+      auto const updates = neighbor_received.segment(source_index);
+      auto const expected = plan.expected_ghost_nodes(source_index);
+      auto received_ids = std::vector<NodeID>{};
+      received_ids.reserve(updates.size());
+      neighbor_received_is_valid =
+          neighbor_received_is_valid && updates.size() == expected.size();
+      for (auto update_index = std::size_t{0}; update_index < updates.size();
+           ++update_index) {
+        auto const& update = updates[update_index];
+        received_ids.push_back(update.coarse_global_id);
+        auto const owner = ownership.owner(update.coarse_global_id);
+        auto const source_is_representable = std::in_range<std::size_t>(source);
+        auto const local_id =
+            Q.find_ghost_local_id(update.coarse_global_id, source);
+        auto const local_id_is_representable =
+            local_id.has_value() && std::in_range<std::size_t>(*local_id);
+        auto const local_id_is_ghost =
+            local_id_is_representable && *local_id >= ghost_begin;
+        auto const ghost_index_node =
+            local_id_is_ghost ? *local_id - ghost_begin : NodeID{0};
+        auto const ghost_index_is_representable =
+            local_id_is_ghost && std::in_range<std::size_t>(ghost_index_node);
+        auto const ghost_index =
+            ghost_index_is_representable
+                ? static_cast<std::size_t>(ghost_index_node)
+                : std::size_t{0};
+        auto const record_is_valid =
+            owner.has_value() && source_is_representable &&
+            *owner == static_cast<std::size_t>(source) &&
+            update.coarse_global_id < number_of_coarse_nodes &&
+            update.block < number_of_blocks && ghost_index_is_representable &&
+            ghost_index < ghost_blocks.size() &&
+            ghost_assigned[ghost_index] == 0;
+        neighbor_received_is_valid =
+            neighbor_received_is_valid && record_is_valid;
+        if (!record_is_valid) {
+          continue;
+        }
+        neighbor_received_is_valid =
+            neighbor_received_is_valid &&
+            Q.getGlobalID(*local_id) == update.coarse_global_id;
+        ghost_blocks[ghost_index] = update.block;
+        ghost_assigned[ghost_index] = 1;
+        pending_ghost_updates.emplace_back(update.coarse_global_id, source,
+                                           *local_id, update.block);
+      }
+      std::ranges::sort(received_ids);
+      neighbor_received_is_valid =
+          neighbor_received_is_valid &&
+          std::ranges::adjacent_find(received_ids) == received_ids.end() &&
+          std::ranges::equal(received_ids, expected);
+    }
+    std::ranges::sort(pending_ghost_updates, {}, [](auto const& update) {
+      return std::tie(std::get<0>(update), std::get<1>(update));
+    });
+    neighbor_received_is_valid =
+        neighbor_received_is_valid &&
+        std::ranges::all_of(ghost_assigned,
+                            [](auto assigned) { return assigned != 0; }) &&
+        std::ranges::adjacent_find(
+            pending_ghost_updates, [](auto const& lhs, auto const& rhs) {
+              return std::get<0>(lhs) == std::get<0>(rhs);
+            }) == pending_ghost_updates.end();
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(),
+                            "block-down neighbor receive staging");
+  }
+  if (!mpi::detail::collective_predicate(neighbor_received_is_valid,
+                                         plan.topology().view())) {
+    std::rethrow_exception(
+        make_semantic_error("block-down neighbor received validation failed"));
+  }
 
-    int message_length;
-    MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-    std::vector<NodeID> message; message.resize(message_length);
+  try {
+    for (auto local = std::size_t{0}; local < owned_blocks.size(); ++local) {
+      Q.setSecondPartitionIndex(static_cast<NodeID>(local),
+                                owned_blocks[local]);
+    }
+    for (auto const& [global_id, source, local_id, block] :
+         pending_ghost_updates) {
+      static_cast<void>(global_id);
+      static_cast<void>(source);
+      Q.setSecondPartitionIndex(local_id, block);
+    }
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(),
+                            "block-down state commit");
+  }
 
-    MPI_Status rst;
-    MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, rank+11*size, communicator, &rst);
-    counter++;
-
-    // now integrate the changes
-    if(message_length == 1) continue; // nothing to do
-
-    for( int i = 0; i < message_length-1; i+=2) {
-      NodeID global_id   = message[i];
-      NodeWeight  block  = message[i+1];
-
-      G.setSecondPartitionIndex( G.getLocalID(global_id), block );
+  try {
+    for (auto local = std::size_t{0}; local < owned_blocks.size(); ++local) {
+      auto const node = static_cast<NodeID>(local);
       KAHIP_MPI_TRACE(mpi::trace::block_propagation(
-          mpi::trace::current_hierarchy(), global_id, st.MPI_SOURCE, rank,
-          block));
+          mpi::trace::current_hierarchy(), Q.getGlobalID(node), rank, rank,
+          owned_blocks[local]));
     }
+    for (auto const& [global_id, source, local_id, block] :
+         pending_ghost_updates) {
+      static_cast<void>(local_id);
+      KAHIP_MPI_TRACE(mpi::trace::block_propagation(
+          mpi::trace::current_hierarchy(), global_id, source, rank, block));
+    }
+  } catch (...) {
+    mpi::abort_on_exception(plan.topology().native_handle(),
+                            "block-down trace commit");
   }
-
 }
-}
+}  // namespace parhip

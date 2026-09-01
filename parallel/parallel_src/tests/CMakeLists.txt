@@ -332,6 +332,95 @@ target_link_libraries(
     parallel_projection_mpi_test
     PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
 )
+
+add_executable(
+    parallel_block_down_mpi_test
+    parallel_projection/parallel_block_down_mpi_test.cpp
+)
+target_link_libraries(
+    parallel_block_down_mpi_test
+    PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
+)
+function(add_parallel_block_down_mpi_test test_name ranks test_filter)
+    add_test(
+        NAME "${test_name}"
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" "${ranks}"
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:parallel_block_down_mpi_test>
+            "${test_filter}"
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        "${test_name}"
+        PROPERTIES PROCESSORS "${ranks}" RUN_SERIAL TRUE TIMEOUT 15
+    )
+endfunction()
+
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-protocol-2-rank 2
+    "block-down uses one typed dense and one blocking neighborhood transaction"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-datatype-1-rank 1
+    "block-down wire datatype has exact semantic extent"
+)
+foreach(rank RANGE 1 5)
+    add_parallel_block_down_mpi_test(
+        "unit-parallel-block-down-matrix-${rank}-rank" "${rank}"
+        "block-down covers distributed rank-one through rank-five shapes"
+    )
+endforeach()
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-empty-1-rank 1
+    "globally empty block-down participates without sentinels"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-reuse-2-rank 2
+    "block-down reuses a warm topology and refreshes staged blocks"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-dense-failure-2-rank 2
+    "dense block-down receive failures preserve state and retry"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-dense-coverage-3-rank 3
+    "dense block-down exact coverage rejects a replaced owner record"
+)
+foreach(rank IN ITEMS 2 3 4)
+    add_parallel_block_down_mpi_test(
+        "unit-parallel-block-down-neighbor-failure-${rank}-rank" "${rank}"
+        "neighborhood block-down failures preserve state and retry"
+    )
+endforeach()
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-local-domain-2-rank 2
+    "block-down rejects a rank-local block equal to k before topology"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-skewed-k-2-rank 2
+    "block-down rejects rank-skewed k before topology"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-zero-k-2-rank 2
+    "block-down rejects zero k before topology"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-communicator-2-rank 2
+    "block-down accepts congruent and rejects similar communicators"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-coarse-domain-3-rank 3
+    "block-down rejects skewed coarse domains before topology"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-ownership-2-rank 2
+    "block-down rejects skewed ownership metadata before topology"
+)
+add_parallel_block_down_mpi_test(
+    unit-parallel-block-down-asymmetric-2-rank 2
+    "block-down rejects asymmetric ghost topology before dense payload"
+)
 add_test(
     NAME unit-parallel-projection-mpi
     COMMAND
@@ -368,6 +457,11 @@ function(add_projection_validation_test test_name mpi_ranks catch_filter)
 endfunction()
 
 add_projection_validation_test(
+    unit-parallel-vcycle-complete-graph-distribution-2-rank 2
+    "complete-graph distribution preserves root vcycle blocks while replicating structure"
+)
+
+add_projection_validation_test(
     unit-parallel-projection-domain-skew-3-rank
     3
     "projection rejects an empty-payload coarse-count mismatch collectively"
@@ -402,25 +496,6 @@ add_projection_validation_test(
     2
     "projection rejects duplicate replies without partial label writes"
 )
-
-foreach(mpi_ranks RANGE 1 5)
-    add_test(
-        NAME unit-parallel-block-owner-${mpi_ranks}-rank
-        COMMAND
-            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
-            ${MPIEXEC_PREFLAGS}
-            $<TARGET_FILE:parallel_projection_mpi_test>
-            "block-down dense owner phase uses keyed collective and exact updates"
-            ${MPIEXEC_POSTFLAGS}
-    )
-    set_tests_properties(
-        unit-parallel-block-owner-${mpi_ranks}-rank
-        PROPERTIES
-            PROCESSORS ${mpi_ranks}
-            RUN_SERIAL TRUE
-            TIMEOUT 10
-    )
-endforeach()
 
 add_test(
     NAME unit-parallel-block-owner-local-conflict-3-rank

@@ -199,7 +199,12 @@ void mpi_tools::distribute_local_graph(MPI_Comm communicator,
   MPI_Bcast(vwgt, number_of_nodes, MPI_INT, ROOT, communicator);
   MPI_Bcast(adjwgt, number_of_edges, MPI_INT, ROOT, communicator);
 
-  G.build_from_metis_weighted(number_of_nodes, xadj, adjncy, vwgt, adjwgt);
+  // ROOT already owns the complete graph that supplied these arrays. Rebuilding
+  // it is redundant and would discard semantic node state such as the v-cycle
+  // SecondPartitionIndex values collected immediately before this broadcast.
+  if (rank != static_cast<int>(ROOT)) {
+    G.build_from_metis_weighted(number_of_nodes, xadj, adjncy, vwgt, adjwgt);
+  }
 
   delete[] xadj;
   delete[] adjncy;

@@ -17,7 +17,7 @@ namespace parhip {
 namespace block_down {
 struct block_update {
   NodeID coarse_global_id;
-  NodeID block;
+  PartitionID block;
 };
 }  // namespace block_down
 
@@ -25,21 +25,13 @@ static_assert(std::is_standard_layout_v<block_down::block_update>);
 static_assert(std::is_trivially_copyable_v<block_down::block_update>);
 
 class parallel_block_down_propagation {
-public:
-  parallel_block_down_propagation();
-  virtual ~parallel_block_down_propagation();
-
-  void propagate_block_down( MPI_Comm communicator, PPartitionConfig & config,
-                             parallel_graph_access & G,
-                             parallel_graph_access & Q);
-
-private:
-
-  void update_ghost_nodes_blocks( MPI_Comm communicator, parallel_graph_access & G );
-
-  std::vector< std::vector< NodeID > > m_send_buffers; // buffers to send messages
+ public:
+  void propagate_block_down(MPI_Comm communicator,
+                            PPartitionConfig& config,
+                            parallel_graph_access& G,
+                            parallel_graph_access& Q);
 };
-}
+}  // namespace parhip
 
 template <>
 struct parhip::mpi::wire_members<parhip::block_down::block_update> {
