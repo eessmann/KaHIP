@@ -377,6 +377,10 @@ public:
                 m_nodes_to_cnode.resize( m_nodes.size() );
         }
 
+        [[nodiscard]] auto node_to_cnode_storage_size() const noexcept
+            -> std::size_t;
+        void replace_node_to_cnode(std::vector<NodeID>&& replacement) noexcept;
+
         void setCNode( NodeID node, NodeID cnode) {
                 m_nodes_to_cnode[ node ] = cnode;
         }

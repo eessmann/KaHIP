@@ -70,6 +70,48 @@ foreach(mpi_ranks RANGE 1 5)
 endforeach()
 
 add_test(
+    NAME unit-parallel-ghost-cnode-transaction-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "ghost CNode receive failures preserve the complete mapping and trace"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-ghost-cnode-transaction-3-rank
+    PROPERTIES PROCESSORS 3 RUN_SERIAL TRUE TIMEOUT 20
+)
+
+add_test(
+    NAME unit-parallel-ghost-cnode-zero-domain-3-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "zero coarse domain with local work fails before sparse payload"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-ghost-cnode-zero-domain-3-rank
+    PROPERTIES PROCESSORS 3 RUN_SERIAL TRUE TIMEOUT 10
+)
+
+add_test(
+    NAME unit-parallel-ghost-cnode-asymmetric-2-rank
+    COMMAND
+        "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 2
+        ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:parallel_contraction_mpi_test>
+        "asymmetric ghost topology fails commonly before payload"
+        ${MPIEXEC_POSTFLAGS}
+)
+set_tests_properties(
+    unit-parallel-ghost-cnode-asymmetric-2-rank
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 10
+)
+
+add_test(
     NAME unit-parallel-label-invalid-3-rank
     COMMAND
         "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" 3
@@ -486,7 +528,12 @@ target_link_libraries(
 )
 foreach(
     graph_lifecycle
-    IN ITEMS no-plan cached-plan active-destructor active-reset
+    IN ITEMS
+        no-plan
+        cached-plan
+        active-destructor
+        active-reset
+        cnode-size-mismatch
 )
     add_test(
         NAME unit-parallel-graph-lifecycle-${graph_lifecycle}

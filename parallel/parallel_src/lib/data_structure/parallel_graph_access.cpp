@@ -201,6 +201,20 @@ void parallel_graph_access::start_construction(NodeID n,
 
 void parallel_graph_access::reinit() { reset_graph_generation(); }
 
+auto parallel_graph_access::node_to_cnode_storage_size() const noexcept
+    -> std::size_t {
+  return m_nodes.size();
+}
+
+void parallel_graph_access::replace_node_to_cnode(
+    std::vector<NodeID>&& replacement) noexcept {
+  if (replacement.size() != m_nodes.size()) {
+    mpi::abort_on_programming_error(
+        m_communicator, "parallel graph CNode replacement size mismatch");
+  }
+  m_nodes_to_cnode.swap(replacement);
+}
+
 auto parallel_graph_access::find_local_id(NodeID global_id) const noexcept
     -> std::optional<NodeID> {
   if (global_id < from) {

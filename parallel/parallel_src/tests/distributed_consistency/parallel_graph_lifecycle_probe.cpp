@@ -33,8 +33,11 @@ int main(int argc, char* argv[]) {
   auto const owns_plan = mode == "cached-plan";
   auto const active_destructor = mode == "active-destructor";
   auto const active_reset = mode == "active-reset";
+  auto const cnode_size_mismatch = mode == "cnode-size-mismatch";
   if (!owns_plan && !active_destructor && !active_reset && mode != "no-plan") {
-    return 64;
+    if (!cnode_size_mismatch) {
+      return 64;
+    }
   }
 
   if (MPI_Init(&argc, &argv) != MPI_SUCCESS) {
@@ -49,6 +52,10 @@ int main(int argc, char* argv[]) {
 
   auto graph = std::make_unique<parhip::parallel_graph_access>(MPI_COMM_WORLD);
   build_local_graph(*graph, rank, size);
+  if (cnode_size_mismatch) {
+    graph->replace_node_to_cnode(std::vector<parhip::NodeID>{});
+    return 2;
+  }
   if (active_destructor || active_reset) {
     graph->setNodeLabel(0, static_cast<parhip::NodeID>(rank + 1));
     graph->update_ghost_node_data(false);

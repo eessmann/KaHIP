@@ -52,6 +52,20 @@ elseif(MODE STREQUAL "active-destructor" OR MODE STREQUAL "active-reset")
             "active graph generation missed fail-fast diagnostic\n${probe_output}"
         )
     endif()
+elseif(MODE STREQUAL "cnode-size-mismatch")
+    if("${probe_result}" STREQUAL "0")
+        message(FATAL_ERROR "wrong-sized CNode replacement returned success")
+    endif()
+    if(
+        NOT probe_output
+            MATCHES
+            "MPI adapter programming failure: parallel graph CNode replacement size mismatch"
+    )
+        message(
+            FATAL_ERROR
+            "wrong-sized CNode replacement missed fail-fast diagnostic\n${probe_output}"
+        )
+    endif()
 else()
     message(FATAL_ERROR "unknown lifecycle probe mode: ${MODE}")
 endif()

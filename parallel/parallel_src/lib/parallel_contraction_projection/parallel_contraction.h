@@ -9,6 +9,7 @@
 #define PARALLEL_CONTRACTION_64O127GD
 
 #include <type_traits>
+#include <unordered_map>
 
 #include "communication/mpi_tools.h"
 #include "data_structure/hashed_graph.h"
@@ -33,8 +34,11 @@ private:
                              NodeID& global_num_distinct_ids,
                              std::unordered_map<NodeID, NodeID>& label_mapping);
 
-  void get_nodes_to_cnodes_ghost_nodes(MPI_Comm communicator,
-                                       parallel_graph_access& G);
+  void get_nodes_to_cnodes_ghost_nodes(
+      MPI_Comm communicator,
+      parallel_graph_access& G,
+      NodeID number_of_distinct_labels,
+      std::unordered_map<NodeID, NodeID> const& label_mapping);
 
   void build_quotient_graph_locally(
       parallel_graph_access& G,
@@ -78,6 +82,11 @@ struct node_weight_contribution {
   NodeID coarse_global_id;
   NodeWeight weight;
 };
+
+struct ghost_cnode_assignment {
+  NodeID global_id;
+  NodeID coarse_global_id;
+};
 }  // namespace contraction
 
 static_assert(std::is_standard_layout_v<contraction::label_request>);
@@ -90,6 +99,9 @@ static_assert(
     std::is_standard_layout_v<contraction::node_weight_contribution>);
 static_assert(
     std::is_trivially_copyable_v<contraction::node_weight_contribution>);
+static_assert(std::is_standard_layout_v<contraction::ghost_cnode_assignment>);
+static_assert(
+    std::is_trivially_copyable_v<contraction::ghost_cnode_assignment>);
 }
 
 template <>
@@ -120,5 +132,12 @@ struct parhip::mpi::wire_members<
   inline static constexpr auto value = boost::hana::make_tuple(
       &parhip::contraction::node_weight_contribution::coarse_global_id,
       &parhip::contraction::node_weight_contribution::weight);
+};
+
+template <>
+struct parhip::mpi::wire_members<parhip::contraction::ghost_cnode_assignment> {
+  inline static constexpr auto value = boost::hana::make_tuple(
+      &parhip::contraction::ghost_cnode_assignment::global_id,
+      &parhip::contraction::ghost_cnode_assignment::coarse_global_id);
 };
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */
