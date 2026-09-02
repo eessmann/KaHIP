@@ -13,7 +13,7 @@ get_filename_component(
     ABSOLUTE
 )
 set(oracle_directory
-    "${repository_root}/.superpowers/sdd/kahip-collective-mpi-modernization"
+    "${repository_root}/parallel/parallel_src/tests/fixtures/mpi_trace_oracle"
 )
 set(oracle_manifest "${oracle_directory}/task-5-oracle-golden.txt")
 set(oracle_patch "${oracle_directory}/task-5-upstream-trace.patch")
