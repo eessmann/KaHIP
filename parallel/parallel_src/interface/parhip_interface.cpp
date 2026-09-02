@@ -26,8 +26,10 @@
 #include "distributed_partitioning/distributed_partitioner.h"
 #include "parallel_graph_io.h"
 #include "random_functions.h"
+#include "parhip_partition_balance.h"
 #include "../../shared/random_state.h"
 #include "tools/distributed_quality_metrics.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace {
 using parhip::EdgeID;
@@ -192,6 +194,9 @@ class scoped_output_suppression final {
 void require_valid_partition(parhip::parallel_graph_access& graph,
                              std::span<NodeWeight const> vertex_weights,
                              parhip::PPartitionConfig const& config,
+                             NodeWeight global_node_weight,
+                             double raw_imbalance,
+                             PEID operation_rank,
                              communicator_view communicator) {
   auto local_block_weights =
       std::vector<NodeWeight>(static_cast<std::size_t>(config.k), 0);
@@ -222,14 +227,31 @@ void require_valid_partition(parhip::parallel_graph_access& graph,
       std::span<NodeWeight>{global_block_weights}, communicator,
       "MPI_Allreduce(ParHIP partition block weights)", "ParHIPPartitionKWay",
       "global partition block-weight sum exceeds the graph-weight domain");
-  require_collectively(
-      std::ranges::all_of(global_block_weights,
-                          [&](NodeWeight weight) {
-                            return weight <= config.upper_bound_partition;
-                          }),
-      communicator,
-      "ParHIP produced a partition that exceeds the configured block-weight "
-      "upper bound");
+  auto const [heaviest_block, heaviest_weight] =
+      parhip::detail::lowest_id_heaviest_block(
+          std::span<NodeWeight const>{global_block_weights});
+  auto const local_balanced = heaviest_weight <= config.upper_bound_partition;
+  auto globally_balanced = 0;
+  auto const local = local_balanced ? 1 : 0;
+  parhip::mpi::check_or_abort(
+      MPI_Allreduce(&local, &globally_balanced, 1, MPI_INT, MPI_MIN,
+                    communicator.native_handle()),
+      communicator.native_handle(),
+      "MPI_Allreduce(ParHIP partition balance validation)");
+  if (globally_balanced == 0) {
+    if (operation_rank == 0) {
+      kahip::diagnostics::critical(
+          "ParHIP partition balance failure: total weight=", global_node_weight,
+          ", block count=", config.k, ", raw imbalance=", raw_imbalance,
+          ", quantized imbalance=", config.inbalance,
+          "%, configured bound=", config.upper_bound_partition,
+          ", heaviest block=", heaviest_block,
+          ", actual weight=", heaviest_weight,
+          ", excess=", heaviest_weight - config.upper_bound_partition);
+    }
+    MPI_Abort(communicator.native_handle(), EXIT_FAILURE);
+    std::abort();
+  }
 }
 
 // 3% imbalance is specified as imbalance = 0.03.
@@ -448,6 +470,7 @@ void parhip_partition_kway(idxtype const* vtxdist,
   auto const running_time = runtime.elapsed();
 
   require_valid_partition(graph, vertex_weights, partition_config,
+                          global_node_weight, common_imbalance, rank,
                           communicator);
   distributed_quality_metrics metrics;
   auto const global_edge_cut =

@@ -506,7 +506,9 @@ target_link_libraries(
     PUBLIC MPI::MPI_CXX
     PRIVATE parallel
 )
-target_link_libraries(parhip_interface PRIVATE kahip_options kahip_warnings)
+target_link_libraries(
+    parhip_interface PRIVATE kahip_fatal_diagnostics kahip_options kahip_warnings
+)
 install(
     TARGETS parhip_interface
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
@@ -573,7 +575,10 @@ target_link_libraries(
         modified_kahip_evolutionary_interface_obj
         parallel
 )
-target_link_libraries(parhip_interface_static PRIVATE kahip_options kahip_warnings)
+target_link_libraries(
+    parhip_interface_static
+    PRIVATE kahip_fatal_diagnostics kahip_options kahip_warnings
+)
 install(
     TARGETS parhip_interface_static
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"

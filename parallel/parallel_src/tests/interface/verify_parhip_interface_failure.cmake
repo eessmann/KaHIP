@@ -56,6 +56,41 @@ if(diagnostic_offset EQUAL -1)
     )
 endif()
 
+if(MODE STREQUAL "imbalanced-result")
+    string(
+        REGEX MATCHALL
+        "PARHIP_DETAIL rank=0 ParHIP partition balance failure: total weight=13, block count=2, raw imbalance=0\\.03, quantized imbalance=3%, configured bound=7, heaviest block=0, actual weight=10, excess=3"
+        detail_lines
+        "${probe_output}"
+    )
+    list(LENGTH detail_lines detail_count)
+    if(NOT detail_count EQUAL 1)
+        message(
+            FATAL_ERROR
+            "expected exactly one complete rank-zero ParHIP balance detail; found ${detail_count}\n${probe_output}"
+        )
+    endif()
+    string(REGEX MATCHALL "PARHIP_DETAIL rank=0 " rank_zero_details "${probe_output}")
+    list(LENGTH rank_zero_details rank_zero_detail_count)
+    if(NOT rank_zero_detail_count EQUAL 1)
+        message(FATAL_ERROR "expected exactly one rank-zero detail\n${probe_output}")
+    endif()
+    string(REGEX MATCHALL "PARHIP_DETAIL rank=1 " rank_one_details "${probe_output}")
+    list(LENGTH rank_one_details rank_one_detail_count)
+    if(NOT rank_one_detail_count EQUAL 0)
+        message(FATAL_ERROR "unexpected rank-one detail\n${probe_output}")
+    endif()
+    string(REGEX MATCHALL "PARHIP_DETAIL_FLUSH rank=0" rank_zero_flushes "${probe_output}")
+    list(LENGTH rank_zero_flushes rank_zero_flush_count)
+    if(NOT rank_zero_flush_count EQUAL 1)
+        message(FATAL_ERROR "expected exactly one rank-zero detail flush\n${probe_output}")
+    endif()
+    string(FIND "${probe_output}" "PARHIP_DETAIL_FLUSH rank=1" rank_one_flush)
+    if(NOT rank_one_flush EQUAL -1)
+        message(FATAL_ERROR "unexpected rank-one detail flush\n${probe_output}")
+    endif()
+endif()
+
 foreach(
     forbidden
     IN ITEMS

@@ -3787,7 +3787,12 @@ target_include_directories(
 # Keep the probe's MPI wrappers effective on two-level-namespace platforms.
 target_link_libraries(
     parhip_interface_failure_probe
-    PRIVATE parhip_interface_static MPI::MPI_CXX kahip_options kahip_warnings
+    PRIVATE
+        parhip_interface_static
+        MPI::MPI_CXX
+        kahip_fatal_diagnostics
+        kahip_options
+        kahip_warnings
 )
 add_test(
     NAME unit-pmpi-callback-safety-parhip-interface-failure
@@ -3801,6 +3806,25 @@ add_test(
 set_tests_properties(
     unit-pmpi-callback-safety-parhip-interface-failure
     PROPERTIES TIMEOUT 5
+)
+
+add_executable(
+    parhip_partition_balance_test
+    interface/parhip_partition_balance_test.cpp
+)
+target_link_libraries(
+    parhip_partition_balance_test
+    PRIVATE Catch2::Catch2WithMain kahip_options kahip_warnings
+)
+target_include_directories(
+    parhip_partition_balance_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/parallel/parallel_src"
+)
+catch_discover_tests(
+    parhip_partition_balance_test
+    TEST_PREFIX "unit-"
+    OUTPUT_DIR .
+    OUTPUT_PREFIX "unit-"
 )
 
 foreach(
@@ -3890,7 +3914,7 @@ foreach(
     elseif(failure_mode STREQUAL "imbalanced-result")
         set(
             expected_diagnostic
-            "MPI adapter programming failure: ParHIP produced a partition that exceeds the configured block-weight upper bound"
+            "ParHIP partition balance failure: total weight=13, block count=2, raw imbalance=0.03, quantized imbalance=3%, configured bound=7, heaviest block=0, actual weight=10, excess=3"
         )
     else()
         set(

@@ -1,5 +1,6 @@
 #include <mpi.h>
 #include <unistd.h>
+#include <sys/uio.h>
 
 #include <array>
 #include <cmath>
@@ -10,6 +11,7 @@
 
 #include "kahip_mpi_capabilities.h"
 #include "parhip_interface.h"
+#include "tools/fatal_diagnostics.h"
 
 // KAHIP_PMPI_CALLBACK_REGION_BEGIN
 namespace parhip_interface_failure_probe {
@@ -41,11 +43,48 @@ inline int owned_queries = 0;
 inline int validation_reductions = 0;
 inline int allgathers = 0;
 inline int finalizations = 0;
+inline int operation_rank = -1;
+inline int detail_writes = 0;
+inline int detail_flushes = 0;
+inline bool detail_flushed = false;
 inline bool callback_error = false;
 
 void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
 }
+
+void write_detail(std::string_view text) noexcept {
+  ++detail_writes;
+  auto const rank = operation_rank == 0 ? '0' : '1';
+  auto const prefix = std::string_view{"PARHIP_DETAIL rank="};
+  auto const separator = std::string_view{" "};
+  auto const newline = std::string_view{"\n"};
+  auto const vectors = std::array<iovec, 5>{
+      iovec{.iov_base = const_cast<char*>(prefix.data()),
+            .iov_len = prefix.size()},
+      iovec{.iov_base = const_cast<char*>(&rank), .iov_len = 1},
+      iovec{.iov_base = const_cast<char*>(separator.data()),
+            .iov_len = separator.size()},
+      iovec{.iov_base = const_cast<char*>(text.data()), .iov_len = text.size()},
+      iovec{.iov_base = const_cast<char*>(newline.data()),
+            .iov_len = newline.size()},
+  };
+  static_cast<void>(::writev(STDERR_FILENO, vectors.data(), vectors.size()));
+}
+
+void flush_detail() noexcept {
+  ++detail_flushes;
+  detail_flushed = true;
+  auto const marker = operation_rank == 0
+                          ? std::string_view{"PARHIP_DETAIL_FLUSH rank=0\n"}
+                          : std::string_view{"PARHIP_DETAIL_FLUSH rank=1\n"};
+  static_cast<void>(::write(STDERR_FILENO, marker.data(), marker.size()));
+}
+
+inline constexpr auto detail_sink = kahip::diagnostics::sink{
+    .write = write_detail,
+    .flush = flush_detail,
+};
 
 [[nodiscard]] auto expects_duplicate() noexcept -> bool {
   return selected != mode::intercommunicator;
@@ -64,8 +103,14 @@ void write_text(std::string_view text) noexcept {
            validation_reductions == 0;
   }
   if (exercises_full_algorithm()) {
+    auto const detail_state = operation_rank == 0
+                                  ? detail_writes == 1 && detail_flushes == 1 &&
+                                        detail_flushed
+                                  : detail_writes == 0 && detail_flushes == 0 &&
+                                        !detail_flushed;
     return duplications >= 1 && error_handler_sets >= 1 && owned_queries >= 2 &&
-           owned_communicator != MPI_COMM_NULL && validation_reductions >= 1;
+           owned_communicator != MPI_COMM_NULL && validation_reductions >= 1 &&
+           detail_state;
   }
   auto const avoided_rank_count_storage =
       selected != mode::global_weight_overflow || allgathers == 0;
@@ -94,6 +139,8 @@ void write_text(std::string_view text) noexcept {
 }  // namespace parhip_interface_failure_probe
 
 static_assert(noexcept(parhip_interface_failure_probe::write_text({})));
+static_assert(noexcept(parhip_interface_failure_probe::write_detail({})));
+static_assert(noexcept(parhip_interface_failure_probe::flush_detail()));
 static_assert(noexcept(parhip_interface_failure_probe::expects_duplicate()));
 static_assert(
     noexcept(parhip_interface_failure_probe::exercises_full_algorithm()));
@@ -435,6 +482,11 @@ int main(int argc, char** argv) {
 
   parhip_interface_failure_probe::selected = selected;
   parhip_interface_failure_probe::caller_communicator = communicator;
+  parhip_interface_failure_probe::operation_rank = rank;
+  if (selected == mode::imbalanced_result) {
+    static_cast<void>(kahip::diagnostics::exchange_sink_for_testing(
+        &parhip_interface_failure_probe::detail_sink));
+  }
   parhip_interface_failure_probe::active = true;
   auto const partition_mode = selected == mode::invalid_mode ? 947 : FASTMESH;
   ParHIPPartitionKWay(distribution_pointer, offsets.data(), adjacency_pointer,
