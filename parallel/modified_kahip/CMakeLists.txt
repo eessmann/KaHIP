@@ -142,6 +142,7 @@ target_sources(
         BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
         FILES
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_collectives.h"
+            "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_feasibility.h"
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
 )
 target_link_libraries(

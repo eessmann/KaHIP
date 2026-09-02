@@ -493,6 +493,12 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/interface/parhip_interface.h"
+    PRIVATE
+        FILE_SET private_headers
+        TYPE HEADERS
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
+        FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/interface/parhip_partition_balance.h"
 )
 target_compile_definitions(
     parhip_interface
@@ -555,6 +561,12 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/interface/parhip_interface.h"
+    PRIVATE
+        FILE_SET private_headers
+        TYPE HEADERS
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
+        FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/interface/parhip_partition_balance.h"
 )
 target_compile_definitions(
     parhip_interface_static
