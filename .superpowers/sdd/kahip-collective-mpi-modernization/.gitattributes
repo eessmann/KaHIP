@@ -1,2 +1,0 @@
-# Preserve the byte-exact upstream instrumentation patch, including source whitespace.
-task-5-upstream-trace.patch -diff
