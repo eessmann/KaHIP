@@ -154,6 +154,16 @@ int main(int argc, char** argv) {
       print_target(first_target);
       print_target(second_target);
     }
+  } else if (selected == "wrapped") {
+    constexpr auto wrapped_seed = 536870912;
+    auto const first_target = partition_cube(
+        graph, rank, size, wrapped_seed, FASTMESH, communicator);
+    auto const second_target = partition_cube(
+        graph, rank, size, wrapped_seed, FASTMESH, communicator);
+    if (rank == 0) {
+      print_target(first_target);
+      print_target(second_target);
+    }
   } else {
     return 6;
   }

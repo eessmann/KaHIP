@@ -608,6 +608,38 @@ TEST_CASE("private modified kaffpaE honors the authoritative exact bound") {
   CHECK(edge_cut == 4);
 }
 
+TEST_CASE("public kaffpaE uses the authoritative exact integer bound") {
+  auto rank = -1;
+  auto size = 0;
+  REQUIRE(PMPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(PMPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
+
+  // total weight 6, k=2, p=33: floor(133 * ceil(6 / 2) / 100) = 3.
+  // The legacy floating expression rounds this up to 4 and incorrectly admits
+  // rank zero's overweight starting partition.
+  auto n = 4;
+  auto vertex_weights = std::array<int, 4>{2, 2, 1, 1};
+  auto offsets = std::array<int, 5>{0, 2, 4, 6, 8};
+  auto neighbors = std::array<int, 8>{1, 3, 0, 2, 1, 3, 2, 0};
+  auto blocks = 2;
+  auto imbalance = 0.33;
+  auto edge_cut = -1;
+  auto balance = 0.0;
+  auto partition = rank == 0 ? std::array<int, 4>{0, 0, 1, 1}
+                             : std::array<int, 4>{0, 1, 0, 1};
+
+  kaffpaE(&n, vertex_weights.data(), offsets.data(), nullptr,
+          neighbors.data(), &blocks, &imbalance, true, true, 0, 1,
+          ULTRAFASTSOCIAL, MPI_COMM_WORLD, &edge_cut, &balance,
+          partition.data());
+
+  CHECK(partition == std::array<int, 4>{0, 1, 0, 1});
+  CHECK(edge_cut == 4);
+}
+
 TEST_CASE("initial partition refinement rejects a missing block target") {
   auto config = make_config();
   config.target_weights = {4};
