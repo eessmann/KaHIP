@@ -12,6 +12,7 @@
 #include "communication/mpi_tools.h"
 #include "distributed_evolutionary_partitioning.h"
 #include "kaHIP_interface.h"
+#include "kaHIP_evolutionary_interface_internal.h"
 #include "parallel_contraction_projection/parallel_projection.h"
 #include "io/parallel_graph_io.h"
 #include "tools/distributed_quality_metrics.h"
@@ -119,7 +120,7 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
 #endif
 
 #ifdef DETERMINISTIC_PARHIP
-  kaffpaE(&n,
+  kahip::modified::kaffpaE_with_upper_bound(&n,
           vwgt,
           xadj,
           adjwgt,
@@ -132,11 +133,12 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
           config.seed,
           mode,
           communicator,
+          config.upper_bound_partition,
           &edgecut,
           &balance,
           partition_map);
 #else
-  kaffpaE(&n,
+  kahip::modified::kaffpaE_with_upper_bound(&n,
           vwgt,
           xadj,
           adjwgt,
@@ -149,6 +151,7 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
           config.seed,
           mode,
           communicator,
+          config.upper_bound_partition,
           &edgecut,
           &balance,
           partition_map);

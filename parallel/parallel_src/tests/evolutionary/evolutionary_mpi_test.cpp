@@ -14,6 +14,8 @@
 #include "data_structure/graph_access.h"
 #include "parallel_mh/exchange/exchanger.h"
 #include "parallel_mh/parallel_mh_async.h"
+#include "parallel_mh/evolutionary_feasibility.h"
+#include "kaHIP_interface_internal.h"
 #include "parallel_mh/population.h"
 #include "partition/initial_partitioning/initial_partitioning.h"
 #include "partition/uncoarsening/refinement/quotient_graph_refinement/2way_fm_refinement/partition_accept_rule.h"
@@ -539,6 +541,60 @@ TEST_CASE(
 
   CHECK(config.initial_partitioning_type ==
         kahip::modified::INITIAL_PARTITIONING_RECPARTITION);
+}
+
+TEST_CASE("modified evolutionary feasibility sums vertex weights") {
+  auto graph = kahip::modified::graph_access{};
+  build_cycle_graph(graph, 0);
+  for (auto node = kahip::modified::NodeID{0};
+       node < graph.number_of_nodes(); ++node) {
+    graph.setPartitionIndex(
+        node, node < 4 ? kahip::modified::PartitionID{0}
+                       : kahip::modified::PartitionID{1});
+    graph.setNodeWeight(node, node == 0 ? kahip::modified::NodeWeight{10}
+                                        : kahip::modified::NodeWeight{1});
+  }
+
+  CHECK(::kahip::parallel_mh::maximum_block_weight<
+            kahip::modified::NodeWeight>(graph) ==
+        kahip::modified::NodeWeight{13});
+}
+
+TEST_CASE("modified evolutionary feasibility detects weight overflow") {
+  auto graph = kahip::modified::graph_access{};
+  build_cycle_graph(graph, 0);
+  for (auto node = kahip::modified::NodeID{0};
+       node < graph.number_of_nodes(); ++node) {
+    graph.setPartitionIndex(node, kahip::modified::PartitionID{0});
+    graph.setNodeWeight(node, kahip::modified::NodeWeight{0});
+  }
+  graph.setNodeWeight(
+      0, std::numeric_limits<kahip::modified::NodeWeight>::max());
+  graph.setNodeWeight(1, kahip::modified::NodeWeight{1});
+
+  CHECK_FALSE(
+      ::kahip::parallel_mh::maximum_block_weight<
+          kahip::modified::NodeWeight>(graph)
+          .has_value());
+}
+
+TEST_CASE("modified graph construction preserves an authoritative bound") {
+  auto config = kahip::modified::PartitionConfig{};
+  auto defaults = kahip::modified::configuration{};
+  defaults.standard(config);
+  config.k = 256;
+  config.imbalance = 3;
+
+  auto n = 1;
+  auto vertex_weight = 200 * 200 * 200;
+  auto xadj = std::array<int, 2>{0, 0};
+  auto graph = kahip::modified::graph_access{};
+  kahip::modified::internal_build_graph(
+      config, &n, &vertex_weight, xadj.data(), nullptr, nullptr, graph,
+      kahip::modified::NodeWeight{32187});
+
+  CHECK(config.upper_bound_partition ==
+        kahip::modified::NodeWeight{32187});
 }
 
 TEST_CASE("initial partition refinement rejects a missing block target") {

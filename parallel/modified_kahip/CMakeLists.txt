@@ -159,6 +159,7 @@ kahip_add_private_header_set(
     modified_kahip_evolutionary_interface_obj
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_interface.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_evolutionary_interface_internal.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/interface/kaHIP_interface_internal.h"
 )
 target_link_libraries(

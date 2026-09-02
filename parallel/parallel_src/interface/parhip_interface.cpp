@@ -26,6 +26,7 @@
 #include "distributed_partitioning/distributed_partitioner.h"
 #include "parallel_graph_io.h"
 #include "random_functions.h"
+#include "../../shared/random_state.h"
 #include "tools/distributed_quality_metrics.h"
 
 namespace {
@@ -180,33 +181,12 @@ class scoped_output_suppression final {
                                      unsigned imbalance_percent,
                                      communicator_view communicator)
     -> NodeWeight {
-  auto const quotient = global_weight / block_count;
-  auto const remainder = global_weight % block_count;
+  auto const result = kahip::random_compat::exact_partition_upper_bound(
+      global_weight, static_cast<NodeWeight>(block_count), imbalance_percent);
   require_capacity_collectively(
-      remainder == 0 || quotient < std::numeric_limits<NodeWeight>::max(),
-      communicator, "partition upper bound exceeds the graph-weight domain");
-  auto const ceiling = quotient + (remainder == 0 ? 0 : 1);
-  auto const imbalance = static_cast<NodeWeight>(imbalance_percent);
-  auto const whole_hundreds = ceiling / 100;
-  require_capacity_collectively(
-      whole_hundreds == 0 ||
-          imbalance <= std::numeric_limits<NodeWeight>::max() / whole_hundreds,
-      communicator, "partition upper bound exceeds the graph-weight domain");
-  auto const whole_extra = whole_hundreds * imbalance;
-  auto const remaining_hundredths = ceiling % 100;
-  require_capacity_collectively(
-      remaining_hundredths == 0 ||
-          imbalance <=
-              std::numeric_limits<NodeWeight>::max() / remaining_hundredths,
-      communicator, "partition upper bound exceeds the graph-weight domain");
-  auto const fractional_extra = remaining_hundredths * imbalance / 100;
-  require_capacity_collectively(
-      fractional_extra <=
-              std::numeric_limits<NodeWeight>::max() - whole_extra &&
-          whole_extra + fractional_extra <=
-              std::numeric_limits<NodeWeight>::max() - ceiling,
-      communicator, "partition upper bound exceeds the graph-weight domain");
-  return ceiling + whole_extra + fractional_extra;
+      result.has_value(), communicator,
+      "partition upper bound exceeds the graph-weight domain");
+  return *result;
 }
 
 void require_valid_partition(parhip::parallel_graph_access& graph,
@@ -433,13 +413,12 @@ void parhip_partition_kway(idxtype const* vtxdist,
   partition_config.k = static_cast<PartitionID>(block_count);
   partition_config.seed = seed;
   partition_config.stop_factor /= block_count;
-  auto const derived_seed = rank == 0
-                                ? static_cast<std::int64_t>(seed)
-                                : static_cast<std::int64_t>(seed) * size + rank;
-  require_capacity_collectively(
-      std::in_range<int>(derived_seed), communicator,
-      "rank-derived random seed exceeds the int domain");
-  partition_config.seed = static_cast<int>(derived_seed);
+  auto const derived_seed =
+      kahip::random_compat::outer_rank_seed(seed, size, rank);
+  require_collectively(
+      derived_seed.has_value(), communicator,
+      "rank-derived random seed uses an invalid process count or rank");
+  partition_config.seed = *derived_seed;
 
   std::srand(partition_config.seed);
   random_functions::setSeed(partition_config.seed);

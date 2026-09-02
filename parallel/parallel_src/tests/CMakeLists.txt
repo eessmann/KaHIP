@@ -404,6 +404,7 @@ foreach(evolutionary_target IN ITEMS evolutionary_mpi_test evolutionary_failure_
     target_include_directories(
         ${evolutionary_target}
         PRIVATE
+            "${PROJECT_SOURCE_DIR}/parallel/modified_kahip/interface"
             "${PROJECT_SOURCE_DIR}/parallel/modified_kahip/lib/tools"
             "${PROJECT_SOURCE_DIR}/parallel/modified_kahip/lib/partition"
             "${PROJECT_SOURCE_DIR}/parallel/modified_kahip/lib/io"
@@ -686,7 +687,7 @@ target_link_libraries(
 )
 target_include_directories(
     application_math_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/parallel/parallel_src/app"
+    PRIVATE "${PROJECT_SOURCE_DIR}/parallel/shared"
 )
 add_test(NAME unit-application-math COMMAND application_math_test)
 set_tests_properties(unit-application-math PROPERTIES LABELS "unit;app")

@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <optional>
@@ -6,7 +7,9 @@
 
 #include "../app/configuration.h"
 #include "../lib/parallel_mh/parallel_mh_async.h"
+#include "parallel_mh/evolutionary_collectives.h"
 #include "../lib/tools/quality_metrics.h"
+#include "../../shared/random_state.h"
 #include "kaHIP_interface.h"
 #include "kaHIP_interface_internal.h"
 #include "tools/fatal_diagnostics.h"
@@ -89,7 +92,9 @@ void kaffpae_impl(int* n,
                   MPI_Comm communicator,
                   int* edgecut,
                   double* balance,
-                  int* part) {
+                  int* part,
+                  std::optional<kahip::modified::NodeWeight>
+                      authoritative_upper_bound) {
   using namespace kahip::modified;
   configuration cfg;
   PartitionConfig partition_config;
@@ -131,7 +136,8 @@ void kaffpae_impl(int* n,
   partition_config.kabapE = false;
 
   graph_access graph;
-  internal_build_graph(partition_config, n, vwgt, xadj, adjcwgt, adjncy, graph);
+  internal_build_graph(partition_config, n, vwgt, xadj, adjcwgt, adjncy, graph,
+                       authoritative_upper_bound);
 
   partition_config.kway_adaptive_limits_beta =
       std::log(partition_config.largest_graph_weight);
@@ -162,6 +168,37 @@ void kaffpae_impl(int* n,
 }
 }  // namespace
 
+void kahip::modified::kaffpaE_with_upper_bound(
+    int* n,
+    int* vwgt,
+    int* xadj,
+    int* adjcwgt,
+    int* adjncy,
+    int* nparts,
+    double* imbalance,
+    bool suppress_output,
+    bool graph_partitioned,
+    int time_limit,
+    int seed,
+    int mode,
+    MPI_Comm communicator,
+    std::uint64_t authoritative_upper_bound,
+    int* edgecut,
+    double* balance,
+    int* part) {
+  auto const narrowed =
+      kahip::random_compat::checked_narrow<NodeWeight>(
+          authoritative_upper_bound);
+  if (!narrowed.has_value()) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        communicator, "evolutionary partition upper bound",
+        "ParHIP upper bound exceeds the modified KaHIP weight domain");
+  }
+  kaffpae_impl(n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
+               suppress_output, graph_partitioned, time_limit, seed, mode,
+               communicator, edgecut, balance, part, *narrowed);
+}
+
 void kaffpaE(int* n,
              int* vwgt,
              int* xadj,
@@ -181,7 +218,7 @@ void kaffpaE(int* n,
   try {
     kaffpae_impl(n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
                  suppress_output, graph_partitioned, time_limit, seed, mode,
-                 communicator, edgecut, balance, part);
+                 communicator, edgecut, balance, part, std::nullopt);
   } catch (...) {
     abort_kaffpae_boundary(communicator, std::current_exception());
   }

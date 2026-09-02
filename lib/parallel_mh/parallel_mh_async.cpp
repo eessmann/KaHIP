@@ -8,10 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <mpi.h>
 #include <sstream>
@@ -24,7 +22,9 @@
 #include "graph_partitioner.h"
 #include "parallel_mh_async.h"
 #include "parallel_mh/evolutionary_collectives.h"
+#include "parallel_mh/evolutionary_feasibility.h"
 #include "parallel_mh/population_size_broadcast.h"
+#include "../../parallel/shared/random_state.h"
 #include "quality_metrics.h"
 #include "random_functions.h"
 parallel_mh_async::parallel_mh_async()
@@ -46,16 +46,15 @@ void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_c
   m_island = std::make_unique<population>(m_communicator->native_handle(),
                                           partition_config);
 
-  auto const derived_seed =
-      static_cast<std::int64_t>(partition_config.seed) * m_size + m_rank;
-  if (!std::in_range<int>(derived_seed)) {
+  auto const local_seed = ::kahip::random_compat::mixed_rank_seed(
+      partition_config.seed, m_size, m_rank);
+  if (!local_seed.has_value()) {
     ::kahip::parallel_mh::detail::abort_evolutionary_collective(
         m_communicator->native_handle(), "evolutionary random seed derivation",
-        "rank-derived random seed exceeds the int domain");
+        "process count and rank must identify a valid communicator member");
   }
-  auto const local_seed = static_cast<int>(derived_seed);
-  std::srand(local_seed);
-  random_functions::setSeed(local_seed);
+  std::srand(*local_seed);
+  random_functions::setSeed(*local_seed);
 
   PartitionConfig ini_working_config  = partition_config;
   initialize( ini_working_config, G);
@@ -170,23 +169,21 @@ EdgeWeight parallel_mh_async::collect_best_partitioning(graph_access & G, const 
   m_island->apply_fittest(G, min_objective);
 
   std::vector<PartitionID> best_local_map(G.number_of_nodes());
-  std::vector< NodeWeight > block_sizes(G.get_partition_count(),0);
-
   forall_nodes(G, node) {
     best_local_map[node] = G.getPartitionIndex(node);
-    block_sizes[G.getPartitionIndex(node)]++;
   } endfor
 
-NodeWeight max_domain_weight = 0;
-  for( unsigned i = 0; i < G.get_partition_count(); i++) {
-    if( block_sizes[i] > max_domain_weight ) {
-      max_domain_weight = block_sizes[i];
-    }
+  auto const max_domain_weight =
+      ::kahip::parallel_mh::maximum_block_weight<NodeWeight>(G);
+  if (!max_domain_weight.has_value()) {
+    ::kahip::parallel_mh::detail::abort_evolutionary_collective(
+        m_communicator->native_handle(), "evolutionary feasibility accounting",
+        "partition labels or block-weight sums exceed their valid domains");
   }
 
   auto const best_global_objective =
       ::kahip::parallel_mh::select_and_broadcast_best_partition(
-          m_communicator->native_handle(), min_objective, max_domain_weight,
+          m_communicator->native_handle(), min_objective, *max_domain_weight,
           config.upper_bound_partition, best_local_map.data(),
           best_local_map.size());
 

@@ -13,6 +13,7 @@
 #include "data_structure/graph_access.h"
 #include "parallel_mh/exchange/exchanger.h"
 #include "parallel_mh/parallel_mh_async.h"
+#include "parallel_mh/evolutionary_feasibility.h"
 #include "parallel_mh/population.h"
 #include "partition/initial_partitioning/initial_partitioning.h"
 #include "tools/quality_metrics.h"
@@ -596,6 +597,33 @@ TEST_CASE(
 
   CHECK(config.initial_partitioning_type ==
         INITIAL_PARTITIONING_RECPARTITION);
+}
+
+TEST_CASE("root evolutionary feasibility sums vertex weights") {
+  auto graph = graph_access{};
+  build_cycle_graph(graph, 0);
+  for (auto node = NodeID{0}; node < graph.number_of_nodes(); ++node) {
+    graph.setPartitionIndex(node, node < 4 ? PartitionID{0} : PartitionID{1});
+    graph.setNodeWeight(node, node == 0 ? NodeWeight{10} : NodeWeight{1});
+  }
+
+  CHECK(::kahip::parallel_mh::maximum_block_weight<NodeWeight>(graph) ==
+        NodeWeight{13});
+}
+
+TEST_CASE("root evolutionary feasibility detects weight overflow") {
+  auto graph = graph_access{};
+  build_cycle_graph(graph, 0);
+  for (auto node = NodeID{0}; node < graph.number_of_nodes(); ++node) {
+    graph.setPartitionIndex(node, PartitionID{0});
+    graph.setNodeWeight(node, NodeWeight{0});
+  }
+  graph.setNodeWeight(0, std::numeric_limits<NodeWeight>::max());
+  graph.setNodeWeight(1, NodeWeight{1});
+
+  CHECK_FALSE(
+      ::kahip::parallel_mh::maximum_block_weight<NodeWeight>(graph)
+          .has_value());
 }
 
 TEST_CASE("reusing an evolutionary driver resets first-run state") {

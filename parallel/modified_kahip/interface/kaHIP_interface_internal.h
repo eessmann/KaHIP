@@ -2,10 +2,12 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 
 #include "../lib/data_structure/graph_access.h"
 #include "../lib/partition/partition_config.h"
 #include "../lib/tools/random_functions.h"
+#include "kaHIP_evolutionary_interface_internal.h"
 
 namespace kahip::modified {
 inline void internal_build_graph(PartitionConfig& partition_config,
@@ -14,7 +16,9 @@ inline void internal_build_graph(PartitionConfig& partition_config,
                                  int* xadj,
                                  int* adjcwgt,
                                  int* adjncy,
-                                 graph_access& graph) {
+                                 graph_access& graph,
+                                 std::optional<NodeWeight>
+                                     authoritative_upper_bound = std::nullopt) {
   graph.build_from_metis(*n, xadj, adjncy);
   graph.set_partition_count(partition_config.k);
 
@@ -41,10 +45,15 @@ inline void internal_build_graph(PartitionConfig& partition_config,
   }
   endfor
 
-      auto const epsilon = partition_config.imbalance / 100;
-  partition_config.upper_bound_partition =
-      std::ceil((1 + epsilon) * partition_config.largest_graph_weight /
-                static_cast<double>(partition_config.k));
+  if (authoritative_upper_bound.has_value()) {
+    partition_config.upper_bound_partition = *authoritative_upper_bound;
+  } else {
+    auto const epsilon = partition_config.imbalance / 100;
+    partition_config.upper_bound_partition =
+        std::ceil((1 + epsilon) * partition_config.largest_graph_weight /
+                  static_cast<double>(partition_config.k));
+  }
   partition_config.graph_allready_partitioned = false;
 }
+
 }  // namespace kahip::modified
