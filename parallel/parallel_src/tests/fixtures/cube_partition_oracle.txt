@@ -5,6 +5,11 @@ upstream_mpi=Open-MPI-5.0.10-MPI-3.1
 cell_id=x+nx*(y+ny*z)
 adjacency=sorted-six-face-neighborhood
 
+repair_semantics=weighted-feasibility
+repair_revision=8b26fa29dece9e268c98106c315e47fdbeaf1c1b
+repair_compiler=GNU-16.2.1
+repair_mpi=MPICH-5.0.1-MPI-5.0
+
 cube4.nx=4
 cube4.ny=4
 cube4.nz=4
@@ -72,3 +77,20 @@ cube100.rank4.partition_file_sha256=6f5c0069e586c649349f418bbc7ff6b63ebcb9a06269
 cube100.rank4.partition_sha256=5b9d8e0da1c30f024b29a997e55b08330acdea00b6ad371db95dd60bde88907b
 cube100.rank4.block_weights=256892,257365,241889,243854
 cube100.rank4.weighted_cut=30370
+
+cube4.rank5.repaired_upstream_partition_sha256=05d39781dac8fc7e376085023430956bd3b63e14b97ce44b59334aee059cc85a
+cube4.rank5.repaired_partition_file_sha256=01c9a40218fd770ddd728e0252267d990277d834259c85539c8924228bb584fb
+cube4.rank5.repaired_partition_sha256=27d46f0e3a6255f9bde5ff016f9fd6c910f5839af042012970497a2abc2ee389
+cube4.rank5.repaired_partition=1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+cube4.rank5.repaired_block_weights=32,32
+cube4.rank5.repaired_weighted_cut=22
+cube10.rank2.repaired_upstream_partition_sha256=9a362041172c39f4b17d68b6919dd43e73260d7aa4bfec633f29924e81396817
+cube10.rank2.repaired_partition_file_sha256=353c210e5ccdb593144bbd18a4c7ae50682c42566f78d42fbfc80eca557cd24f
+cube10.rank2.repaired_partition_sha256=1b39d02b62cb0c40536cb6543f7b4c3b81414bde6d302e56da373ef00202e7fe
+cube10.rank2.repaired_block_weights=238,255,253,254
+cube10.rank2.repaired_weighted_cut=253
+cube10.rank4.repaired_upstream_partition_sha256=0b200061d7cabead1743692b4055fd1beb2ef833239ded2342020b844df872c1
+cube10.rank4.repaired_partition_file_sha256=9d7f5b5994621d1f9a1509734eb2d709d3219db21ded3f639dc87b820cb509e1
+cube10.rank4.repaired_partition_sha256=27a01faf2a3e79285cd8fa75746432c017f22ab7fe06d9e11fbe4eb2ef944cab
+cube10.rank4.repaired_block_weights=235,252,257,256
+cube10.rank4.repaired_weighted_cut=264

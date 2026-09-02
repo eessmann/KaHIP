@@ -1035,6 +1035,9 @@ foreach(
         invalid-seed
         invalid-imbalance
         exact-cut
+        missing-repair-provenance
+        invalid-repair-provenance
+        mismatched-repair-upstream-anchor
 )
     add_test(
         NAME unit-cube-oracle-validation-${validation_case}

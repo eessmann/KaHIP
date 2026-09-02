@@ -83,8 +83,35 @@ elseif(TEST_CASE STREQUAL "exact-cut")
     set(search "cube4.rank1.weighted_cut=28")
     set(replacement "cube4.rank1.weighted_cut=2")
     set(expected_diagnostic "weighted cut is 28, expected 2")
+elseif(TEST_CASE STREQUAL "missing-repair-provenance")
+    set(search "repair_mpi=MPICH-5.0.1-MPI-5.0\n")
+    set(replacement "")
+    set(expected_diagnostic
+        "cube oracle repair provenance is missing 'repair_mpi'"
+    )
+    set(test_ranks 5)
+elseif(TEST_CASE STREQUAL "invalid-repair-provenance")
+    set(search "repair_compiler=GNU-16.2.1")
+    set(replacement "repair_compiler=GNU")
+    set(expected_diagnostic "invalid repair compiler provenance 'GNU'")
+    set(test_ranks 5)
+elseif(TEST_CASE STREQUAL "mismatched-repair-upstream-anchor")
+    set(search
+        "cube4.rank5.repaired_upstream_partition_sha256=05d39781dac8fc7e376085023430956bd3b63e14b97ce44b59334aee059cc85a"
+    )
+    set(replacement
+        "cube4.rank5.repaired_upstream_partition_sha256=0000000000000000000000000000000000000000000000000000000000000000"
+    )
+    set(expected_diagnostic
+        "cube4.rank5 repaired upstream partition SHA-256 does not match"
+    )
+    set(test_ranks 5)
 else()
     message(FATAL_ERROR "unknown cube oracle validation case '${TEST_CASE}'")
+endif()
+
+if(NOT DEFINED test_ranks)
+    set(test_ranks 1)
 endif()
 
 if(DEFINED search)
@@ -120,7 +147,7 @@ execute_process(
         -DNY=4
         -DNZ=4
         -DBLOCKS=2
-        -DRANKS=1
+        "-DRANKS=${test_ranks}"
         -P "${ORACLE_SCRIPT}"
     RESULT_VARIABLE oracle_result
     OUTPUT_VARIABLE oracle_output

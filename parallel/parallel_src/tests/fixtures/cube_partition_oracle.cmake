@@ -40,6 +40,12 @@ set(provenance_keys
     cell_id
     adjacency
 )
+set(repair_provenance_keys
+    repair_semantics
+    repair_revision
+    repair_compiler
+    repair_mpi
+)
 set(manifest_keys "")
 foreach(line IN LISTS manifest_lines)
     if(line STREQUAL "")
@@ -70,12 +76,19 @@ foreach(line IN LISTS manifest_lines)
     if(key IN_LIST provenance_keys)
         continue()
     endif()
+    if(key IN_LIST repair_provenance_keys)
+        continue()
+    endif()
     if(key MATCHES
        "^[A-Za-z][A-Za-z0-9_-]*\\.(nx|ny|nz|blocks|preconfiguration|seed|imbalance_percent|graph_file_sha256)$")
         continue()
     endif()
     if(key MATCHES
        "^[A-Za-z][A-Za-z0-9_-]*\\.rank[1-9][0-9]*\\.(partition_file_sha256|partition_sha256|partition|block_weights|weighted_cut)$")
+        continue()
+    endif()
+    if(key MATCHES
+       "^[A-Za-z][A-Za-z0-9_-]*\\.rank[1-9][0-9]*\\.repaired_(upstream_partition_sha256|partition_file_sha256|partition_sha256|partition|block_weights|weighted_cut)$")
         continue()
     endif()
     message(FATAL_ERROR "unknown cube oracle manifest key '${key}'")
@@ -146,6 +159,119 @@ if(NOT adjacency_recipe STREQUAL "sorted-six-face-neighborhood")
     )
 endif()
 
+set(repair_tuples "")
+foreach(key IN LISTS manifest_keys)
+    if(key MATCHES
+       "^([A-Za-z][A-Za-z0-9_-]*\\.rank[1-9][0-9]*)\\.repaired_")
+        list(APPEND repair_tuples "${CMAKE_MATCH_1}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES repair_tuples)
+if(repair_tuples)
+    foreach(key IN LISTS repair_provenance_keys)
+        manifest_find("${key}" repair_${key} has_repair_${key})
+        if(NOT has_repair_${key})
+            message(FATAL_ERROR
+                "cube oracle repair provenance is missing '${key}'"
+            )
+        endif()
+    endforeach()
+    if(NOT repair_repair_semantics STREQUAL "weighted-feasibility")
+        message(FATAL_ERROR
+            "unsupported repair semantics '${repair_repair_semantics}'"
+        )
+    endif()
+    require_lower_hex("repair revision" "${repair_repair_revision}" 40)
+    if(NOT repair_repair_revision STREQUAL
+       "8b26fa29dece9e268c98106c315e47fdbeaf1c1b")
+        message(FATAL_ERROR
+            "unsupported repair revision '${repair_repair_revision}'"
+        )
+    endif()
+    if(NOT repair_repair_compiler MATCHES
+       "^[A-Za-z][A-Za-z0-9+._-]*-[0-9]+(\\.[0-9]+)+$")
+        message(FATAL_ERROR
+            "invalid repair compiler provenance '${repair_repair_compiler}'"
+        )
+    endif()
+    if(NOT repair_repair_compiler STREQUAL "GNU-16.2.1")
+        message(FATAL_ERROR
+            "unsupported repair compiler '${repair_repair_compiler}'"
+        )
+    endif()
+    if(NOT repair_repair_mpi MATCHES
+       "^[A-Za-z][A-Za-z0-9+._-]*-[0-9]+(\\.[0-9]+)+-MPI-[0-9]+\\.[0-9]+$")
+        message(FATAL_ERROR
+            "invalid repair MPI provenance '${repair_repair_mpi}'"
+        )
+    endif()
+    if(NOT repair_repair_mpi STREQUAL "MPICH-5.0.1-MPI-5.0")
+        message(FATAL_ERROR
+            "unsupported repair MPI '${repair_repair_mpi}'"
+        )
+    endif()
+
+    set(allowed_repair_tuples cube4.rank5 cube10.rank2 cube10.rank4)
+    foreach(repair_tuple IN LISTS repair_tuples)
+        if(NOT repair_tuple IN_LIST allowed_repair_tuples)
+            message(FATAL_ERROR
+                "repair overlay is not allowed for '${repair_tuple}'"
+            )
+        endif()
+        foreach(field IN ITEMS
+                upstream_partition_sha256
+                partition_file_sha256
+                partition_sha256
+                block_weights
+                weighted_cut)
+            manifest_require(
+                "${repair_tuple}.repaired_${field}"
+                "${repair_tuple}_repaired_${field}"
+            )
+        endforeach()
+        require_lower_hex(
+            "${repair_tuple} repaired upstream partition SHA-256"
+            "${${repair_tuple}_repaired_upstream_partition_sha256}" 64
+        )
+        require_lower_hex(
+            "${repair_tuple} repaired partition file SHA-256"
+            "${${repair_tuple}_repaired_partition_file_sha256}" 64
+        )
+        require_lower_hex(
+            "${repair_tuple} repaired partition SHA-256"
+            "${${repair_tuple}_repaired_partition_sha256}" 64
+        )
+        if(NOT "${${repair_tuple}_repaired_block_weights}" MATCHES
+           "^[0-9]+(,[0-9]+)*$")
+            message(FATAL_ERROR
+                "${repair_tuple}.repaired_block_weights is not a canonical integer list"
+            )
+        endif()
+        if(NOT "${${repair_tuple}_repaired_weighted_cut}" MATCHES "^[0-9]+$")
+            message(FATAL_ERROR
+                "${repair_tuple}.repaired_weighted_cut is not an unsigned integer"
+            )
+        endif()
+        manifest_require(
+            "${repair_tuple}.partition_sha256"
+            "${repair_tuple}_upstream_partition_sha256"
+        )
+        if(NOT "${${repair_tuple}_repaired_upstream_partition_sha256}" STREQUAL
+           "${${repair_tuple}_upstream_partition_sha256}")
+            message(FATAL_ERROR
+                "${repair_tuple} repaired upstream partition SHA-256 does not match its pristine upstream record"
+            )
+        endif()
+    endforeach()
+    foreach(allowed_repair_tuple IN LISTS allowed_repair_tuples)
+        if(NOT allowed_repair_tuple IN_LIST repair_tuples)
+            message(FATAL_ERROR
+                "cube oracle manifest is missing repair overlay '${allowed_repair_tuple}'"
+            )
+        endif()
+    endforeach()
+endif()
+
 foreach(field IN ITEMS nx ny nz blocks)
     manifest_require("${FIXTURE}.${field}" manifest_${field})
 endforeach()
@@ -196,6 +322,21 @@ if(NOT expected_block_weights MATCHES "^[0-9]+(,[0-9]+)*$")
 endif()
 if(NOT expected_weighted_cut MATCHES "^[0-9]+$")
     message(FATAL_ERROR "${tuple}.weighted_cut is not an unsigned integer")
+endif()
+
+set(oracle_semantics "pristine upstream")
+set(exact_partition_key "${tuple}.partition")
+if(tuple IN_LIST repair_tuples)
+    set(oracle_semantics "repaired weighted-feasibility")
+    set(expected_file_sha256
+        "${${tuple}_repaired_partition_file_sha256}"
+    )
+    set(expected_partition_sha256
+        "${${tuple}_repaired_partition_sha256}"
+    )
+    set(expected_block_weights "${${tuple}_repaired_block_weights}")
+    set(expected_weighted_cut "${${tuple}_repaired_weighted_cut}")
+    set(exact_partition_key "${tuple}.repaired_partition")
 endif()
 
 file(MAKE_DIRECTORY "${WORK_DIRECTORY}")
@@ -273,9 +414,9 @@ if(NOT WIN32 AND NOT actual_file_sha256 STREQUAL expected_file_sha256)
     )
 endif()
 
-manifest_find("${tuple}.partition" exact_partition has_exact_partition)
+manifest_find("${exact_partition_key}" exact_partition has_exact_partition)
 if(has_exact_partition AND NOT canonical_partition STREQUAL exact_partition)
-    message(FATAL_ERROR "${tuple} differs from its exact upstream vector")
+    message(FATAL_ERROR "${tuple} differs from its exact ${oracle_semantics} vector")
 endif()
 
 execute_process(
@@ -326,6 +467,12 @@ if(NOT actual_weighted_cut STREQUAL expected_weighted_cut)
     )
 endif()
 
-message(STATUS
-    "verified ${tuple} against upstream ${upstream_revision}: partition=${actual_partition_sha256} cut=${expected_weighted_cut}"
-)
+if(oracle_semantics STREQUAL "repaired weighted-feasibility")
+    message(STATUS
+        "verified ${tuple} against repaired weighted-feasibility semantics: repair=${repair_repair_revision} compiler=${repair_repair_compiler} mpi=${repair_repair_mpi} upstream-anchor=${${tuple}_repaired_upstream_partition_sha256} partition=${actual_partition_sha256} cut=${expected_weighted_cut}"
+    )
+else()
+    message(STATUS
+        "verified ${tuple} against upstream ${upstream_revision}: partition=${actual_partition_sha256} cut=${expected_weighted_cut}"
+    )
+endif()
