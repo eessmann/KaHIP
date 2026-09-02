@@ -47,6 +47,8 @@ inline int operation_rank = -1;
 inline int detail_writes = 0;
 inline int detail_flushes = 0;
 inline bool detail_flushed = false;
+inline int balance_ordering_completions = 0;
+inline bool balance_ordering_completed = false;
 inline bool callback_error = false;
 
 void write_text(std::string_view text) noexcept {
@@ -110,7 +112,8 @@ inline constexpr auto detail_sink = kahip::diagnostics::sink{
                                         !detail_flushed;
     return duplications >= 1 && error_handler_sets >= 1 && owned_queries >= 2 &&
            owned_communicator != MPI_COMM_NULL && validation_reductions >= 1 &&
-           detail_state;
+           detail_state && balance_ordering_completions == 1 &&
+           balance_ordering_completed;
   }
   auto const avoided_rank_count_storage =
       selected != mode::global_weight_overflow || allgathers == 0;
@@ -131,9 +134,6 @@ inline constexpr auto detail_sink = kahip::diagnostics::sink{
     std::_Exit(91);
   }
   write_text("observed ParHIP interface MPI_Abort on affected communicator\n");
-  if (PMPI_Barrier(MPI_COMM_WORLD) != MPI_SUCCESS) {
-    std::_Exit(90);
-  }
   std::_Exit(86);
 }
 }  // namespace parhip_interface_failure_probe
@@ -269,6 +269,10 @@ extern "C" int MPI_Allreduce(void const* send_buffer,
   if (selected == mode::backend_reduction && validation_reductions == 1) {
     return MPI_ERR_OTHER;
   }
+  if (exercises_full_algorithm() && communicator == owned_communicator) {
+    balance_ordering_completions = 0;
+    balance_ordering_completed = false;
+  }
   return PMPI_Allreduce(send_buffer, receive_buffer, count, datatype, operation,
                         communicator);
 }
@@ -301,10 +305,32 @@ extern "C" int MPI_Allreduce_c(void const* send_buffer,
   if (selected == mode::backend_reduction && validation_reductions == 1) {
     return MPI_ERR_OTHER;
   }
+  if (exercises_full_algorithm() && communicator == owned_communicator) {
+    balance_ordering_completions = 0;
+    balance_ordering_completed = false;
+  }
   return PMPI_Allreduce_c(send_buffer, receive_buffer, count, datatype,
                           operation, communicator);
 }
 #endif
+
+extern "C" int MPI_Barrier(MPI_Comm communicator) {
+  using namespace parhip_interface_failure_probe;
+  if (!active) {
+    return PMPI_Barrier(communicator);
+  }
+  auto const tracks_balance_ordering =
+      exercises_full_algorithm() && communicator == owned_communicator;
+  auto const diagnostic_precedes_barrier =
+      operation_rank != 0 ||
+      (detail_writes == 1 && detail_flushes == 1 && detail_flushed);
+  auto const result = PMPI_Barrier(communicator);
+  if (tracks_balance_ordering && result == MPI_SUCCESS) {
+    balance_ordering_completed = diagnostic_precedes_barrier;
+    balance_ordering_completions = diagnostic_precedes_barrier ? 1 : 0;
+  }
+  return result;
+}
 
 extern "C" int MPI_Finalize() {
   if (parhip_interface_failure_probe::active) {

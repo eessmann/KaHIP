@@ -249,6 +249,10 @@ void require_valid_partition(parhip::parallel_graph_access& graph,
           ", actual weight=", heaviest_weight,
           ", excess=", heaviest_weight - config.upper_bound_partition);
     }
+    parhip::mpi::check_or_abort(
+        MPI_Barrier(communicator.native_handle()),
+        communicator.native_handle(),
+        "MPI_Barrier(ParHIP partition balance diagnostic ordering)");
     MPI_Abort(communicator.native_handle(), EXIT_FAILURE);
     std::abort();
   }
