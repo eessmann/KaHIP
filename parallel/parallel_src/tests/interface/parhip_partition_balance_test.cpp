@@ -18,14 +18,31 @@ TEST_CASE("native three-percent imbalance keeps its whole percentage",
   CHECK_FALSE(normalized->was_normalized);
 }
 
-TEST_CASE("binary32-origin three-percent imbalance snaps to three percent",
+TEST_CASE("only the exact widened binary32 origin normalizes upward",
           "[parhip][partition][balance]") {
-  auto const normalized = kahip::balance::normalize_fractional_imbalance(
-      static_cast<double>(float{0.03F}));
+  auto const widened =
+      kahip::balance::normalize_fractional_imbalance(
+          static_cast<double>(float{0.03F}));
+  auto const preceding_binary32 =
+      kahip::balance::normalize_fractional_imbalance(static_cast<double>(
+          std::nextafter(float{0.03F}, 0.0F)));
+  auto const genuine_near_integer =
+      kahip::balance::normalize_fractional_imbalance(0.029999998);
+  auto const large_percentage_ambiguity =
+      kahip::balance::normalize_fractional_imbalance(83886.075);
 
-  REQUIRE(normalized.has_value());
-  CHECK(normalized->effective_percent == 3);
-  CHECK(normalized->was_normalized);
+  REQUIRE(widened.has_value());
+  CHECK(widened->effective_percent == 3);
+  CHECK(widened->was_normalized);
+  REQUIRE(preceding_binary32.has_value());
+  CHECK(preceding_binary32->effective_percent == 2);
+  CHECK_FALSE(preceding_binary32->was_normalized);
+  REQUIRE(genuine_near_integer.has_value());
+  CHECK(genuine_near_integer->effective_percent == 2);
+  CHECK_FALSE(genuine_near_integer->was_normalized);
+  REQUIRE(large_percentage_ambiguity.has_value());
+  CHECK(large_percentage_ambiguity->effective_percent == 8388607);
+  CHECK_FALSE(large_percentage_ambiguity->was_normalized);
 }
 
 TEST_CASE("genuine fractional percentages retain floor semantics",

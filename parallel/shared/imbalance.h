@@ -43,9 +43,9 @@ struct normalized_imbalance final {
 
   auto const next_percent = effective_percent + 1;
   auto const next_percentage = static_cast<double>(next_percent);
-  auto const binary32_conversion_tolerance =
-      next_percentage * static_cast<double>(std::numeric_limits<float>::epsilon());
-  if (percentage >= next_percentage - binary32_conversion_tolerance) {
+  auto const widened_binary32_origin = static_cast<double>(
+      static_cast<float>(next_percentage / 100.0));
+  if (fractional_imbalance == widened_binary32_origin) {
     return normalized_imbalance{.effective_percent = next_percent,
                                 .was_normalized = true};
   }

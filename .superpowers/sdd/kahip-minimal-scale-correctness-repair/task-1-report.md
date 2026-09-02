@@ -6,9 +6,10 @@ Added `parallel/shared/imbalance.h`, a dependency-free normalizer for public
 fractional imbalance inputs.  It rejects non-finite, negative, and
 unrepresentable values; returns an unsigned effective whole percentage and a
 normalization flag; preserves floor semantics for ordinary fractions; and
-snaps only values immediately below the next percentage within a
-binary32-to-binary64 tolerance derived from
-`std::numeric_limits<float>::epsilon()`.
+snaps only a uniquely identifiable widened binary32 value: the raw double
+must exactly equal `double(float(next_percent / 100))`.  This avoids a broad
+binary32 tolerance interval and preserves floor semantics for neighbouring
+binary32 values and genuine binary64 inputs.
 
 Both public boundaries now normalize exactly once:
 
@@ -43,12 +44,16 @@ rank-zero line.
 - `parallel/parallel_src/tests/interface/verify_parhip_interface_failure.cmake`
 - `parallel/parallel_src/tests/CMakeLists.txt`
 
-## TDD and verification
+## Verification record
 
 All configure, build, and test commands were run inside the required user
 systemd scope with the requested memory limits and `VCPKG_ROOT`.
 
-### RED
+### Earlier issue provenance
+
+The following run predates the exact-origin review correction.  It documents
+the original accidental-2% public API failure, but is not claimed as RED
+evidence for the review correction below.
 
 Command:
 
@@ -63,15 +68,36 @@ Relevant output before production implementation:
 ParHIP partition balance failure: total weight=68, block count=2, raw imbalance=0.03, quantized imbalance=2%, configured bound=34, heaviest block=1, actual weight=35, excess=1
 ```
 
-This is the intended failure: the weighted two-vertex public fixture is
+This records that the weighted two-vertex public fixture is
 feasible at 3% (bound 35) but impossible at the accidental 2% (bound 34).
 
-### GREEN focused checks
+### Review-correction RED
+
+After adding the exact-origin regression, before changing the normalizer,
+this command failed as expected:
+
+```sh
+systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg ctest --test-dir out/build/ci-mpi-gcc -V -R '^unit-only the exact widened binary32 origin normalizes upward$'
+```
+
+Relevant output:
+
+```text
+CHECK( preceding_binary32->effective_percent == 2 ) with expansion: 3 == 2
+CHECK( genuine_near_integer->effective_percent == 2 ) with expansion: 3 == 2
+CHECK( large_percentage_ambiguity->effective_percent == 8388607 ) with expansion: 8388608 == 8388607
+```
+
+The same test also confirmed that `static_cast<double>(float{0.03F})` was
+normalized to 3 before the correction, isolating the defect to the over-broad
+admission interval.
+
+### Review-correction GREEN focused checks
 
 Command:
 
 ```sh
-systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg ctest --test-dir out/build/ci-mpi-gcc --output-on-failure -R '^(unit-(binary32-origin three-percent imbalance snaps to three percent|native three-percent imbalance keeps its whole percentage|genuine fractional percentages retain floor semantics|imbalance normalization rejects invalid and out-of-range inputs|normalized three percent keeps the checked 600-cubed bound)|unit-parhip-interface-[1-5]-rank|unit-parhip-interface-imbalanced-result-failure)$'
+systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg ctest --test-dir out/build/ci-mpi-gcc --output-on-failure -R '^(unit-(only the exact widened binary32 origin normalizes upward|native three-percent imbalance keeps its whole percentage|genuine fractional percentages retain floor semantics|imbalance normalization rejects invalid and out-of-range inputs|normalized three percent keeps the checked 600-cubed bound)|unit-parhip-interface-[1-5]-rank|unit-parhip-interface-imbalanced-result-failure)$'
 ```
 
 Relevant output:
@@ -81,7 +107,8 @@ Relevant output:
 ```
 
 The focused set covers native `0.03`, `static_cast<double>(float{0.03F})`,
-genuine `0.025`, invalid/range and overflow boundaries, the
+the preceding binary32 value, genuine `0.029999998`, a large-percentage
+half-percent ambiguity, genuine `0.025`, invalid/range and overflow boundaries, the
 `600^3, k=2304, p=3` bound of `96562`, rank counts one through five, and
 zero-work ranks.  The private modified-KaHIP handoff was also checked with:
 
@@ -91,7 +118,7 @@ systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2
 
 Output: `100% tests passed, 0 tests failed out of 2`.
 
-### Final full non-large GCC MPI suite
+### Final review-correction non-large GCC MPI suite
 
 Commands:
 
@@ -105,13 +132,14 @@ Final output:
 
 ```text
 100% tests passed, 0 tests failed out of 473
-Total Test time (real) = 29.49 sec
+Total Test time (real) = 29.30 sec
 ```
 
 ## Self-review
 
 - The normalizer has no production dependency outside the standard library;
-  the tolerance is derived from `numeric_limits`, not a magic epsilon.
+  it admits only the exact widened binary32 origin for the next percentage,
+  with no broad epsilon interval.
 - The exact bound remains `floor((100 + p) * ceil(total_weight / blocks) / 100)`
   through the existing checked integer helper.
 - No public C function signature changed, and no random state or draw order
@@ -119,4 +147,6 @@ Total Test time (real) = 29.49 sec
 - The new public fixture uses only the real API and real MPI collectives; its
   zero-work ranks retain a non-null optional-weight pointer so all ranks agree
   on optional input presence.
-- `git diff --check` is clean.  No remaining implementation concerns found.
+- The exact-origin regressions cover the predecessor binary32 value, a
+  genuine near-integer double, and a large-percentage ambiguity.  No remaining
+  implementation concerns found.
