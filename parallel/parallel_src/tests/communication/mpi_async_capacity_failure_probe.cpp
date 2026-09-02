@@ -1,4 +1,6 @@
 #include <mpi.h>
+#include <limits.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -109,6 +111,31 @@ auto operation_duplicate_attempts = 0;
   std::_Exit(2);
 }
 
+void write_abort_observation(std::string_view affected) noexcept {
+  constexpr auto buffer_capacity = std::size_t{512};
+  static_assert(buffer_capacity <= PIPE_BUF);
+  auto buffer = std::array<char, buffer_capacity>{};
+  auto const length = std::snprintf(
+      buffer.data(), buffer.size(),
+      "observed MPI_Abort rank=%d affected=%.*s error-string-attempts=%d "
+      "cleanup-attempts=%d capacity-bor-attempts=%d "
+      "backend-band-attempts=%d count-exchange-attempts=%d "
+      "payload-allocation-attempts=%d datatype-attempts=%d "
+      "immediate-init-attempts=%d persistent-init-attempts=%d "
+      "payload-collective-attempts=%d operation-duplicate-attempts=%d\n",
+      cached_rank, static_cast<int>(affected.size()), affected.data(),
+      error_string_attempts, cleanup_attempts, capacity_bor_attempts,
+      backend_band_attempts, count_exchange_attempts,
+      payload_allocation_attempts, datatype_attempts, immediate_init_attempts,
+      persistent_init_attempts, payload_collective_attempts,
+      operation_duplicate_attempts);
+  if (length < 0 || static_cast<std::size_t>(length) >= buffer.size() ||
+      ::write(STDERR_FILENO, buffer.data(), static_cast<std::size_t>(length)) !=
+          length) {
+    std::_Exit(89);
+  }
+}
+
 [[nodiscard]] auto allocate_aligned(std::size_t size, std::size_t alignment)
     -> void* {
   auto const allocation_size = std::max(size, std::size_t{1});
@@ -126,6 +153,8 @@ auto operation_duplicate_attempts = 0;
   return allocation;
 }
 }  // namespace
+
+static_assert(noexcept(write_abort_observation({})));
 
 void* operator new(std::size_t size, std::align_val_t alignment) {
   if (payload_allocation_watch) {
@@ -251,20 +280,10 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int) {
     forbidden("MPI_Abort before async capacity injection");
   }
   auto const affected = affected_name(communicator);
-  std::fprintf(
-      stderr,
-      "observed MPI_Abort rank=%d affected=%.*s error-string-attempts=%d "
-      "cleanup-attempts=%d capacity-bor-attempts=%d "
-      "backend-band-attempts=%d count-exchange-attempts=%d "
-      "payload-allocation-attempts=%d datatype-attempts=%d "
-      "immediate-init-attempts=%d persistent-init-attempts=%d "
-      "payload-collective-attempts=%d operation-duplicate-attempts=%d\n",
-      cached_rank, static_cast<int>(affected.size()), affected.data(),
-      error_string_attempts, cleanup_attempts, capacity_bor_attempts,
-      backend_band_attempts, count_exchange_attempts,
-      payload_allocation_attempts, datatype_attempts, immediate_init_attempts,
-      persistent_init_attempts, payload_collective_attempts,
-      operation_duplicate_attempts);
+  if (std::fflush(stderr) != 0) {
+    std::_Exit(89);
+  }
+  write_abort_observation(affected);
   std::_Exit(86);
 }
 
