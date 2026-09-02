@@ -6,10 +6,14 @@ Added `parallel/shared/imbalance.h`, a dependency-free normalizer for public
 fractional imbalance inputs.  It rejects non-finite, negative, and
 unrepresentable values; returns an unsigned effective whole percentage and a
 normalization flag; preserves floor semantics for ordinary fractions; and
-snaps only a uniquely identifiable widened binary32 value: the raw double
-must exactly equal `double(float(next_percent / 100))`.  This avoids a broad
-binary32 tolerance interval and preserves floor semantics for neighbouring
-binary32 values and genuine binary64 inputs.
+snaps only a uniquely identifiable widened binary32 value.  The raw double
+must exactly equal `double(float(next_percent / 100))`, and that candidate
+must differ from the binary32 representations of both adjacent valid integer
+percentage targets.  IEEE conversion is monotone, so those checked adjacent
+targets establish uniqueness across the unsigned percentage domain.  This
+avoids a broad binary32 tolerance interval and preserves floor semantics for
+neighbouring binary32 values, colliding large percentage origins, and genuine
+binary64 inputs.
 
 Both public boundaries now normalize exactly once:
 
@@ -43,6 +47,7 @@ rank-zero line.
 - `parallel/parallel_src/tests/evolutionary/evolutionary_failure_probe.cpp`
 - `parallel/parallel_src/tests/interface/verify_parhip_interface_failure.cmake`
 - `parallel/parallel_src/tests/CMakeLists.txt`
+- `.superpowers/sdd/kahip-minimal-scale-correctness-repair/task-1-report.md`
 
 ## Verification record
 
@@ -118,12 +123,49 @@ systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2
 
 Output: `100% tests passed, 0 tests failed out of 2`.
 
-### Final review-correction non-large GCC MPI suite
+### Review-correction 2 RED
 
-Commands:
+The exact-candidate check alone did not establish a unique origin. After
+adding the explicit `16000001`/`16000002` binary32-collision regression and
+before adding the adjacent-target proof, this command failed as expected:
 
 ```sh
-systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg cmake --preset ci-mpi-gcc
+systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg ctest --test-dir out/build/ci-mpi-gcc -V -R '^unit-colliding widened binary32 origins retain historical floor semantics$'
+```
+
+Relevant output:
+
+```text
+CHECK( normalized->effective_percent == 16000001U ) with expansion: 16000002 == 16000001
+CHECK_FALSE( normalized->was_normalized ) with expansion: !true
+```
+
+This exact widened candidate has two valid integer-percent origins, so it
+must retain its historical floor of `16000001` rather than snap upward.
+
+### Review-correction 2 GREEN focused checks
+
+Command:
+
+```sh
+systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg ctest --test-dir out/build/ci-mpi-gcc --output-on-failure -R '^(unit-(colliding widened binary32 origins retain historical floor semantics|only the exact widened binary32 origin normalizes upward|native three-percent imbalance keeps its whole percentage|genuine fractional percentages retain floor semantics|imbalance normalization rejects invalid and out-of-range inputs|normalized three percent keeps the checked 600-cubed bound)|unit-parhip-interface-[1-5]-rank|unit-parhip-interface-imbalanced-result-failure)$'
+```
+
+Relevant output:
+
+```text
+100% tests passed, 0 tests failed out of 12
+```
+
+The collision regression also verifies the lowest valid percentage candidate
+(`float{0.01F}`) still normalizes upward. Existing invalid/range tests cover
+the upper unsigned percentage boundary.
+
+### Final review-correction 2 non-large GCC MPI suite
+
+The existing GCC MPI configuration was retained. Commands:
+
+```sh
 systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg cmake --build --preset build-ci-mpi-gcc
 systemd-run --user --scope -p MemoryHigh=28G -p MemoryMax=30G -p MemorySwapMax=2G env VCPKG_ROOT=/var/home/erich/Projects/vcpkg ctest --preset test-ci-mpi-gcc
 ```
@@ -137,9 +179,11 @@ Total Test time (real) = 29.30 sec
 
 ## Self-review
 
-- The normalizer has no production dependency outside the standard library;
-  it admits only the exact widened binary32 origin for the next percentage,
-  with no broad epsilon interval.
+- The normalizer has no production dependency outside the standard library.
+  It admits a widened binary32 candidate only if the exact candidate matches
+  and neither checked adjacent valid integer percentage maps to it. Because
+  the conversion is monotone, that is the required uniqueness proof; the
+  checked unsigned-minimum/maximum guards avoid boundary overflow.
 - The exact bound remains `floor((100 + p) * ceil(total_weight / blocks) / 100)`
   through the existing checked integer helper.
 - No public C function signature changed, and no random state or draw order
@@ -147,6 +191,7 @@ Total Test time (real) = 29.30 sec
 - The new public fixture uses only the real API and real MPI collectives; its
   zero-work ranks retain a non-null optional-weight pointer so all ranks agree
   on optional input presence.
-- The exact-origin regressions cover the predecessor binary32 value, a
-  genuine near-integer double, and a large-percentage ambiguity.  No remaining
+- The regressions cover the predecessor binary32 value, a genuine
+  near-integer double, a large-percentage non-candidate, and the exact
+  `16000001`/`16000002` colliding widened candidate. No remaining
   implementation concerns found.

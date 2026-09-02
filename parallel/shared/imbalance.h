@@ -45,7 +45,18 @@ struct normalized_imbalance final {
   auto const next_percentage = static_cast<double>(next_percent);
   auto const widened_binary32_origin = static_cast<double>(
       static_cast<float>(next_percentage / 100.0));
-  if (fractional_imbalance == widened_binary32_origin) {
+  auto const binary32_origin_for = [](unsigned percent) noexcept {
+    return static_cast<double>(
+        static_cast<float>(static_cast<double>(percent) / 100.0));
+  };
+  auto const lower_target_collides =
+      next_percent != 0 &&
+      binary32_origin_for(next_percent - 1) == widened_binary32_origin;
+  auto const upper_target_collides =
+      next_percent != std::numeric_limits<unsigned>::max() &&
+      binary32_origin_for(next_percent + 1) == widened_binary32_origin;
+  if (fractional_imbalance == widened_binary32_origin &&
+      !lower_target_collides && !upper_target_collides) {
     return normalized_imbalance{.effective_percent = next_percent,
                                 .was_normalized = true};
   }

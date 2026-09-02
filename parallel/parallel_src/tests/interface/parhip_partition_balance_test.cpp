@@ -45,6 +45,26 @@ TEST_CASE("only the exact widened binary32 origin normalizes upward",
   CHECK_FALSE(large_percentage_ambiguity->was_normalized);
 }
 
+TEST_CASE("colliding widened binary32 origins retain historical floor semantics",
+          "[parhip][partition][balance]") {
+  auto const collision = static_cast<double>(
+      static_cast<float>(16000002.0 / 100.0));
+  auto const collision_lower_target = static_cast<double>(
+      static_cast<float>(16000001.0 / 100.0));
+  auto const normalized =
+      kahip::balance::normalize_fractional_imbalance(collision);
+  auto const minimum = kahip::balance::normalize_fractional_imbalance(
+      static_cast<double>(float{0.01F}));
+
+  REQUIRE(collision == collision_lower_target);
+  REQUIRE(normalized.has_value());
+  CHECK(normalized->effective_percent == 16000001U);
+  CHECK_FALSE(normalized->was_normalized);
+  REQUIRE(minimum.has_value());
+  CHECK(minimum->effective_percent == 1U);
+  CHECK(minimum->was_normalized);
+}
+
 TEST_CASE("genuine fractional percentages retain floor semantics",
           "[parhip][partition][balance]") {
   auto const normalized =
