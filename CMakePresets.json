@@ -128,6 +128,43 @@
       "inherits": "cirrus-common"
     },
     {
+      "name": "cirrus-test-common",
+      "description": "Cirrus test settings using Slurm srun as the MPI launcher",
+      "hidden": true,
+      "inherits": "cirrus-common",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "MPIEXEC_EXECUTABLE": {
+          "type": "FILEPATH",
+          "value": "srun"
+        },
+        "MPIEXEC_NUMPROC_FLAG": {
+          "type": "STRING",
+          "value": "-n"
+        },
+        "MPIEXEC_PREFLAGS": {
+          "type": "STRING",
+          "value": "--hint=nomultithread;--distribution=block:block;--kill-on-bad-exit;--unbuffered"
+        },
+        "MPIEXEC_POSTFLAGS": {
+          "type": "STRING",
+          "value": ""
+        }
+      }
+    },
+    {
+      "name": "cirrus-gnu-tests",
+      "displayName": "Cirrus GCC 14 tests",
+      "description": "Build and register ParHIP tests after loading Cirrus ccs/gnu-2026-06",
+      "inherits": "cirrus-test-common"
+    },
+    {
+      "name": "cirrus-cray-tests",
+      "displayName": "Cirrus Cray Clang 19 tests",
+      "description": "Build and register ParHIP tests in the Cirrus PrgEnv-cray/8.6.0 environment",
+      "inherits": "cirrus-test-common"
+    },
+    {
       "name": "ci-serial-gcc",
       "displayName": "CI serial GCC",
       "description": "Reproducible GCC release build without MPI",
@@ -279,6 +316,18 @@
       "jobs": 2
     },
     {
+      "name": "build-cirrus-gnu-tests",
+      "description": "Build the Cirrus GCC 14 test configuration with at most two jobs",
+      "configurePreset": "cirrus-gnu-tests",
+      "jobs": 2
+    },
+    {
+      "name": "build-cirrus-cray-tests",
+      "description": "Build the Cirrus Cray Clang 19 test configuration with at most two jobs",
+      "configurePreset": "cirrus-cray-tests",
+      "jobs": 2
+    },
+    {
       "name": "build-ci-serial-gcc",
       "description": "Build the CI serial GCC configuration with at most two jobs",
       "configurePreset": "ci-serial-gcc",
@@ -362,6 +411,18 @@
       "displayName": "Clang Release tests (strict)",
       "inherits": "test-common",
       "configurePreset": "unix-clang-release"
+    },
+    {
+      "name": "test-cirrus-gnu-tests",
+      "displayName": "Cirrus GCC 14 tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "cirrus-gnu-tests"
+    },
+    {
+      "name": "test-cirrus-cray-tests",
+      "displayName": "Cirrus Cray Clang 19 tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "cirrus-cray-tests"
     },
     {
       "name": "test-ci-serial-gcc",

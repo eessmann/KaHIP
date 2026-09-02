@@ -185,24 +185,44 @@ cmake --build out/build/release --parallel 2
 
 Set `-DNOMPI=ON -DPARHIP=OFF` for a serial-only build. Tests follow standard CMake/CTest behavior and can be disabled with `-DBUILD_TESTING=OFF`.
 
-On Cirrus, use the installed programming-environment modules and Cray compiler wrappers; do not install a second toolchain. From the KaHIP checkout, the default Cray Clang 19 environment builds with:
+On Cirrus, use the installed programming-environment modules and Cray compiler wrappers; do not install a second toolchain. The existing release presets remain `BUILD_TESTING=OFF`, so ordinary production builds do not require Catch2. From the KaHIP checkout, the Cray Clang 19 release path is:
 
 ```console
+module restore
+module load PrgEnv-cray/8.6.0
 module load cmake/4.1.2
 cmake --preset cirrus-cray-release
 cmake --build --preset build-cirrus-cray-release
 ```
 
-For GCC 14, switch the programming environment before configuring:
+For the GNU release path, load the supplied Cirrus GNU module before configuring:
 
 ```console
-module swap PrgEnv-cray PrgEnv-gnu/8.6.0
+module restore
+module load ccs/gnu-2026-06
 module load cmake/4.1.2
 cmake --preset cirrus-gnu-release
 cmake --build --preset build-cirrus-gnu-release
 ```
 
-These Cirrus presets use `cc` and `CC`, Cray MPICH, Unix Makefiles, and build entirely below `out/build/`; they disable tests so that no test package must be installed on the cluster. The checked-in vcpkg manifest remains only for the existing CI jobs.
+These Cirrus presets use `cc` and `CC`, Cray MPICH, Unix Makefiles, and build entirely below `out/build/`. The checked-in vcpkg manifest remains only for the existing CI jobs.
+
+For user-submitted Cirrus test jobs, the test presets enable `BUILD_TESTING` and use `srun` for each MPI test. They require a compatible Catch2 3 installation, but keep its prefix out of portable project presets. The account-specific Slurm scripts supply their own prefix only at configure time, run CTest sequentially, and inherit the normal exclusion of `large` and `performance` labels. They have not been run by local validation or CI.
+
+```console
+cd /work/e609/e609/eriche609/KaHIP
+mkdir -p out/slurm
+sbatch ci/cirrus/run-cray-tests.slurm
+sbatch ci/cirrus/run-gnu-tests.slurm
+```
+
+Use an appropriately sized allocation for an opt-in large suite, for example:
+
+```console
+ctest --test-dir out/build/cirrus-cray-tests --output-on-failure -L large
+```
+
+See the [Cirrus application-development guide](https://docs.cirrus.ac.uk/user-guide/development/) and [Cirrus batch-job guide](https://docs.cirrus.ac.uk/user-guide/batch/) for the supported environments and scheduler guidance.
 
 We also provide the option to link against TCMalloc. If you have it installed, configure with `-DUSE_TCMALLOC=ON`.
 
