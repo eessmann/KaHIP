@@ -401,14 +401,13 @@ int main(int argc, char** argv) {
     auto n = 1;
     auto offsets = std::array<int, 2>{0, 0};
     auto blocks = 1;
-    auto imbalance = 0.0;
     auto edge_cut = -1;
     auto balance = 0.0;
     auto partition = 0;
     evolutionary_failure_probe::active = true;
     kahip::modified::kaffpaE_with_upper_bound(
-        &n, nullptr, offsets.data(), nullptr, nullptr, &blocks, &imbalance,
-        true, false, 0, 1, 0, communicator,
+        &n, nullptr, offsets.data(), nullptr, nullptr, &blocks, true, false,
+        0, 1, 0, communicator, 0U,
         std::numeric_limits<std::uint64_t>::max(), &edge_cut, &balance,
         &partition);
   }

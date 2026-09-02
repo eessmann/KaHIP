@@ -11,17 +11,23 @@
 #include "../lib/parallel_mh/parallel_mh_async.h"
 #include "parallel_mh/evolutionary_collectives.h"
 #include "../lib/tools/quality_metrics.h"
+#include "../../shared/imbalance.h"
 #include "../../shared/random_state.h"
 #include "kaHIP_interface.h"
 #include "kaHIP_interface_internal.h"
 #include "tools/fatal_diagnostics.h"
 
 namespace {
-[[nodiscard]] auto exact_public_upper_bound(int const* n,
-                                            int const* vertex_weights,
-                                            int const* block_count,
-                                            double const* imbalance)
-    -> std::uint64_t {
+struct public_balance final {
+  unsigned imbalance_percent;
+  std::uint64_t upper_bound;
+};
+
+[[nodiscard]] auto exact_public_balance(int const* n,
+                                        int const* vertex_weights,
+                                        int const* block_count,
+                                        double const* imbalance)
+    -> public_balance {
   if (n == nullptr || block_count == nullptr || imbalance == nullptr) {
     throw std::invalid_argument(
         "modified kaffpaE requires non-null size, block-count, and imbalance "
@@ -33,10 +39,9 @@ namespace {
         "positive block count");
   }
 
-  auto const scaled_imbalance = 100.0 * *imbalance;
-  if (!std::isfinite(scaled_imbalance) || scaled_imbalance < 0.0 ||
-      scaled_imbalance >
-          static_cast<double>(std::numeric_limits<unsigned>::max())) {
+  auto const normalized_imbalance =
+      kahip::balance::normalize_fractional_imbalance(*imbalance);
+  if (!normalized_imbalance.has_value()) {
     throw std::overflow_error(
         "modified kaffpaE imbalance percentage exceeds the unsigned int "
         "domain");
@@ -58,12 +63,13 @@ namespace {
 
   auto const upper_bound = kahip::random_compat::exact_partition_upper_bound(
       total_weight, static_cast<std::uint64_t>(*block_count),
-      static_cast<unsigned>(scaled_imbalance));
+      normalized_imbalance->effective_percent);
   if (!upper_bound.has_value()) {
     throw std::overflow_error(
         "modified kaffpaE partition upper bound exceeds the uint64 domain");
   }
-  return *upper_bound;
+  return public_balance{.imbalance_percent = normalized_imbalance->effective_percent,
+                        .upper_bound = *upper_bound};
 }
 
 [[noreturn]] void abort_kaffpae_boundary(MPI_Comm communicator,
@@ -134,13 +140,13 @@ void kaffpae_impl(int* n,
                   int* adjcwgt,
                   int* adjncy,
                   int* nparts,
-                  double* imbalance,
                   bool suppress_output,
                   bool graph_partitioned,
                   int time_limit,
                   int seed,
                   int mode,
                   MPI_Comm communicator,
+                  unsigned authoritative_imbalance_percent,
                   int* edgecut,
                   double* balance,
                   int* part,
@@ -182,7 +188,7 @@ void kaffpae_impl(int* n,
 
   partition_config.seed = seed;
   partition_config.k = *nparts;
-  partition_config.imbalance = 100 * (*imbalance);
+  partition_config.imbalance = authoritative_imbalance_percent;
   partition_config.time_limit = time_limit;
   partition_config.kabapE = false;
 
@@ -226,13 +232,13 @@ void kahip::modified::kaffpaE_with_upper_bound(
     int* adjcwgt,
     int* adjncy,
     int* nparts,
-    double* imbalance,
     bool suppress_output,
     bool graph_partitioned,
     int time_limit,
     int seed,
     int mode,
     MPI_Comm communicator,
+    unsigned authoritative_imbalance_percent,
     std::uint64_t authoritative_upper_bound,
     int* edgecut,
     double* balance,
@@ -245,9 +251,10 @@ void kahip::modified::kaffpaE_with_upper_bound(
         communicator, "evolutionary partition upper bound",
         "ParHIP upper bound exceeds the modified KaHIP weight domain");
   }
-  kaffpae_impl(n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
+  kaffpae_impl(n, vwgt, xadj, adjcwgt, adjncy, nparts,
                suppress_output, graph_partitioned, time_limit, seed, mode,
-               communicator, edgecut, balance, part, *narrowed);
+               communicator, authoritative_imbalance_percent, edgecut, balance,
+               part, *narrowed);
 }
 
 void kaffpaE(int* n,
@@ -267,12 +274,12 @@ void kaffpaE(int* n,
              double* balance,
              int* part) noexcept {
   try {
-    auto const upper_bound =
-        exact_public_upper_bound(n, vwgt, nparts, imbalance);
+    auto const public_result = exact_public_balance(n, vwgt, nparts, imbalance);
     kahip::modified::kaffpaE_with_upper_bound(
-        n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, suppress_output,
-        graph_partitioned, time_limit, seed, mode, communicator, upper_bound,
-        edgecut, balance, part);
+        n, vwgt, xadj, adjcwgt, adjncy, nparts, suppress_output,
+        graph_partitioned, time_limit, seed, mode, communicator,
+        public_result.imbalance_percent, public_result.upper_bound, edgecut,
+        balance, part);
   } catch (...) {
     abort_kaffpae_boundary(communicator, std::current_exception());
   }

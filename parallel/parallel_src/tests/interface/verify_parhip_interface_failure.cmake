@@ -59,7 +59,7 @@ endif()
 if(MODE STREQUAL "imbalanced-result")
     string(
         REGEX MATCHALL
-        "PARHIP_DETAIL rank=0 ParHIP partition balance failure: total weight=13, block count=2, raw imbalance=0\\.03, quantized imbalance=3%, configured bound=7, heaviest block=0, actual weight=10, excess=3"
+        "PARHIP_DETAIL rank=0 ParHIP partition balance failure: raw imbalance=0\\.029999999999999999, effective percentage=3%, normalization status=false, total weight=13, block count=2, configured bound=7, lowest-ID heaviest block=0, actual weight=10, excess=3"
         detail_lines
         "${probe_output}"
     )

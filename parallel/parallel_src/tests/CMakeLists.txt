@@ -3822,7 +3822,10 @@ target_link_libraries(
 )
 target_include_directories(
     parhip_partition_balance_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/parallel/parallel_src"
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/parallel/parallel_src"
+        "${PROJECT_SOURCE_DIR}/parallel/shared"
+        "${PROJECT_SOURCE_DIR}/parallel"
 )
 catch_discover_tests(
     parhip_partition_balance_test
@@ -3918,7 +3921,7 @@ foreach(
     elseif(failure_mode STREQUAL "imbalanced-result")
         set(
             expected_diagnostic
-            "ParHIP partition balance failure: total weight=13, block count=2, raw imbalance=0.03, quantized imbalance=3%, configured bound=7, heaviest block=0, actual weight=10, excess=3"
+            "ParHIP partition balance failure: raw imbalance=0.029999999999999999, effective percentage=3%, normalization status=false, total weight=13, block count=2, configured bound=7, lowest-ID heaviest block=0, actual weight=10, excess=3"
         )
     else()
         set(

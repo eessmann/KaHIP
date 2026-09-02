@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <ranges>
@@ -27,6 +28,7 @@
 #include "parallel_graph_io.h"
 #include "random_functions.h"
 #include "parhip_partition_balance.h"
+#include "../../shared/imbalance.h"
 #include "../../shared/random_state.h"
 #include "tools/distributed_quality_metrics.h"
 #include "tools/fatal_diagnostics.h"
@@ -196,6 +198,7 @@ void require_valid_partition(parhip::parallel_graph_access& graph,
                              parhip::PPartitionConfig const& config,
                              NodeWeight global_node_weight,
                              double raw_imbalance,
+                             kahip::balance::normalized_imbalance imbalance,
                              PEID operation_rank,
                              communicator_view communicator) {
   auto local_block_weights =
@@ -241,11 +244,14 @@ void require_valid_partition(parhip::parallel_graph_access& graph,
   if (globally_balanced == 0) {
     if (operation_rank == 0) {
       kahip::diagnostics::critical(
-          "ParHIP partition balance failure: total weight=", global_node_weight,
-          ", block count=", config.k, ", raw imbalance=", raw_imbalance,
-          ", quantized imbalance=", config.inbalance,
-          "%, configured bound=", config.upper_bound_partition,
-          ", heaviest block=", heaviest_block,
+          "ParHIP partition balance failure: raw imbalance=",
+          std::setprecision(std::numeric_limits<double>::max_digits10),
+          raw_imbalance, ", effective percentage=", imbalance.effective_percent,
+          "%, normalization status=",
+          imbalance.was_normalized ? "true" : "false",
+          ", total weight=", global_node_weight, ", block count=", config.k,
+          ", configured bound=", config.upper_bound_partition,
+          ", lowest-ID heaviest block=", heaviest_block,
           ", actual weight=", heaviest_weight,
           ", excess=", heaviest_weight - config.upper_bound_partition);
     }
@@ -291,6 +297,11 @@ void parhip_partition_kway(idxtype const* vtxdist,
                        "ParHIP imbalance must be finite and nonnegative");
   auto const common_imbalance = agree_double(
       *imbalance, communicator, "ParHIP imbalance differs across communicator");
+  auto const normalized_imbalance =
+      kahip::balance::normalize_fractional_imbalance(common_imbalance);
+  require_capacity_collectively(
+      normalized_imbalance.has_value(), communicator,
+      "imbalance percentage exceeds the unsigned int domain");
   static_cast<void>(agree_integral(seed, communicator,
                                    "ParHIP seed differs across communicator"));
   auto const common_mode = agree_integral(
@@ -454,11 +465,7 @@ void parhip_partition_kway(idxtype const* vtxdist,
   distributed_partitioner::generate_random_choices(partition_config,
                                                     communicator);
 
-  require_capacity_collectively(
-      common_imbalance <=
-          static_cast<double>(std::numeric_limits<unsigned>::max()) / 100.0,
-      communicator, "imbalance percentage exceeds the unsigned int domain");
-  partition_config.inbalance = static_cast<unsigned>(100.0 * common_imbalance);
+  partition_config.inbalance = normalized_imbalance->effective_percent;
   partition_config.number_of_overall_nodes = graph.number_of_global_nodes();
   partition_config.upper_bound_partition =
       exact_upper_bound(global_node_weight, partition_config.k,
@@ -474,7 +481,8 @@ void parhip_partition_kway(idxtype const* vtxdist,
   auto const running_time = runtime.elapsed();
 
   require_valid_partition(graph, vertex_weights, partition_config,
-                          global_node_weight, common_imbalance, rank,
+                          global_node_weight, common_imbalance,
+                          *normalized_imbalance, rank,
                           communicator);
   distributed_quality_metrics metrics;
   auto const global_edge_cut =

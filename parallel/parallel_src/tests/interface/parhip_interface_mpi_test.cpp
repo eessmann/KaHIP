@@ -192,6 +192,52 @@ TEST_CASE("ParHIP does not coarsen a feasible block into an overweight cluster")
   REQUIRE(MPI_Comm_free(&communicator) == MPI_SUCCESS);
 }
 
+TEST_CASE("ParHIP preserves a binary32-origin three-percent weighted bound") {
+  auto communicator = reversed_world();
+  auto rank = -1;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(communicator, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(communicator, &size) == MPI_SUCCESS);
+
+  auto fixture = make_cycle(rank, size, 2);
+  auto const first = fixture.distribution[static_cast<std::size_t>(rank)];
+  auto vertex_weights =
+      std::vector<idxtype>(std::max(std::size_t{1}, fixture.partition.size()));
+  for (auto local = std::size_t{0}; local < fixture.partition.size(); ++local) {
+    vertex_weights[local] =
+        first + static_cast<idxtype>(local) == 0 ? 35 : 33;
+  }
+  if (size > 2) {
+    auto local_has_no_work = fixture.partition.empty() ? 1 : 0;
+    auto has_zero_work_rank = 0;
+    REQUIRE(MPI_Allreduce(&local_has_no_work, &has_zero_work_rank, 1, MPI_INT,
+                          MPI_MAX, communicator) == MPI_SUCCESS);
+    REQUIRE(has_zero_work_rank == 1);
+  }
+
+  auto blocks = 2;
+  auto imbalance = static_cast<double>(float{0.03F});
+  auto edge_cut = -1;
+  ParHIPPartitionKWay(fixture.distribution.data(), fixture.offsets.data(),
+                      fixture.neighbors.data(), vertex_weights.data(), nullptr,
+                      &blocks, &imbalance, true, 1, FASTMESH, &edge_cut,
+                      fixture.partition.data(), &communicator);
+
+  auto local_block_weights = std::array<idxtype, 2>{};
+  for (auto local = std::size_t{0}; local < fixture.partition.size(); ++local) {
+    auto const block = fixture.partition[local];
+    REQUIRE(block < static_cast<idxtype>(blocks));
+    local_block_weights[static_cast<std::size_t>(block)] += vertex_weights[local];
+  }
+  auto global_block_weights = std::array<idxtype, 2>{};
+  REQUIRE(MPI_Allreduce(local_block_weights.data(), global_block_weights.data(),
+                        static_cast<int>(global_block_weights.size()),
+                        MPI_UNSIGNED_LONG_LONG, MPI_SUM, communicator) ==
+          MPI_SUCCESS);
+  REQUIRE(*std::ranges::max_element(global_block_weights) == 35);
+  REQUIRE(MPI_Comm_free(&communicator) == MPI_SUCCESS);
+}
+
 TEST_CASE("ParHIP accepts a leading zero-work rank") {
   auto communicator = reversed_world();
   auto rank = -1;

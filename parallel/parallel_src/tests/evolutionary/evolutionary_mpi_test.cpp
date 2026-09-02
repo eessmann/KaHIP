@@ -593,7 +593,6 @@ TEST_CASE("private modified kaffpaE honors the authoritative exact bound") {
   auto offsets = std::array<int, 5>{0, 2, 4, 6, 8};
   auto neighbors = std::array<int, 8>{1, 3, 0, 2, 1, 3, 2, 0};
   auto blocks = 2;
-  auto imbalance = 0.33;
   auto edge_cut = -1;
   auto balance = 0.0;
   auto partition = rank == 0 ? std::array<int, 4>{0, 0, 1, 1}
@@ -601,7 +600,7 @@ TEST_CASE("private modified kaffpaE honors the authoritative exact bound") {
 
   kahip::modified::kaffpaE_with_upper_bound(
       &n, vertex_weights.data(), offsets.data(), nullptr, neighbors.data(),
-      &blocks, &imbalance, true, true, 0, 1, ULTRAFASTSOCIAL, MPI_COMM_WORLD,
+      &blocks, true, true, 0, 1, ULTRAFASTSOCIAL, MPI_COMM_WORLD, 33U,
       std::uint64_t{3}, &edge_cut, &balance, partition.data());
 
   CHECK(partition == std::array<int, 4>{0, 1, 0, 1});

@@ -70,7 +70,6 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
         prev_max_block_weight, ROOT, mpi_communicator);
   }
 
-  double inbalance       = config.inbalance/100.0;
   int edgecut            = 0;
   double balance         = 0;
   bool graph_partitioned = config.vcycle;
@@ -130,13 +129,13 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
           adjwgt,
           adjncy,
           &nparts,
-          &inbalance,
           false,  // supress output
           graph_partitioned,
           evolutionary_time_limit,
           config.seed,
           mode,
           communicator,
+          config.inbalance,
           config.upper_bound_partition,
           &edgecut,
           &balance,
