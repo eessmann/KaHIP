@@ -83,6 +83,14 @@ elseif(TEST_CASE STREQUAL "exact-cut")
     set(search "cube4.rank1.weighted_cut=28")
     set(replacement "cube4.rank1.weighted_cut=2")
     set(expected_diagnostic "weighted cut is 28, expected 2")
+elseif(TEST_CASE STREQUAL "orphaned-repair-provenance")
+    string(REGEX REPLACE
+        "[^\n]*\\.repaired_[^\n]*\n?" ""
+        mutated_manifest "${valid_manifest}"
+    )
+    set(expected_diagnostic
+        "cube oracle repair provenance has no repair overlay"
+    )
 elseif(TEST_CASE STREQUAL "missing-repair-provenance")
     set(search "repair_mpi=MPICH-5.0.1-MPI-5.0\n")
     set(replacement "")

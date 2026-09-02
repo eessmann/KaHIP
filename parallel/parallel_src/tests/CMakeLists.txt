@@ -1035,6 +1035,7 @@ foreach(
         invalid-seed
         invalid-imbalance
         exact-cut
+        orphaned-repair-provenance
         missing-repair-provenance
         invalid-repair-provenance
         mismatched-repair-upstream-anchor
