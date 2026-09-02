@@ -473,6 +473,9 @@ foreach(
         wrong-count
         wait
         combine-cross-conditional
+        invalid-label
+        weight-overflow
+        upper-bound-narrowing
 )
     set(expected_abort_count 2)
     if(failure_mode STREQUAL "communicator-duplication")
@@ -506,6 +509,19 @@ foreach(
             "original-k cross combine is incompatible with asynchronous multi-rank entry"
         )
         set(expected_abort_count 1)
+    elseif(failure_mode STREQUAL "upper-bound-narrowing")
+        set(
+            expected_diagnostic
+            "ParHIP upper bound exceeds the modified KaHIP weight domain"
+        )
+    elseif(
+        failure_mode STREQUAL "invalid-label"
+        OR failure_mode STREQUAL "weight-overflow"
+    )
+        set(
+            expected_diagnostic
+            "partition labels or block-weight sums exceed their valid domains"
+        )
     else()
         set(
             expected_diagnostic
@@ -611,6 +627,8 @@ foreach(
         wait
         unfinished-teardown
         combine-cross-conditional
+        invalid-label
+        weight-overflow
 )
     set(expected_abort_count 2)
     if(failure_mode STREQUAL "communicator-duplication")
@@ -649,6 +667,14 @@ foreach(
             "original-k cross combine is incompatible with asynchronous multi-rank entry"
         )
         set(expected_abort_count 1)
+    elseif(
+        failure_mode STREQUAL "invalid-label"
+        OR failure_mode STREQUAL "weight-overflow"
+    )
+        set(
+            expected_diagnostic
+            "partition labels or block-weight sums exceed their valid domains"
+        )
     else()
         set(
             expected_diagnostic

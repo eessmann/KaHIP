@@ -37,7 +37,8 @@ class parallel_mh_async final {
       PartitionConfig& graph_partitioner_config,
       graph_access& G);
   EdgeWeight collect_best_partitioning(graph_access& G,
-                                       PartitionConfig const& config);
+                                       PartitionConfig const& config,
+                                       EdgeWeight min_objective);
   void perform_cycle_partitioning(PartitionConfig& graph_partitioner_config,
                                   graph_access& G);
 

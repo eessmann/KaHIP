@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -24,6 +25,8 @@ enum class mode : unsigned char {
   wait,
   unfinished_teardown,
   combine_cross_conditional,
+  invalid_label,
+  weight_overflow,
 };
 
 inline bool active = false;
@@ -40,6 +43,10 @@ inline int finalizations = 0;
 inline int communicator_size_queries = 0;
 inline int broadcasts = 0;
 inline bool callback_error = false;
+
+[[nodiscard]] auto feasibility_failure(mode value) noexcept -> bool {
+  return value == mode::invalid_label || value == mode::weight_overflow;
+}
 
 void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
@@ -66,6 +73,9 @@ void write_text(std::string_view text) noexcept {
              tests == 0 && waits == 0 && receives == 0;
     case mode::combine_cross_conditional:
       return communicator_size_queries == 1 && broadcasts == 0;
+    case mode::invalid_label:
+    case mode::weight_overflow:
+      return duplications == 1 && broadcasts == 0;
   }
   return false;
 }
@@ -101,6 +111,17 @@ extern "C" int MPI_Comm_dup(MPI_Comm communicator, MPI_Comm* duplicate) {
     return PMPI_Comm_dup(communicator, duplicate);
   }
   ++duplications;
+  if (feasibility_failure(selected)) {
+    if (communicator != expected_communicator || duplicate == nullptr) {
+      callback_error = true;
+      return MPI_ERR_OTHER;
+    }
+    auto const result = PMPI_Comm_dup(communicator, duplicate);
+    if (result == MPI_SUCCESS) {
+      expected_communicator = *duplicate;
+    }
+    return result;
+  }
   if (selected != mode::communicator_duplication ||
       communicator != expected_communicator || duplicate == nullptr) {
     callback_error = true;
@@ -114,6 +135,10 @@ extern "C" int MPI_Bcast(void* buffer,
                          int root,
                          MPI_Comm communicator) {
   using namespace evolutionary_failure_probe;
+  if (active && feasibility_failure(selected)) {
+    ++broadcasts;
+    callback_error = true;
+  }
   if (active && selected == mode::combine_cross_conditional) {
     ++broadcasts;
     callback_error = true;
@@ -272,6 +297,10 @@ namespace {
     return mode::unfinished_teardown;
   if (value == "combine-cross-conditional")
     return mode::combine_cross_conditional;
+  if (value == "invalid-label")
+    return mode::invalid_label;
+  if (value == "weight-overflow")
+    return mode::weight_overflow;
   evolutionary_failure_probe::write_text(
       "unknown evolutionary lifetime failure mode\n");
   std::_Exit(2);
@@ -375,6 +404,24 @@ int main(int argc, char** argv) {
   island.insert(graph, initial);
   random_functions::setSeed(71 + rank);
   using mode = evolutionary_failure_probe::mode;
+
+  if (selected == mode::invalid_label || selected == mode::weight_overflow) {
+    if (selected == mode::invalid_label) {
+      graph.setPartitionIndex(0, config.k);
+    } else {
+      forall_nodes(graph, node) {
+        graph.setPartitionIndex(node, PartitionID{0});
+        graph.setNodeWeight(node, NodeWeight{0});
+      }
+      endfor
+      graph.setNodeWeight(0, std::numeric_limits<NodeWeight>::max());
+      graph.setNodeWeight(1, NodeWeight{1});
+    }
+    evolutionary_failure_probe::active = true;
+    auto driver = parallel_mh_async{communicator};
+    static_cast<void>(driver.collect_best_partitioning(
+        graph, config, static_cast<EdgeWeight>(rank + 1)));
+  }
 
   if (selected == mode::unfinished_teardown) {
     evolutionary_failure_probe::active = true;

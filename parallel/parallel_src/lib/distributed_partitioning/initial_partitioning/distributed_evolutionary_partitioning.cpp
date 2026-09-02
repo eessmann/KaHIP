@@ -120,24 +120,10 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
 #endif
 
 #ifdef DETERMINISTIC_PARHIP
-  kahip::modified::kaffpaE_with_upper_bound(&n,
-          vwgt,
-          xadj,
-          adjwgt,
-          adjncy,
-          &nparts,
-          &inbalance,
-          false,  // supress output
-          graph_partitioned,
-          0, // time limit set to zero, so only the initial population is created
-          config.seed,
-          mode,
-          communicator,
-          config.upper_bound_partition,
-          &edgecut,
-          &balance,
-          partition_map);
+  auto const evolutionary_time_limit = 0;
 #else
+  auto const evolutionary_time_limit = config.evolutionary_time_limit;
+#endif
   kahip::modified::kaffpaE_with_upper_bound(&n,
           vwgt,
           xadj,
@@ -147,7 +133,7 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
           &inbalance,
           false,  // supress output
           graph_partitioned,
-          config.evolutionary_time_limit, // time limit
+          evolutionary_time_limit,
           config.seed,
           mode,
           communicator,
@@ -155,7 +141,6 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
           &edgecut,
           &balance,
           partition_map);
-#endif
 
 
 

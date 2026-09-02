@@ -15,7 +15,8 @@
 #include "parallel_mh/exchange/exchanger.h"
 #include "parallel_mh/parallel_mh_async.h"
 #include "parallel_mh/evolutionary_feasibility.h"
-#include "kaHIP_interface_internal.h"
+#include "kaHIP_interface.h"
+#include "kaHIP_evolutionary_interface_internal.h"
 #include "parallel_mh/population.h"
 #include "partition/initial_partitioning/initial_partitioning.h"
 #include "partition/uncoarsening/refinement/quotient_graph_refinement/2way_fm_refinement/partition_accept_rule.h"
@@ -578,23 +579,33 @@ TEST_CASE("modified evolutionary feasibility detects weight overflow") {
           .has_value());
 }
 
-TEST_CASE("modified graph construction preserves an authoritative bound") {
-  auto config = kahip::modified::PartitionConfig{};
-  auto defaults = kahip::modified::configuration{};
-  defaults.standard(config);
-  config.k = 256;
-  config.imbalance = 3;
+TEST_CASE("private modified kaffpaE honors the authoritative exact bound") {
+  auto rank = -1;
+  auto size = 0;
+  REQUIRE(PMPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+  REQUIRE(PMPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+  if (size != 2) {
+    return;
+  }
 
-  auto n = 1;
-  auto vertex_weight = 200 * 200 * 200;
-  auto xadj = std::array<int, 2>{0, 0};
-  auto graph = kahip::modified::graph_access{};
-  kahip::modified::internal_build_graph(
-      config, &n, &vertex_weight, xadj.data(), nullptr, nullptr, graph,
-      kahip::modified::NodeWeight{32187});
+  auto n = 4;
+  auto vertex_weights = std::array<int, 4>{2, 2, 1, 1};
+  auto offsets = std::array<int, 5>{0, 2, 4, 6, 8};
+  auto neighbors = std::array<int, 8>{1, 3, 0, 2, 1, 3, 2, 0};
+  auto blocks = 2;
+  auto imbalance = 0.33;
+  auto edge_cut = -1;
+  auto balance = 0.0;
+  auto partition = rank == 0 ? std::array<int, 4>{0, 0, 1, 1}
+                             : std::array<int, 4>{0, 1, 0, 1};
 
-  CHECK(config.upper_bound_partition ==
-        kahip::modified::NodeWeight{32187});
+  kahip::modified::kaffpaE_with_upper_bound(
+      &n, vertex_weights.data(), offsets.data(), nullptr, neighbors.data(),
+      &blocks, &imbalance, true, true, 0, 1, ULTRAFASTSOCIAL, MPI_COMM_WORLD,
+      std::uint64_t{3}, &edge_cut, &balance, partition.data());
+
+  CHECK(partition == std::array<int, 4>{0, 1, 0, 1});
+  CHECK(edge_cut == 4);
 }
 
 TEST_CASE("initial partition refinement rejects a missing block target") {

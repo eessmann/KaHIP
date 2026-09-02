@@ -99,7 +99,9 @@ void parallel_mh_async::perform_partitioning(const PartitionConfig & partition_c
     ex.finish(static_cast<std::size_t>(G.number_of_nodes()));
   }
 
-  collect_best_partitioning(G, partition_config);
+  EdgeWeight min_objective = 0;
+  m_island->apply_fittest(G, min_objective);
+  collect_best_partitioning(G, partition_config, min_objective);
   m_island->print();
 
   //print logfile (for convergence plots)
@@ -171,11 +173,10 @@ void parallel_mh_async::initialize(PartitionConfig & working_config, graph_acces
 
 }
 
-EdgeWeight parallel_mh_async::collect_best_partitioning(graph_access & G, const PartitionConfig & config) {
-  //perform partitioning locally
-  EdgeWeight min_objective = 0;
-  m_island->apply_fittest(G, min_objective);
-
+EdgeWeight parallel_mh_async::collect_best_partitioning(
+    graph_access& G,
+    PartitionConfig const& config,
+    EdgeWeight min_objective) {
   std::vector<PartitionID> best_local_map(G.number_of_nodes());
   forall_nodes(G, node) {
     best_local_map[node] = G.getPartitionIndex(node);

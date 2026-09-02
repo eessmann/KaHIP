@@ -2,7 +2,9 @@
 #include <unistd.h>
 
 #include <array>
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -12,6 +14,7 @@
 #include "parallel_mh/parallel_mh_async.h"
 #include "parallel_mh/population.h"
 #include "tools/random_functions.h"
+#include "kaHIP_evolutionary_interface_internal.h"
 
 // KAHIP_PMPI_CALLBACK_REGION_BEGIN
 namespace evolutionary_failure_probe {
@@ -23,6 +26,9 @@ enum class mode : unsigned char {
   wrong_count,
   wait,
   combine_cross_conditional,
+  invalid_label,
+  weight_overflow,
+  upper_bound_narrowing,
 };
 
 inline bool active = false;
@@ -39,6 +45,10 @@ inline int finalizations = 0;
 inline int communicator_size_queries = 0;
 inline int broadcasts = 0;
 inline bool callback_error = false;
+
+[[nodiscard]] auto feasibility_failure(mode value) noexcept -> bool {
+  return value == mode::invalid_label || value == mode::weight_overflow;
+}
 
 void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
@@ -62,6 +72,11 @@ void write_text(std::string_view text) noexcept {
       return isends == 1 && tests >= 1 && waits == 1;
     case mode::combine_cross_conditional:
       return communicator_size_queries == 1 && broadcasts == 0;
+    case mode::invalid_label:
+    case mode::weight_overflow:
+      return duplications == 1 && broadcasts == 0;
+    case mode::upper_bound_narrowing:
+      return duplications == 0 && broadcasts == 0;
   }
   return false;
 }
@@ -97,6 +112,17 @@ extern "C" int MPI_Comm_dup(MPI_Comm communicator, MPI_Comm* duplicate) {
     return PMPI_Comm_dup(communicator, duplicate);
   }
   ++duplications;
+  if (feasibility_failure(selected)) {
+    if (communicator != expected_communicator || duplicate == nullptr) {
+      callback_error = true;
+      return MPI_ERR_OTHER;
+    }
+    auto const result = PMPI_Comm_dup(communicator, duplicate);
+    if (result == MPI_SUCCESS) {
+      expected_communicator = *duplicate;
+    }
+    return result;
+  }
   if (selected != mode::communicator_duplication ||
       communicator != expected_communicator || duplicate == nullptr) {
     callback_error = true;
@@ -110,6 +136,10 @@ extern "C" int MPI_Bcast(void* buffer,
                          int root,
                          MPI_Comm communicator) {
   using namespace evolutionary_failure_probe;
+  if (active && feasibility_failure(selected)) {
+    ++broadcasts;
+    callback_error = true;
+  }
   if (active && selected == mode::combine_cross_conditional) {
     ++broadcasts;
     callback_error = true;
@@ -266,6 +296,12 @@ namespace {
     return mode::wait;
   if (value == "combine-cross-conditional")
     return mode::combine_cross_conditional;
+  if (value == "invalid-label")
+    return mode::invalid_label;
+  if (value == "weight-overflow")
+    return mode::weight_overflow;
+  if (value == "upper-bound-narrowing")
+    return mode::upper_bound_narrowing;
   evolutionary_failure_probe::write_text(
       "unknown evolutionary lifetime failure mode\n");
   std::_Exit(2);
@@ -361,6 +397,22 @@ int main(int argc, char** argv) {
     static_cast<void>(driver);
   }
 
+  if (selected == evolutionary_failure_probe::mode::upper_bound_narrowing) {
+    auto n = 1;
+    auto offsets = std::array<int, 2>{0, 0};
+    auto blocks = 1;
+    auto imbalance = 0.0;
+    auto edge_cut = -1;
+    auto balance = 0.0;
+    auto partition = 0;
+    evolutionary_failure_probe::active = true;
+    kahip::modified::kaffpaE_with_upper_bound(
+        &n, nullptr, offsets.data(), nullptr, nullptr, &blocks, &imbalance,
+        true, false, 0, 1, 0, communicator,
+        std::numeric_limits<std::uint64_t>::max(), &edge_cut, &balance,
+        &partition);
+  }
+
   auto graph = kahip::modified::graph_access{};
   build_cycle_graph(graph, rank);
   auto config = make_config();
@@ -369,6 +421,26 @@ int main(int argc, char** argv) {
   island.insert(graph, initial);
   kahip::modified::random_functions::setSeed(71 + rank);
   using mode = evolutionary_failure_probe::mode;
+
+  if (selected == mode::invalid_label || selected == mode::weight_overflow) {
+    if (selected == mode::invalid_label) {
+      graph.setPartitionIndex(0, config.k);
+    } else {
+      for (auto node = kahip::modified::NodeID{0};
+           node < graph.number_of_nodes(); ++node) {
+        graph.setPartitionIndex(node, kahip::modified::PartitionID{0});
+        graph.setNodeWeight(node, kahip::modified::NodeWeight{0});
+      }
+      graph.setNodeWeight(
+          0, std::numeric_limits<kahip::modified::NodeWeight>::max());
+      graph.setNodeWeight(1, kahip::modified::NodeWeight{1});
+    }
+    evolutionary_failure_probe::active = true;
+    auto driver = kahip::modified::parallel_mh_async{communicator};
+    static_cast<void>(driver.collect_best_partitioning(
+        graph, config,
+        static_cast<kahip::modified::EdgeWeight>(rank + 1)));
+  }
 
   if (selected == mode::combine_cross_conditional) {
     // Model asynchronous entry: only one process calls combine_cross. The peer
