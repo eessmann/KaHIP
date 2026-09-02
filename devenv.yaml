@@ -1,0 +1,7 @@
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  nixpkgs-multiverse:
+    url: github:fzakaria/nixpkgs-multiverse
+
+require_version: ">= 2.2.0"

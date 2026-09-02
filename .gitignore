@@ -7,3 +7,5 @@ cmake-build-*
 /out/
 /CMakeUserPresets.json
 /vcpkg_installed/
+/.devenv*
+/devenv.local.nix

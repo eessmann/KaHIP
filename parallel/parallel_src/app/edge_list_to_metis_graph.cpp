@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <optional>
 #include <ranges>
@@ -21,8 +23,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include <fmt/format.h>
 
 #include "application_math.h"
 #include "communication/mpi_application.h"
@@ -52,7 +52,7 @@ int main(int argument_count, char** argument_values) {
     auto const rank = communicator.rank();
     if (argument_count != 2) {
       if (rank == ROOT) {
-        fmt::print("usage: edge_list_to_metis inputfilename\n");
+        std::cout << "usage: edge_list_to_metis inputfilename\n";
       }
       return EXIT_FAILURE;
     }
@@ -62,18 +62,18 @@ int main(int argument_count, char** argument_values) {
 
     auto const graph_filename = fs::path{argument_values[1]};
     if (!fs::exists(graph_filename)) {
-      fmt::print(stderr, "Error: File '{}' does not exist.\n",
-                 graph_filename.string());
+      std::cerr << "Error: File '" << graph_filename.string()
+                << "' does not exist.\n";
       return EXIT_FAILURE;
     }
     auto input = std::ifstream{graph_filename};
     if (!input.is_open()) {
-      fmt::print(stderr, "Error: Could not open file '{}'.\n",
-                 graph_filename.string());
+      std::cerr << "Error: Could not open file '" << graph_filename.string()
+                << "'.\n";
       return EXIT_FAILURE;
     }
 
-    fmt::print("Starting IO...\n");
+    std::cout << "Starting IO...\n";
     auto source_targets =
         std::unordered_map<NodeID, std::unordered_map<NodeID, EdgeID>>{};
     auto self_loops = EdgeID{0};
@@ -85,15 +85,15 @@ int main(int argument_count, char** argument_values) {
       auto const line_view = std::string_view{line};
       auto const comma = line_view.find(',');
       if (comma == std::string_view::npos) {
-        fmt::print(stderr, "Malformed line (missing comma): '{}'\n", line);
+        std::cerr << "Malformed line (missing comma): '" << line << "'\n";
         continue;
       }
 
       auto const source = parse_number<NodeID>(line_view.substr(0, comma));
       auto const target = parse_number<NodeID>(line_view.substr(comma + 1));
       if (!source.has_value() || !target.has_value()) {
-        fmt::print(stderr, "Error parsing line '{}': invalid number format.\n",
-                   line);
+        std::cerr << "Error parsing line '" << line
+                  << "': invalid number format.\n";
         continue;
       }
       if (*source == *target) {
@@ -113,7 +113,7 @@ int main(int argument_count, char** argument_values) {
             "parallel-edge multiplicity exceeds the edge domain");
       }
     }
-    fmt::print("Self-loops detected: {}\nIO completed.\n", self_loops);
+    std::cout << "Self-loops detected: " << self_loops << "\nIO completed.\n";
 
     auto node_ids = std::vector<NodeID>{};
     node_ids.reserve(source_targets.size());
@@ -123,9 +123,9 @@ int main(int argument_count, char** argument_values) {
 
     auto node_mapping = std::unordered_map<NodeID, NodeID>{};
     node_mapping.reserve(node_ids.size());
-    for (auto const [index, node_id] :
-         std::views::enumerate(std::span<NodeID const>{node_ids})) {
-      node_mapping.emplace(node_id, static_cast<NodeID>(index));
+    for (auto const index :
+         std::views::iota(std::size_t{0}, node_ids.size())) {
+      node_mapping.emplace(node_ids[index], static_cast<NodeID>(index));
     }
 
     auto edge_count = EdgeID{0};
@@ -146,7 +146,7 @@ int main(int argument_count, char** argument_values) {
     }
     auto const node_count = static_cast<NodeID>(node_ids.size());
 
-    fmt::print("Starting graph construction...\n");
+    std::cout << "Starting graph construction...\n";
     auto graph = complete_graph_access{};
     graph.start_construction(node_count, edge_count, node_count, edge_count);
     graph.set_range(0, node_count);
@@ -168,20 +168,20 @@ int main(int argument_count, char** argument_values) {
     }
     graph.finish_construction();
 
-    fmt::print("Total edge weight: {}\n", total_edge_weight);
-    fmt::print("Adjusted edge count (accounting for self-loops): {}\n",
-               total_edge_weight / 2 + self_loops);
+    std::cout << "Total edge weight: " << total_edge_weight << '\n';
+    std::cout << "Adjusted edge count (accounting for self-loops): "
+              << total_edge_weight / 2 + self_loops << '\n';
     auto output_filename = graph_filename;
     output_filename.replace_extension(".graph");
     auto const write_status = parallel_graph_io::writeGraphSequentially(
         graph, output_filename.string());
     if (write_status != 0) {
-      fmt::print(stderr, "Error writing graph to '{}'.\n",
-                 output_filename.string());
+      std::cerr << "Error writing graph to '" << output_filename.string()
+                << "'.\n";
       return EXIT_FAILURE;
     }
-    fmt::print("Graph successfully written to '{}'.\n",
-               output_filename.string());
+    std::cout << "Graph successfully written to '" << output_filename.string()
+              << "'.\n";
     return EXIT_SUCCESS;
   });
 }

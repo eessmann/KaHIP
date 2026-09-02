@@ -12,6 +12,7 @@
 #include <ranges>
 #include <span>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
@@ -32,10 +33,10 @@ struct wire_entry {
 
 template <>
 struct parhip::mpi::wire_members<async_test_support::wire_entry> {
-  inline static constexpr auto value =
-      boost::hana::make_tuple(&async_test_support::wire_entry::generation,
-                              &async_test_support::wire_entry::source,
-                              &async_test_support::wire_entry::destination);
+  inline static constexpr auto value = std::tuple{
+      &async_test_support::wire_entry::generation,
+      &async_test_support::wire_entry::source,
+      &async_test_support::wire_entry::destination};
 };
 
 namespace async_protocol_probe {

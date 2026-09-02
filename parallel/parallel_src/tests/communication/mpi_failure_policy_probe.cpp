@@ -1,7 +1,5 @@
 #include <mpi.h>
 
-#include <boost/hana/tuple.hpp>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +9,7 @@
 #include <new>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -27,7 +26,7 @@ struct dense_wire_record final {
 template <>
 struct parhip::mpi::wire_members<failure_probe::dense_wire_record> {
   inline static constexpr auto value =
-      boost::hana::make_tuple(&failure_probe::dense_wire_record::value);
+      std::tuple{&failure_probe::dense_wire_record::value};
 };
 
 static_assert(std::is_standard_layout_v<failure_probe::dense_wire_record>);

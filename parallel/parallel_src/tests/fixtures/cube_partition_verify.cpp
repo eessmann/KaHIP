@@ -2,15 +2,28 @@
 #include <cstdint>
 #include <exception>
 #include <fstream>
+#include <iostream>
+#include <ranges>
 #include <string_view>
 #include <system_error>
-
-#include <fmt/base.h>
-#include <fmt/ranges.h>
 
 #include "fixtures/cube_partition.h"
 
 namespace {
+template <std::ranges::input_range Range>
+void write_joined(std::ostream& output,
+                  Range const& values,
+                  std::string_view separator) {
+  auto first = true;
+  for (auto const& value : values) {
+    if (!first) {
+      output << separator;
+    }
+    output << value;
+    first = false;
+  }
+}
+
 [[nodiscard]] auto parse_unsigned(std::string_view text,
                                   std::uint64_t& value) noexcept -> bool {
   auto const [end, error] =
@@ -21,9 +34,9 @@ namespace {
 
 int main(int argc, char* argv[]) {
   if (argc != 7) {
-    fmt::println(stderr,
-                 "usage: {} NX NY NZ BLOCKS IMBALANCE_PERCENT PARTITION.txtp",
-                 argc > 0 ? argv[0] : "kahip_cube_partition_verify");
+    std::cerr << "usage: "
+              << (argc > 0 ? argv[0] : "kahip_cube_partition_verify")
+              << " NX NY NZ BLOCKS IMBALANCE_PERCENT PARTITION.txtp\n";
     return 64;
   }
 
@@ -35,8 +48,7 @@ int main(int argc, char* argv[]) {
       !parse_unsigned(argv[3], dimensions.nz) ||
       !parse_unsigned(argv[4], block_count) ||
       !parse_unsigned(argv[5], imbalance_percent)) {
-    fmt::println(stderr,
-                 "cube verification arguments must be unsigned integers");
+    std::cerr << "cube verification arguments must be unsigned integers\n";
     return 64;
   }
 
@@ -44,20 +56,21 @@ int main(int argc, char* argv[]) {
     auto const graph = parhip::testing::cube_graph{dimensions};
     auto input = std::ifstream{argv[6]};
     if (!input) {
-      fmt::println(stderr, "cannot open partition '{}'", argv[6]);
+      std::cerr << "cannot open partition '" << argv[6] << "'\n";
       return 1;
     }
     auto const partition =
         parhip::testing::read_text_partition(input, graph.vertex_count());
     auto const metrics = parhip::testing::evaluate_cube_partition(
         graph, partition, block_count, imbalance_percent);
-    fmt::println(
-        "verified vertices={} blocks={} maximum-block-weight={} "
-        "block-weights=[{}] weighted-cut={}",
-        graph.vertex_count(), block_count, metrics.maximum_block_weight,
-        fmt::join(metrics.block_weights, ","), metrics.weighted_cut);
+    std::cout << "verified vertices=" << graph.vertex_count()
+              << " blocks=" << block_count
+              << " maximum-block-weight=" << metrics.maximum_block_weight
+              << " block-weights=[";
+    write_joined(std::cout, metrics.block_weights, ",");
+    std::cout << "] weighted-cut=" << metrics.weighted_cut << '\n';
   } catch (std::exception const& error) {
-    fmt::println(stderr, "partition verification failed: {}", error.what());
+    std::cerr << "partition verification failed: " << error.what() << '\n';
     return 1;
   }
 }

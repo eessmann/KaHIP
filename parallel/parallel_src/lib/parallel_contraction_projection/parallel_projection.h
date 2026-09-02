@@ -8,7 +8,7 @@
 #ifndef PARALLEL_PROJECTION_HBRCPQ0P
 #define PARALLEL_PROJECTION_HBRCPQ0P
 
-#include <boost/hana/tuple.hpp>
+#include <tuple>
 
 #include "communication/mpi_types.h"
 #include "data_structure/parallel_graph_access.h"
@@ -40,17 +40,17 @@ public:
 
 template <>
 struct parhip::mpi::wire_members<parhip::projection::request> {
-        inline static constexpr auto value = boost::hana::make_tuple(
+        inline static constexpr auto value = std::tuple{
             &parhip::projection::request::request_id,
-            &parhip::projection::request::coarse_global_id);
+            &parhip::projection::request::coarse_global_id};
 };
 
 template <>
 struct parhip::mpi::wire_members<parhip::projection::reply> {
-        inline static constexpr auto value = boost::hana::make_tuple(
+        inline static constexpr auto value = std::tuple{
             &parhip::projection::reply::request_id,
             &parhip::projection::reply::coarse_global_id,
-            &parhip::projection::reply::label);
+            &parhip::projection::reply::label};
 };
 
 

@@ -8,6 +8,7 @@
 #ifndef PARALLEL_BLOCK_DOWN_PROPAGATION_SRTCMH8F
 #define PARALLEL_BLOCK_DOWN_PROPAGATION_SRTCMH8F
 
+#include <tuple>
 #include <type_traits>
 
 #include "communication/mpi_types.h"
@@ -35,9 +36,9 @@ class parallel_block_down_propagation {
 
 template <>
 struct parhip::mpi::wire_members<parhip::block_down::block_update> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &parhip::block_down::block_update::coarse_global_id,
-      &parhip::block_down::block_update::block);
+      &parhip::block_down::block_update::block};
 };
 
 #endif /* end of include guard: PARALLEL_BLOCK_DOWN_PROPAGATION_SRTCMH8F */

@@ -1,9 +1,6 @@
 //
 // Created by Erich Essmann on 16/08/2024.
 //
-#include <fmt/format.h>
-#include <fmt/ostream.h>
-#include <fmt/ranges.h>
 #include <catch2/catch_all.hpp>
 #include <ranges>
 #include <span>

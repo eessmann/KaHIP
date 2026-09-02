@@ -144,7 +144,10 @@ target_sources(
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/evolutionary_collectives.h"
             "${PROJECT_SOURCE_DIR}/lib/parallel_mh/population_size_broadcast.h"
 )
-target_link_libraries(modified_kahip_collective_obj PRIVATE spdlog::spdlog)
+target_link_libraries(
+    modified_kahip_collective_obj
+    PRIVATE kahip_fatal_diagnostics
+)
 
 add_library(
     modified_kahip_evolutionary_interface_obj
@@ -160,7 +163,7 @@ kahip_add_private_header_set(
 )
 target_link_libraries(
     modified_kahip_evolutionary_interface_obj
-    PRIVATE spdlog::spdlog
+    PRIVATE kahip_fatal_diagnostics
 )
 
 add_library(libmodified_kahip_interface STATIC interface/kaHIP_interface.cpp)

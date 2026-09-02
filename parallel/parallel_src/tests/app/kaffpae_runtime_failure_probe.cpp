@@ -3,15 +3,11 @@
 
 #include <csignal>
 #include <cstdlib>
-#include <memory>
 #include <string>
 #include <string_view>
 
-#include <spdlog/logger.h>
-#include <spdlog/sinks/sink.h>
-#include <spdlog/spdlog.h>
-
 #include "mpi_application_runtime.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace {
 enum class failure_mode : unsigned char { rank_query, communicator_free };
@@ -29,28 +25,27 @@ constexpr auto injected_free_error = 17402;
 
 void write_text(std::string_view text) noexcept;
 
-class observing_sink final : public spdlog::sinks::sink {
- public:
-  void log(spdlog::details::log_msg const& message) override {
-    write_text(std::string_view{message.payload.data(), message.payload.size()});
-    write_text("\n");
-  }
+void observe_diagnostic(std::string_view message) noexcept {
+  write_text(message);
+  write_text("\n");
+}
 
-  void flush() override {
-    diagnostic_was_flushed = 1;
-    write_text("observed synchronous spdlog flush\n");
-  }
+void observe_flush() noexcept {
+  diagnostic_was_flushed = 1;
+  write_text("observed synchronous diagnostic flush\n");
+}
 
-  void set_pattern(std::string const&) override {}
-  void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+constexpr auto observing_sink = kahip::diagnostics::sink{
+    .write = observe_diagnostic,
+    .flush = observe_flush,
 };
 
 [[noreturn]] void observed_process_abort(int) noexcept {
   if (diagnostic_was_flushed == 0) {
-    write_text("process aborted before spdlog flush\n");
+    write_text("process aborted before diagnostic flush\n");
     std::_Exit(91);
   }
-  write_text("observed process abort after spdlog flush\n");
+  write_text("observed process abort after diagnostic flush\n");
   std::_Exit(86);
 }
 
@@ -123,9 +118,10 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int error_code) {
   }
   if (selected_mode == failure_mode::rank_query) {
     write_text(
-        "observed operation communicator MPI_Abort after spdlog flush\n");
+        "observed operation communicator MPI_Abort after diagnostic flush\n");
   } else {
-    write_text("observed MPI_COMM_WORLD fallback abort after spdlog flush\n");
+    write_text(
+        "observed MPI_COMM_WORLD fallback abort after diagnostic flush\n");
   }
   std::_Exit(86);
 }
@@ -144,9 +140,8 @@ int main(int argc, char** argv) {
     return 64;
   }
 
-  spdlog::set_default_logger(
-      std::make_shared<spdlog::logger>("observing",
-                                       std::make_shared<observing_sink>()));
+  static_cast<void>(
+      kahip::diagnostics::exchange_sink_for_testing(&observing_sink));
   if (std::signal(SIGABRT, observed_process_abort) == SIG_ERR) {
     return 70;
   }

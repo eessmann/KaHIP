@@ -13,12 +13,16 @@
 #include <variant>
 #include <vector>
 
+#include "communication/implicit_lifetime.h"
+
 namespace parhip::mpi {
 namespace detail {
 template <typename T>
 class lifetime_storage {
 public:
-  explicit lifetime_storage(std::size_t size) : size_(size) {
+  explicit lifetime_storage(std::size_t size)
+    requires is_implicit_lifetime_v<T>
+      : size_(size) {
     static_assert(std::is_trivially_copyable_v<T>);
     if (size_ == 0) {
       return;
@@ -28,7 +32,7 @@ public:
     }
     allocation_ =
         ::operator new(size_ * sizeof(T), std::align_val_t{alignof(T)});
-    data_ = std::start_lifetime_as_array<T>(allocation_, size_);
+    data_ = static_cast<T*>(allocation_);
   }
 
   ~lifetime_storage() noexcept { reset(); }
@@ -92,7 +96,8 @@ public:
       std::size_t storage_size,
       std::vector<std::size_t> counts,
       std::vector<std::size_t> offsets) -> segmented_buffer
-    requires std::is_trivially_copyable_v<T>
+    requires std::is_trivially_copyable_v<T> &&
+             detail::is_implicit_lifetime_v<T>
   {
     return segmented_buffer{uninitialized_tag{},
                             storage_size,

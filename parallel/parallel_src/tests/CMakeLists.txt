@@ -135,7 +135,7 @@ catch_discover_tests(
 add_executable(kahip_cube_generator fixtures/cube_graph_generator.cpp)
 target_link_libraries(
     kahip_cube_generator
-    PRIVATE kahip_cube_fixture_obj fmt::fmt kahip_options kahip_warnings
+    PRIVATE kahip_cube_fixture_obj kahip_options kahip_warnings
 )
 
 add_executable(
@@ -144,7 +144,7 @@ add_executable(
 )
 target_link_libraries(
     kahip_cube_partition_verify
-    PRIVATE kahip_cube_fixture_obj fmt::fmt kahip_options kahip_warnings
+    PRIVATE kahip_cube_fixture_obj kahip_options kahip_warnings
 )
 add_test(
     NAME integration-cube-fixture-cli
@@ -374,7 +374,7 @@ target_link_libraries(
     PRIVATE
         Catch2::Catch2WithMain
         MPI::MPI_CXX
-        spdlog::spdlog
+        kahip_fatal_diagnostics
         kahip_options
         kahip_warnings
 )
@@ -414,7 +414,7 @@ foreach(evolutionary_target IN ITEMS evolutionary_mpi_test evolutionary_failure_
         PRIVATE
             libmodified_kahip_interface
             MPI::MPI_CXX
-            spdlog::spdlog
+            kahip_fatal_diagnostics
             kahip_options
             kahip_warnings
     )
@@ -547,7 +547,7 @@ foreach(
             kahip_mapping_obj
             kahip_collective_obj
             MPI::MPI_CXX
-            spdlog::spdlog
+            kahip_fatal_diagnostics
             kahip_options
             kahip_warnings
     )
@@ -760,7 +760,7 @@ target_link_libraries(
     PRIVATE
         parhip_mpi_application_obj
         parallel
-        spdlog::spdlog
+        kahip_fatal_diagnostics
         kahip_options
         kahip_warnings
 )
@@ -777,13 +777,13 @@ foreach(
             runtime_failure_diagnostic
             "MPI lifecycle failure: runtime failure probe: MPI_Init returned raw error 17301 \\(rank unavailable\\)"
         )
-        set(runtime_failure_marker "observed process abort after spdlog flush")
+        set(runtime_failure_marker "observed process abort after diagnostic flush")
     elseif(runtime_failure_mode STREQUAL "finalization")
         set(
             runtime_failure_diagnostic
             "MPI lifecycle failure: runtime failure probe: MPI_Finalize returned raw error 17302 on rank 0"
         )
-        set(runtime_failure_marker "observed process abort after spdlog flush")
+        set(runtime_failure_marker "observed process abort after diagnostic flush")
     elseif(runtime_failure_mode STREQUAL "operation-exception")
         set(
             runtime_failure_diagnostic
@@ -791,7 +791,7 @@ foreach(
         )
         set(
             runtime_failure_marker
-            "observed operation communicator MPI_Abort after spdlog flush"
+            "observed operation communicator MPI_Abort after diagnostic flush"
         )
     else()
         set(
@@ -800,7 +800,7 @@ foreach(
         )
         set(
             runtime_failure_marker
-            "observed operation communicator MPI_Abort after spdlog flush"
+            "observed operation communicator MPI_Abort after diagnostic flush"
         )
     endif()
     add_test(
@@ -828,7 +828,7 @@ add_executable(
 )
 target_link_libraries(
     mpi_owned_handle_lifetime_failure_probe
-    PRIVATE parallel spdlog::spdlog kahip_options kahip_warnings
+    PRIVATE parallel kahip_fatal_diagnostics kahip_options kahip_warnings
 )
 foreach(owned_handle IN ITEMS communicator datatype distributed-graph)
     if(owned_handle STREQUAL "communicator")
@@ -845,7 +845,7 @@ foreach(owned_handle IN ITEMS communicator datatype distributed-graph)
             "-DPROBE=$<TARGET_FILE:mpi_owned_handle_lifetime_failure_probe>"
             "-DMODE=${owned_handle}"
             "-DEXPECTED_DIAGNOSTIC=MPI adapter ownership outlived the active MPI runtime: ${owned_handle_diagnostic}"
-            "-DEXPECTED_MARKER=observed owned-handle abort after spdlog flush"
+            "-DEXPECTED_MARKER=observed owned-handle abort after diagnostic flush"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/app/verify_failure_probe.cmake"
     )
     set_tests_properties(
@@ -913,7 +913,7 @@ target_link_libraries(
     kaffpae_runtime_failure_probe
     PRIVATE
         MPI::MPI_CXX
-        spdlog::spdlog
+        kahip_fatal_diagnostics
         kahip_options
         kahip_warnings
 )
@@ -938,7 +938,7 @@ foreach(runtime_failure_mode IN ITEMS rank-query communicator-free)
         )
         set(
             runtime_failure_marker
-            "observed operation communicator MPI_Abort after spdlog flush"
+            "observed operation communicator MPI_Abort after diagnostic flush"
         )
     else()
         set(
@@ -947,7 +947,7 @@ foreach(runtime_failure_mode IN ITEMS rank-query communicator-free)
         )
         set(
             runtime_failure_marker
-            "observed MPI_COMM_WORLD fallback abort after spdlog flush"
+            "observed MPI_COMM_WORLD fallback abort after diagnostic flush"
         )
     endif()
     add_test(
@@ -1211,7 +1211,7 @@ target_link_libraries(
 )
 target_link_libraries(
     parallel_contraction_test
-    PRIVATE libmodified_kahip_interface fmt::fmt
+    PRIVATE libmodified_kahip_interface
 )
 
 catch_discover_tests(
@@ -1230,7 +1230,7 @@ target_link_libraries(parallel_contraction_mpi_test PRIVATE catch_mpi_runner)
 target_link_libraries(parallel_contraction_mpi_test PRIVATE parallel)
 target_link_libraries(
     parallel_contraction_mpi_test
-    PRIVATE libmodified_kahip_interface fmt::fmt
+    PRIVATE libmodified_kahip_interface
 )
 
 foreach(mpi_ranks RANGE 1 5)
@@ -2510,7 +2510,7 @@ target_link_libraries(
     PRIVATE
         catch_mpi_runner
         MPI::MPI_CXX
-        spdlog::spdlog
+        kahip_fatal_diagnostics
         kahip_options
         kahip_warnings
 )
@@ -2560,7 +2560,11 @@ target_sources(
 )
 target_link_libraries(
     population_size_broadcast_failure_probe
-    PRIVATE MPI::MPI_CXX spdlog::spdlog kahip_options kahip_warnings
+    PRIVATE
+        MPI::MPI_CXX
+        kahip_fatal_diagnostics
+        kahip_options
+        kahip_warnings
 )
 add_test(
     NAME unit-pmpi-callback-safety-population-size-failure
@@ -2610,7 +2614,7 @@ target_link_libraries(
     PRIVATE
         catch_mpi_runner
         MPI::MPI_CXX
-        spdlog::spdlog
+        kahip_fatal_diagnostics
         kahip_options
         kahip_warnings
 )
@@ -2657,7 +2661,11 @@ target_sources(
 )
 target_link_libraries(
     evolutionary_collectives_failure_probe
-    PRIVATE MPI::MPI_CXX spdlog::spdlog kahip_options kahip_warnings
+    PRIVATE
+        MPI::MPI_CXX
+        kahip_fatal_diagnostics
+        kahip_options
+        kahip_warnings
 )
 add_test(
     NAME unit-pmpi-callback-safety-evolutionary-failure
@@ -3719,7 +3727,7 @@ target_link_libraries(
     PRIVATE
         libmodified_kahip_interface
         MPI::MPI_CXX
-        spdlog::spdlog
+        kahip_fatal_diagnostics
         kahip_options
         kahip_warnings
 )
@@ -3730,7 +3738,7 @@ add_test(
         "-DPROBE=$<TARGET_FILE:kaffpae_c_boundary_failure_probe>"
         "-DMODE=allocation"
         "-DEXPECTED_DIAGNOSTIC=modified kaffpaE C boundary:.*bad_alloc"
-        "-DEXPECTED_MARKER=observed kaffpaE communicator abort after spdlog flush"
+        "-DEXPECTED_MARKER=observed kaffpaE communicator abort after diagnostic flush"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/app/verify_failure_probe.cmake"
 )
 set_tests_properties(
@@ -3749,9 +3757,10 @@ target_include_directories(
     parhip_interface_failure_probe
     PRIVATE "${PARHIP_GENERATED_INCLUDE_DIR}"
 )
+# Keep the probe's MPI wrappers effective on two-level-namespace platforms.
 target_link_libraries(
     parhip_interface_failure_probe
-    PRIVATE parhip_interface MPI::MPI_CXX kahip_options kahip_warnings
+    PRIVATE parhip_interface_static MPI::MPI_CXX kahip_options kahip_warnings
 )
 add_test(
     NAME unit-pmpi-callback-safety-parhip-interface-failure

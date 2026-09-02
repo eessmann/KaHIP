@@ -3,12 +3,11 @@
 #include <mpi.h>
 
 #include <source_location>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
-
-#include <fmt/format.h>
 
 namespace parhip::mpi {
 class mpi_error final : public std::runtime_error {
@@ -34,8 +33,10 @@ private:
   static auto make_message(int error_code,
                            std::string_view context,
                            std::source_location location) -> std::string {
-    return fmt::format("{} at {}:{} (MPI error {})", context,
-                       location.file_name(), location.line(), error_code);
+    auto message = std::ostringstream{};
+    message << context << " at " << location.file_name() << ':'
+            << location.line() << " (MPI error " << error_code << ')';
+    return message.str();
   }
 
   int error_code_;

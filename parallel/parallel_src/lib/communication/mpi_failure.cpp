@@ -6,9 +6,8 @@
 #include <optional>
 #include <string>
 
-#include <spdlog/spdlog.h>
-
 #include "communication/mpi_error.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace parhip::mpi {
 namespace {
@@ -17,16 +16,6 @@ enum class runtime_state {
   active,
   finalized,
 };
-
-void flush_diagnostics() noexcept {
-  try {
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
-    }
-  } catch (...) {
-    // Diagnostic flushing must never replace fail-fast termination.
-  }
-}
 
 [[nodiscard]] auto active_rank(MPI_Comm communicator) noexcept
     -> std::optional<int> {
@@ -40,14 +29,9 @@ void flush_diagnostics() noexcept {
 
 [[noreturn]] void abort_on_lifecycle_query_failure(std::string_view query,
                                                    int error_code) noexcept {
-  try {
-    spdlog::critical("MPI lifecycle query failure: {} returned raw error {}",
-                     query, error_code);
-  } catch (...) {
-    // Runtime state is unknown, so no further MPI call is safe even when
-    // diagnostic formatting fails.
-  }
-  flush_diagnostics();
+  kahip::diagnostics::critical(
+      "MPI lifecycle query failure: ", query, " returned raw error ",
+      error_code);
   std::abort();
 }
 
@@ -71,47 +55,42 @@ void flush_diagnostics() noexcept {
 void log_failure(std::string_view boundary,
                  std::exception_ptr failure,
                  std::optional<int> rank) noexcept {
-  try {
-    if (failure == nullptr) {
-      if (rank.has_value()) {
-        spdlog::critical("{}: unknown unrecoverable failure (rank {})",
-                         boundary, *rank);
-      } else {
-        spdlog::critical("{}: unknown unrecoverable failure", boundary);
-      }
-      return;
+  if (failure == nullptr) {
+    if (rank.has_value()) {
+      kahip::diagnostics::critical(
+          boundary, ": unknown unrecoverable failure (rank ", *rank, ")");
+    } else {
+      kahip::diagnostics::critical(boundary,
+                                   ": unknown unrecoverable failure");
     }
-    try {
-      std::rethrow_exception(failure);
-    } catch (std::exception const& error) {
-      if (rank.has_value()) {
-        spdlog::critical("{}: {} (rank {})", boundary, error.what(), *rank);
-      } else {
-        spdlog::critical("{}: {}", boundary, error.what());
-      }
-    } catch (...) {
-      if (rank.has_value()) {
-        spdlog::critical("{}: unknown unrecoverable exception (rank {})",
-                         boundary, *rank);
-      } else {
-        spdlog::critical("{}: unknown unrecoverable exception", boundary);
-      }
+    return;
+  }
+  try {
+    std::rethrow_exception(failure);
+  } catch (std::exception const& error) {
+    if (rank.has_value()) {
+      kahip::diagnostics::critical(boundary, ": ", error.what(), " (rank ",
+                                   *rank, ")");
+    } else {
+      kahip::diagnostics::critical(boundary, ": ", error.what());
     }
   } catch (...) {
-    // Failure reporting must never replace the original termination path.
+    if (rank.has_value()) {
+      kahip::diagnostics::critical(
+          boundary, ": unknown unrecoverable exception (rank ", *rank, ")");
+    } else {
+      kahip::diagnostics::critical(boundary,
+                                   ": unknown unrecoverable exception");
+    }
   }
 }
 
 void log_raw_mpi_failure(int error_code,
                          std::string_view context,
                          std::source_location location) noexcept {
-  try {
-    spdlog::critical("MPI backend failure: {} at {}:{} (original raw code {})",
-                     context, location.file_name(), location.line(),
-                     error_code);
-  } catch (...) {
-    // Failure reporting must never replace the original termination path.
-  }
+  kahip::diagnostics::critical(
+      "MPI backend failure: ", context, " at ", location.file_name(), ":",
+      location.line(), " (original raw code ", error_code, ")");
 }
 
 void log_active_mpi_failure(int error_code,
@@ -122,34 +101,29 @@ void log_active_mpi_failure(int error_code,
   auto error_text_length = 0;
   auto const formatter_result =
       MPI_Error_string(error_code, error_text.data(), &error_text_length);
-  try {
-    if (formatter_result != MPI_SUCCESS) {
-      spdlog::critical(
-          "MPI backend failure: {} at {}:{} (original raw code {}, "
-          "MPI_Error_string secondary raw code {}, world rank {})",
-          context, location.file_name(), location.line(), error_code,
-          formatter_result, world_rank.value_or(-1));
-      return;
-    }
-    if (error_text_length < 0 ||
-        static_cast<std::size_t>(error_text_length) > error_text.size()) {
-      spdlog::critical(
-          "MPI backend failure: {} at {}:{} (original raw code {}, "
-          "MPI_Error_string invalid length {}, world rank {})",
-          context, location.file_name(), location.line(), error_code,
-          error_text_length, world_rank.value_or(-1));
-      return;
-    }
-    spdlog::critical(
-        "MPI backend failure: {} at {}:{} (original raw code {}, MPI text: "
-        "{}, world rank {})",
-        context, location.file_name(), location.line(), error_code,
-        std::string_view{error_text.data(),
-                         static_cast<std::size_t>(error_text_length)},
-        world_rank.value_or(-1));
-  } catch (...) {
-    // Failure reporting must never replace the original termination path.
+  if (formatter_result != MPI_SUCCESS) {
+    kahip::diagnostics::critical(
+        "MPI backend failure: ", context, " at ", location.file_name(), ":",
+        location.line(), " (original raw code ", error_code,
+        ", MPI_Error_string secondary raw code ", formatter_result,
+        ", world rank ", world_rank.value_or(-1), ")");
+    return;
   }
+  if (error_text_length < 0 ||
+      static_cast<std::size_t>(error_text_length) > error_text.size()) {
+    kahip::diagnostics::critical(
+        "MPI backend failure: ", context, " at ", location.file_name(), ":",
+        location.line(), " (original raw code ", error_code,
+        ", MPI_Error_string invalid length ", error_text_length,
+        ", world rank ", world_rank.value_or(-1), ")");
+    return;
+  }
+  kahip::diagnostics::critical(
+      "MPI backend failure: ", context, " at ", location.file_name(), ":",
+      location.line(), " (original raw code ", error_code, ", MPI text: ",
+      std::string_view{error_text.data(),
+                       static_cast<std::size_t>(error_text_length)},
+      ", world rank ", world_rank.value_or(-1), ")");
 }
 }  // namespace
 
@@ -163,7 +137,6 @@ auto runtime_is_active() noexcept -> bool {
   auto const active = runtime_is_active();
   log_failure(boundary, failure,
               active ? active_rank(communicator) : std::nullopt);
-  flush_diagnostics();
   if (active) {
     auto const affected =
         communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
@@ -186,7 +159,6 @@ auto runtime_is_active() noexcept -> bool {
     log_raw_mpi_failure(error_code, context, location);
   }
 
-  flush_diagnostics();
   if (mpi_is_active) {
     auto const affected =
         communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
@@ -198,18 +170,13 @@ auto runtime_is_active() noexcept -> bool {
 [[noreturn]] void abort_on_backend_failure(MPI_Comm communicator,
                                            std::string_view context) noexcept {
   auto const active = runtime_is_active();
-  try {
-    if (auto const rank = active ? active_rank(communicator) : std::nullopt;
-        rank.has_value()) {
-      spdlog::critical("Distributed backend failure: {} (rank {})", context,
-                       *rank);
-    } else {
-      spdlog::critical("Distributed backend failure: {}", context);
-    }
-  } catch (...) {
-    // Diagnostic failures must not replace the distributed fail-fast path.
+  if (auto const rank = active ? active_rank(communicator) : std::nullopt;
+      rank.has_value()) {
+    kahip::diagnostics::critical(
+        "Distributed backend failure: ", context, " (rank ", *rank, ")");
+  } else {
+    kahip::diagnostics::critical("Distributed backend failure: ", context);
   }
-  flush_diagnostics();
   if (active) {
     auto const affected =
         communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
@@ -232,18 +199,15 @@ auto runtime_is_active() noexcept -> bool {
     MPI_Comm communicator,
     std::string_view context) noexcept {
   auto const active = runtime_is_active();
-  try {
-    if (auto const rank = active ? active_rank(communicator) : std::nullopt;
-        rank.has_value()) {
-      spdlog::critical("MPI adapter programming failure: {} (rank {})",
-                       context, *rank);
-    } else {
-      spdlog::critical("MPI adapter programming failure: {}", context);
-    }
-  } catch (...) {
-    // State misuse must still terminate collectively when logging fails.
+  if (auto const rank = active ? active_rank(communicator) : std::nullopt;
+      rank.has_value()) {
+    kahip::diagnostics::critical(
+        "MPI adapter programming failure: ", context, " (rank ", *rank,
+        ")");
+  } else {
+    kahip::diagnostics::critical("MPI adapter programming failure: ",
+                                 context);
   }
-  flush_diagnostics();
   if (active) {
     auto const affected =
         communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
@@ -257,19 +221,15 @@ auto runtime_is_active() noexcept -> bool {
     std::string_view boundary,
     std::string_view issue_diagnostic) noexcept {
   auto const active = runtime_is_active();
-  try {
-    if (auto const rank = active ? active_rank(communicator) : std::nullopt;
-        rank.has_value()) {
-      spdlog::critical("MPI adapter capacity failure: {}: {} (rank {})",
-                       boundary, issue_diagnostic, *rank);
-    } else {
-      spdlog::critical("MPI adapter capacity failure: {}: {}", boundary,
-                       issue_diagnostic);
-    }
-  } catch (...) {
-    // Logging and formatting failures must not replace capacity termination.
+  if (auto const rank = active ? active_rank(communicator) : std::nullopt;
+      rank.has_value()) {
+    kahip::diagnostics::critical(
+        "MPI adapter capacity failure: ", boundary, ": ", issue_diagnostic,
+        " (rank ", *rank, ")");
+  } else {
+    kahip::diagnostics::critical(
+        "MPI adapter capacity failure: ", boundary, ": ", issue_diagnostic);
   }
-  flush_diagnostics();
   if (active) {
     auto const affected =
         communicator == MPI_COMM_NULL ? MPI_COMM_WORLD : communicator;
@@ -328,13 +288,8 @@ auto resolve_capacity_collectively(capacity_result local,
 
 [[noreturn]] void abort_on_inactive_mpi_ownership(
     std::string_view context) noexcept {
-  try {
-    spdlog::critical(
-        "MPI adapter ownership outlived the active MPI runtime: {}", context);
-  } catch (...) {
-    // No MPI call is valid on this raw termination path.
-  }
-  flush_diagnostics();
+  kahip::diagnostics::critical(
+      "MPI adapter ownership outlived the active MPI runtime: ", context);
   std::abort();
 }
 }  // namespace parhip::mpi

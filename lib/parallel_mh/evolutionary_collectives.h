@@ -14,7 +14,7 @@
 #include <type_traits>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include "tools/fatal_diagnostics.h"
 
 namespace kahip::parallel_mh {
 struct evolutionary_broadcast_options final {
@@ -24,16 +24,6 @@ struct evolutionary_broadcast_options final {
 };
 
 namespace detail {
-inline void flush_evolutionary_diagnostics() noexcept {
-  try {
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
-    }
-  } catch (...) {
-    // Diagnostics must not replace communicator-scoped termination.
-  }
-}
-
 [[nodiscard]] inline auto active_rank(MPI_Comm communicator) noexcept -> int {
   auto rank = -1;
   if (communicator != MPI_COMM_NULL &&
@@ -78,31 +68,23 @@ template <evolutionary_mpi_scalar T>
     std::string_view operation,
     std::string_view diagnostic) noexcept {
   auto const rank = active_rank(communicator);
-  try {
-    if (rank >= 0) {
-      spdlog::critical(
-          "MPI evolutionary collective failure in {} on rank {}: {}",
-          operation, rank, diagnostic);
-    } else {
-      spdlog::critical("MPI evolutionary collective failure in {}: {}",
-                       operation, diagnostic);
-    }
-  } catch (...) {
-    // Diagnostics are secondary to communicator-scoped termination.
+  if (rank >= 0) {
+    kahip::diagnostics::critical(
+        "MPI evolutionary collective failure in ", operation, " on rank ",
+        rank, ": ", diagnostic);
+  } else {
+    kahip::diagnostics::critical(
+        "MPI evolutionary collective failure in ", operation, ": ",
+        diagnostic);
   }
-  flush_evolutionary_diagnostics();
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
   std::abort();
 }
 
 [[noreturn]] inline void abort_evolutionary_lifecycle(
     std::string_view diagnostic) noexcept {
-  try {
-    spdlog::critical("MPI evolutionary lifecycle failure: {}", diagnostic);
-  } catch (...) {
-    // No MPI operation is safe when the runtime lifecycle is invalid.
-  }
-  flush_evolutionary_diagnostics();
+  kahip::diagnostics::critical("MPI evolutionary lifecycle failure: ",
+                               diagnostic);
   std::abort();
 }
 
@@ -111,19 +93,15 @@ template <evolutionary_mpi_scalar T>
     int error_code,
     std::string_view operation) noexcept {
   auto const rank = active_rank(communicator);
-  try {
-    if (rank >= 0) {
-      spdlog::critical(
-          "MPI backend failure: {} returned raw error {} on rank {}",
-          operation, error_code, rank);
-    } else {
-      spdlog::critical("MPI backend failure: {} returned raw error {}",
-                       operation, error_code);
-    }
-  } catch (...) {
-    // Diagnostics are secondary to communicator-scoped termination.
+  if (rank >= 0) {
+    kahip::diagnostics::critical(
+        "MPI backend failure: ", operation, " returned raw error ", error_code,
+        " on rank ", rank);
+  } else {
+    kahip::diagnostics::critical(
+        "MPI backend failure: ", operation, " returned raw error ",
+        error_code);
   }
-  flush_evolutionary_diagnostics();
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
   std::abort();
 }

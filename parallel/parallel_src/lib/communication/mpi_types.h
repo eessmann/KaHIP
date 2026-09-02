@@ -2,25 +2,23 @@
 
 #include <mpi.h>
 
-#include <boost/hana/for_each.hpp>
-#include <boost/hana/tuple.hpp>
-#include <boost/mp11/algorithm.hpp>
-#include <boost/mp11/list.hpp>
-
 #include <array>
 #include <complex>
 #include <cstddef>
 #include <memory>
+#include <new>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "communication/implicit_lifetime.h"
 #include "communication/mpi_error.h"
 #include "communication/mpi_failure.h"
 
 namespace parhip::mpi {
 namespace detail {
-using native_mpi_types = boost::mp11::mp_list<
+using native_mpi_types = std::tuple<
     char,
     wchar_t,
     signed char,
@@ -44,37 +42,91 @@ using native_mpi_types = boost::mp11::mp_list<
 template <typename T>
 using unqualified_t = std::remove_cv_t<std::remove_reference_t<T>>;
 
+template <typename T, typename Tuple>
+struct tuple_contains;
+
+template <typename T, typename... Elements>
+struct tuple_contains<T, std::tuple<Elements...>>
+    : std::bool_constant<(std::is_same_v<T, Elements> || ...)> {};
+
+template <typename T, typename Tuple>
+inline constexpr bool tuple_contains_v =
+    tuple_contains<T, unqualified_t<Tuple>>::value;
+
+template <typename T, typename Tuple>
+struct tuple_index;
+
+template <typename T, typename... Tail>
+struct tuple_index<T, std::tuple<T, Tail...>>
+    : std::integral_constant<std::size_t, 0> {};
+
+template <typename T, typename Head, typename... Tail>
+struct tuple_index<T, std::tuple<Head, Tail...>>
+    : std::integral_constant<
+          std::size_t,
+          1 + tuple_index<T, std::tuple<Tail...>>::value> {};
+
+template <typename T, typename Tuple>
+inline constexpr std::size_t tuple_index_v =
+    tuple_index<T, unqualified_t<Tuple>>::value;
+
 template <typename T>
 inline constexpr bool is_native_mpi_type =
-    boost::mp11::mp_contains<native_mpi_types, unqualified_t<T>>::value;
+    tuple_contains_v<unqualified_t<T>, native_mpi_types>;
+
+inline auto const native_mpi_handles = std::array{
+    MPI_CHAR,
+    MPI_WCHAR,
+    MPI_SIGNED_CHAR,
+    MPI_UNSIGNED_CHAR,
+    MPI_SHORT,
+    MPI_UNSIGNED_SHORT,
+    MPI_INT,
+    MPI_UNSIGNED,
+    MPI_LONG,
+    MPI_UNSIGNED_LONG,
+    MPI_LONG_LONG_INT,
+    MPI_UNSIGNED_LONG_LONG,
+    MPI_FLOAT,
+    MPI_DOUBLE,
+    MPI_LONG_DOUBLE,
+    MPI_CXX_BOOL,
+    MPI_CXX_FLOAT_COMPLEX,
+    MPI_CXX_DOUBLE_COMPLEX,
+    MPI_CXX_LONG_DOUBLE_COMPLEX};
+
+static_assert(std::tuple_size_v<native_mpi_types> ==
+              std::tuple_size_v<unqualified_t<decltype(native_mpi_handles)>>,
+              "native MPI types and handles must remain aligned");
 
 template <typename T>
   requires is_native_mpi_type<T>
 auto native_mpi_handle() noexcept -> MPI_Datatype {
   constexpr auto index =
-      boost::mp11::mp_find<native_mpi_types, unqualified_t<T>>::value;
-  auto const handles = std::array{
-      MPI_CHAR,
-      MPI_WCHAR,
-      MPI_SIGNED_CHAR,
-      MPI_UNSIGNED_CHAR,
-      MPI_SHORT,
-      MPI_UNSIGNED_SHORT,
-      MPI_INT,
-      MPI_UNSIGNED,
-      MPI_LONG,
-      MPI_UNSIGNED_LONG,
-      MPI_LONG_LONG_INT,
-      MPI_UNSIGNED_LONG_LONG,
-      MPI_FLOAT,
-      MPI_DOUBLE,
-      MPI_LONG_DOUBLE,
-      MPI_CXX_BOOL,
-      MPI_CXX_FLOAT_COMPLEX,
-      MPI_CXX_DOUBLE_COMPLEX,
-      MPI_CXX_LONG_DOUBLE_COMPLEX};
-  return handles[index];
+      tuple_index_v<unqualified_t<T>, native_mpi_types>;
+  return native_mpi_handles[index];
 }
+
+template <typename Record, typename Members>
+struct tuple_members_are_native;
+
+template <typename Record, typename... MemberPointers>
+struct tuple_members_are_native<Record, std::tuple<MemberPointers...>>
+    : std::bool_constant<
+          (is_native_mpi_type<decltype(std::declval<Record&>().*
+                                       std::declval<MemberPointers>())> &&
+           ...)> {};
+
+template <typename Record, typename Members>
+inline constexpr bool tuple_members_are_native_v =
+    tuple_members_are_native<Record, unqualified_t<Members>>::value;
+
+template <typename T>
+struct aligned_object_delete {
+  void operator()(T* object) const noexcept {
+    ::operator delete(object, std::align_val_t{alignof(T)});
+  }
+};
 }  // namespace detail
 
 template <typename T>
@@ -87,7 +139,11 @@ template <typename T>
 concept mpi_wire_datatype =
     std::is_standard_layout_v<detail::unqualified_t<T>> &&
     std::is_trivially_copyable_v<detail::unqualified_t<T>> && requires {
+      requires detail::is_implicit_lifetime_v<detail::unqualified_t<T>>;
       wire_members<detail::unqualified_t<T>>::value;
+      requires detail::tuple_members_are_native_v<
+          detail::unqualified_t<T>,
+          decltype(wire_members<detail::unqualified_t<T>>::value)>;
     };
 
 template <typename T>
@@ -141,30 +197,42 @@ template <mpi_datatype T>
     return datatype::borrowed(
         detail::native_mpi_handle<value_type>(), failure_communicator);
   } else {
-    alignas(value_type) std::array<std::byte, sizeof(value_type)> sample_storage;
-    auto* sample =
-        std::start_lifetime_as<value_type>(sample_storage.data());
+    auto sample =
+        std::unique_ptr<value_type, detail::aligned_object_delete<value_type>>{
+            static_cast<value_type*>(::operator new(
+                sizeof(value_type), std::align_val_t{alignof(value_type)}))};
     MPI_Aint sample_address = 0;
-    check_or_abort(MPI_Get_address(sample, &sample_address),
+    check_or_abort(MPI_Get_address(sample.get(), &sample_address),
                    failure_communicator,
                    "MPI_Get_address(wire record)");
 
     std::vector<int> block_lengths;
     std::vector<MPI_Aint> offsets;
     std::vector<MPI_Datatype> member_types;
-    boost::hana::for_each(wire_members<value_type>::value, [&](auto member) {
-      using member_type = detail::unqualified_t<decltype(sample->*member)>;
+    constexpr auto member_count = std::tuple_size_v<detail::unqualified_t<
+        decltype(wire_members<value_type>::value)>>;
+    block_lengths.reserve(member_count);
+    offsets.reserve(member_count);
+    member_types.reserve(member_count);
+
+    auto append_member = [&](auto member) {
+      using member_type =
+          detail::unqualified_t<decltype(sample.get()->*member)>;
       static_assert(mpi_native_datatype<member_type>,
                     "wire record members must use native MPI types");
       MPI_Aint member_address = 0;
       check_or_abort(
-          MPI_Get_address(std::addressof(sample->*member), &member_address),
+          MPI_Get_address(std::addressof(sample.get()->*member),
+                          &member_address),
           failure_communicator,
           "MPI_Get_address(wire member)");
       block_lengths.push_back(1);
       offsets.push_back(member_address - sample_address);
       member_types.push_back(detail::native_mpi_handle<member_type>());
-    });
+    };
+    std::apply(
+        [&](auto... members) { (append_member(members), ...); },
+        wire_members<value_type>::value);
 
     MPI_Datatype structure = MPI_DATATYPE_NULL;
     check_or_abort(MPI_Type_create_struct(

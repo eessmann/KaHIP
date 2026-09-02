@@ -3,10 +3,6 @@
   "version-string": "3.24",
   "builtin-baseline": "3f7b5a12ef0a55e7b59339b2b69cac4b56d6dbf9",
   "dependencies": [
-    "fmt",
-    "spdlog",
-    "boost-hana",
-    "boost-mp11",
     "catch2"
   ]
 }

@@ -4,25 +4,14 @@
 #include <optional>
 #include <string_view>
 
-#include <spdlog/spdlog.h>
-
 #include "../app/configuration.h"
 #include "../lib/parallel_mh/parallel_mh_async.h"
 #include "../lib/tools/quality_metrics.h"
 #include "kaHIP_interface.h"
 #include "kaHIP_interface_internal.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace {
-void flush_diagnostics() noexcept {
-  try {
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
-    }
-  } catch (...) {
-    // Diagnostic failures must not replace fail-fast termination.
-  }
-}
-
 [[noreturn]] void abort_kaffpae_boundary(MPI_Comm communicator,
                                          std::exception_ptr failure) noexcept {
   auto active = false;
@@ -51,37 +40,34 @@ void flush_diagnostics() noexcept {
     }
   }
 
+  if (lifecycle_error.has_value()) {
+    kahip::diagnostics::critical(
+        "modified kaffpaE C boundary could not query MPI lifecycle "
+        "(raw code ",
+        *lifecycle_error, ")");
+  }
   try {
-    if (lifecycle_error.has_value()) {
-      spdlog::critical(
-          "modified kaffpaE C boundary could not query MPI lifecycle "
-          "(raw code {})",
-          *lifecycle_error);
-    }
-    try {
-      std::rethrow_exception(failure);
-    } catch (std::exception const& error) {
-      if (rank.has_value()) {
-        spdlog::critical("modified kaffpaE C boundary: {} (rank {})",
-                         error.what(), *rank);
-      } else {
-        spdlog::critical("modified kaffpaE C boundary: {}", error.what());
-      }
-    } catch (...) {
-      if (rank.has_value()) {
-        spdlog::critical(
-            "modified kaffpaE C boundary: unknown unrecoverable exception "
-            "(rank {})",
-            *rank);
-      } else {
-        spdlog::critical(
-            "modified kaffpaE C boundary: unknown unrecoverable exception");
-      }
+    std::rethrow_exception(failure);
+  } catch (std::exception const& error) {
+    if (rank.has_value()) {
+      kahip::diagnostics::critical(
+          "modified kaffpaE C boundary: ", error.what(), " (rank ", *rank,
+          ")");
+    } else {
+      kahip::diagnostics::critical("modified kaffpaE C boundary: ",
+                                   error.what());
     }
   } catch (...) {
-    // Logging must not let an exception escape the C ABI.
+    if (rank.has_value()) {
+      kahip::diagnostics::critical(
+          "modified kaffpaE C boundary: unknown unrecoverable exception "
+          "(rank ",
+          *rank, ")");
+    } else {
+      kahip::diagnostics::critical(
+          "modified kaffpaE C boundary: unknown unrecoverable exception");
+    }
   }
-  flush_diagnostics();
   if (active) {
     static_cast<void>(MPI_Abort(affected, EXIT_FAILURE));
   }

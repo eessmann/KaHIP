@@ -8,11 +8,8 @@
 #include <vector>
 #include <unistd.h>
 
-#include <spdlog/logger.h>
-#include <spdlog/sinks/sink.h>
-#include <spdlog/spdlog.h>
-
 #include "communication/mpi_adapter.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace {
 auto after_finalization = false;
@@ -22,18 +19,19 @@ void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
 }
 
-class observing_sink final : public spdlog::sinks::sink {
- public:
-  void log(spdlog::details::log_msg const& message) override {
-    write_text(std::string_view{message.payload.data(), message.payload.size()});
-    write_text("\n");
-  }
-  void flush() override {
-    diagnostic_was_flushed = 1;
-    write_text("observed synchronous spdlog flush\n");
-  }
-  void set_pattern(std::string const&) override {}
-  void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+void observe_diagnostic(std::string_view message) noexcept {
+  write_text(message);
+  write_text("\n");
+}
+
+void observe_flush() noexcept {
+  diagnostic_was_flushed = 1;
+  write_text("observed synchronous diagnostic flush\n");
+}
+
+constexpr auto observing_sink = kahip::diagnostics::sink{
+    .write = observe_diagnostic,
+    .flush = observe_flush,
 };
 
 [[noreturn]] void forbidden_post_finalize_call(char const* operation) noexcept {
@@ -44,10 +42,10 @@ class observing_sink final : public spdlog::sinks::sink {
 
 [[noreturn]] void observed_abort(int) noexcept {
   if (diagnostic_was_flushed == 0) {
-    write_text("owned handle aborted before spdlog flush\n");
+    write_text("owned handle aborted before diagnostic flush\n");
     std::_Exit(91);
   }
-  write_text("observed owned-handle abort after spdlog flush\n");
+  write_text("observed owned-handle abort after diagnostic flush\n");
   std::_Exit(86);
 }
 }  // namespace
@@ -91,9 +89,8 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "unknown mode: %s\n", argv[1]);
     return 64;
   }
-  spdlog::set_default_logger(
-      std::make_shared<spdlog::logger>("observing",
-                                       std::make_shared<observing_sink>()));
+  static_cast<void>(
+      kahip::diagnostics::exchange_sink_for_testing(&observing_sink));
   if (std::signal(SIGABRT, observed_abort) == SIG_ERR) {
     return 70;
   }

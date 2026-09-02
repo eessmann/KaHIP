@@ -15,7 +15,6 @@ int main(int argc, char* argv[]) {
     // use the same generator seed.
     session.configData().runOrder = Catch::TestRunOrder::Declared;
     session.configData().rngSeed = 1;
-    session.configData().rngSeedWasFixed = true;
     // global setup...
     MPI_Init(&argc, &argv);
 	  MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);

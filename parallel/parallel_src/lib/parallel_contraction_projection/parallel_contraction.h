@@ -12,6 +12,7 @@
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 
@@ -146,45 +147,45 @@ static_assert(std::is_trivially_copyable_v<contraction::ghost_node_weight>);
 
 template <>
 struct parhip::mpi::wire_members<parhip::contraction::label_request> {
-  inline static constexpr auto value = boost::hana::make_tuple(
-      &parhip::contraction::label_request::old_label);
+  inline static constexpr auto value =
+      std::tuple{&parhip::contraction::label_request::old_label};
 };
 
 template <>
 struct parhip::mpi::wire_members<parhip::contraction::label_reply> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &parhip::contraction::label_reply::old_label,
-      &parhip::contraction::label_reply::coarse_global_id);
+      &parhip::contraction::label_reply::coarse_global_id};
 };
 
 template <>
 struct parhip::mpi::wire_members<parhip::contraction::bundled_edge> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &parhip::contraction::bundled_edge::source,
       &parhip::contraction::bundled_edge::target,
       &parhip::contraction::bundled_edge::weight,
-      &parhip::contraction::bundled_edge::sender_sequence);
+      &parhip::contraction::bundled_edge::sender_sequence};
 };
 
 template <>
 struct parhip::mpi::wire_members<
     parhip::contraction::node_weight_contribution> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &parhip::contraction::node_weight_contribution::coarse_global_id,
-      &parhip::contraction::node_weight_contribution::weight);
+      &parhip::contraction::node_weight_contribution::weight};
 };
 
 template <>
 struct parhip::mpi::wire_members<parhip::contraction::ghost_cnode_assignment> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &parhip::contraction::ghost_cnode_assignment::global_id,
-      &parhip::contraction::ghost_cnode_assignment::coarse_global_id);
+      &parhip::contraction::ghost_cnode_assignment::coarse_global_id};
 };
 
 template <>
 struct parhip::mpi::wire_members<parhip::contraction::ghost_node_weight> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &parhip::contraction::ghost_node_weight::global_id,
-      &parhip::contraction::ghost_node_weight::weight);
+      &parhip::contraction::ghost_node_weight::weight};
 };
 #endif /* end of include guard: PARALLEL_CONTRACTION_64O127GD */

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 4.0...4.3)
 project(KaHIPPkgConfigConsumer LANGUAGES C CXX)
 
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 include(CTest)
 
 if(NOT DEFINED KAHIP_64BIT)
@@ -72,8 +74,6 @@ add_test(NAME run-kahip-c-static-consumer COMMAND kahip_c_static_consumer)
 
 if(WITH_PARHIP)
     find_package(MPI 3.1 REQUIRED COMPONENTS C CXX)
-    find_package(fmt CONFIG REQUIRED)
-    find_package(spdlog CONFIG REQUIRED)
     pkg_check_modules(PARHIP REQUIRED IMPORTED_TARGET parhip_interface)
     add_executable(parhip_pkgconfig_consumer parhip_consumer.cpp)
     target_compile_features(parhip_pkgconfig_consumer PRIVATE cxx_std_23)
@@ -146,7 +146,7 @@ if(WITH_PARHIP)
     )
     target_link_libraries(
         parhip_installed_static
-        INTERFACE MPI::MPI_CXX fmt::fmt spdlog::spdlog
+        INTERFACE MPI::MPI_CXX
     )
     if(OpenMP_CXX_FOUND)
         target_link_libraries(

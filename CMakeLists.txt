@@ -80,9 +80,23 @@ option(KAHIP_ENABLE_MPI_TRACE "enable canonical ParHIP MPI stage tracing" OFF)
 # Report which MPI we actually found,
 # may need use MPI_HOME hint to get the proper one (eg, on openSUSE)
 if(NOT NOMPI)
+    add_library(kahip_fatal_diagnostics INTERFACE)
+    target_compile_features(kahip_fatal_diagnostics INTERFACE cxx_std_23)
+    target_sources(
+        kahip_fatal_diagnostics
+        INTERFACE
+            FILE_SET fatal_diagnostics_headers
+            TYPE HEADERS
+            BASE_DIRS "${PROJECT_SOURCE_DIR}/lib"
+            FILES "${PROJECT_SOURCE_DIR}/lib/tools/fatal_diagnostics.h"
+    )
+    target_include_directories(
+        kahip_fatal_diagnostics
+        INTERFACE "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/lib>"
+    )
+
     # Always look for MPI since kaffpaE also requires it
     find_package(MPI 3.1 REQUIRED COMPONENTS C CXX)
-    find_package(spdlog CONFIG REQUIRED)
     include(CheckCXXSourceCompiles)
     include(CMakePushCheckState)
     cmake_push_check_state(RESET)
@@ -326,7 +340,7 @@ if(NOT NOMPI)
     target_link_libraries(
         kahip_collective_obj
         PUBLIC MPI::MPI_CXX
-        PRIVATE spdlog::spdlog
+        PRIVATE kahip_fatal_diagnostics
     )
 endif()
 
@@ -587,7 +601,10 @@ if(NOT NOMPI)
     target_compile_definitions(kaffpaE PRIVATE MODE_KAFFPAE)
     target_link_libraries(
         kaffpaE
-        PRIVATE MPI::MPI_CXX OpenMP::OpenMP_CXX spdlog::spdlog
+        PRIVATE
+            MPI::MPI_CXX
+            OpenMP::OpenMP_CXX
+            kahip_fatal_diagnostics
     )
     target_link_libraries(
         kaffpaE
@@ -788,8 +805,6 @@ endif()
 
 # ParHIP
 if(NOT NOMPI AND PARHIP)
-    find_package(fmt CONFIG REQUIRED)
-    find_package(Boost CONFIG REQUIRED COMPONENTS hana mp11)
     if(BUILD_TESTING)
         find_package(Catch2 3 CONFIG REQUIRED)
     endif()

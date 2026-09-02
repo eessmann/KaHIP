@@ -253,11 +253,6 @@ kahip_add_private_header_set(
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${PARHIP_GRAPH_HEADERS}
 )
-target_link_libraries(
-    parhip_graph_obj
-    PRIVATE fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
-)
-
 set(
     PARHIP_MPI_SOURCE_FILES
     lib/communication/mpi_adapter.cpp
@@ -274,7 +269,7 @@ kahip_add_private_header_set(
 )
 target_link_libraries(
     parhip_mpi_obj
-    PUBLIC fmt::fmt spdlog::spdlog Boost::hana Boost::mp11
+    PRIVATE kahip_fatal_diagnostics
 )
 
 add_library(
@@ -287,7 +282,10 @@ kahip_add_private_header_set(
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${PARHIP_APPLICATION_HEADERS}
 )
-target_link_libraries(parhip_mpi_application_obj PUBLIC spdlog::spdlog)
+target_link_libraries(
+    parhip_mpi_application_obj
+    PRIVATE kahip_fatal_diagnostics
+)
 
 add_library(parhip_core_obj OBJECT ${LIBPARALLEL_SOURCE_FILES})
 kahip_configure_parhip_object(parhip_core_obj)
@@ -302,10 +300,7 @@ target_link_libraries(
         libmodified_kahip_interface
         argtable3
         kahip_version
-        fmt::fmt
-        spdlog::spdlog
-        Boost::hana
-        Boost::mp11
+        kahip_fatal_diagnostics
 )
 
 add_library(parallel STATIC)
@@ -332,11 +327,6 @@ target_link_libraries(parallel PUBLIC libmodified_kahip_interface)
 target_link_libraries(parallel PUBLIC argtable3)
 target_link_libraries(parallel PUBLIC kahip_version)
 target_link_libraries(parallel PUBLIC MPI::MPI_CXX)
-target_link_libraries(
-    parallel
-    PRIVATE spdlog::spdlog
-    PUBLIC fmt::fmt Boost::hana Boost::mp11
-)
 
 add_library(libedgelist STATIC)
 target_link_libraries(
@@ -347,7 +337,7 @@ target_link_libraries(
         kahip_options
         kahip_warnings
 )
-target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3 fmt::fmt)
+target_link_libraries(libedgelist PUBLIC MPI::MPI_CXX argtable3)
 kahip_add_header_root_file_sets(
     libedgelist
     parhip_header_root
@@ -365,14 +355,12 @@ kahip_add_private_header_set(
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${PARHIP_DSPAC_HEADERS}
 )
-target_link_libraries(parhip_dspac_obj PRIVATE fmt::fmt)
-
 add_library(libdspac STATIC)
 target_link_libraries(
     libdspac
     PRIVATE parhip_dspac_obj kahip_options kahip_warnings
 )
-target_link_libraries(libdspac PUBLIC MPI::MPI_CXX fmt::fmt)
+target_link_libraries(libdspac PUBLIC MPI::MPI_CXX)
 kahip_add_header_root_file_sets(
     libdspac
     parhip_header_root

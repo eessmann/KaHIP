@@ -38,6 +38,10 @@ endif()
 
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
+# KaHIP does not use C++ modules. Avoid requiring a separate compiler
+# dependency scanner merely because the project selects C++23.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 add_library(kahip_warnings INTERFACE)
 add_library(kahip_options INTERFACE)
 

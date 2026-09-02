@@ -7,9 +7,11 @@
 #include <array>
 #include <cstddef>
 #include <functional>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <ranges>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
@@ -17,9 +19,6 @@
 #include <vector>
 
 #include <catch2/catch_all.hpp>
-#include <fmt/format.h>
-#include <fmt/ostream.h>
-#include <fmt/ranges.h>
 
 #include "communication/contiguous_owner_layout.h"
 #include "communication/ghost_exchange_plan.h"
@@ -31,6 +30,36 @@
 #include "parallel_contraction_projection/parallel_contraction.h"
 
 using namespace parhip;
+
+namespace {
+template <std::ranges::input_range Range>
+void write_range(std::ostream& output, Range const& values) {
+  output << '[';
+  auto first = true;
+  for (auto const& value : values) {
+    if (!first) {
+      output << ", ";
+    }
+    output << value;
+    first = false;
+  }
+  output << ']';
+}
+
+template <std::ranges::input_range Range>
+void write_nested_range(std::ostream& output, Range const& values) {
+  output << '[';
+  auto first = true;
+  for (auto const& value : values) {
+    if (!first) {
+      output << ", ";
+    }
+    write_range(output, value);
+    first = false;
+  }
+  output << ']';
+}
+}  // namespace
 
 namespace protocol_probe {
 template <typename T, std::size_t Capacity>
@@ -3183,7 +3212,9 @@ TEST_CASE("all to all vector of vectors", "[unit][mpi]") {
 		}
 		auto vec = mpi::all_to_all(v_empty, MPI_COMM_WORLD);
 		MPI_Barrier(MPI_COMM_WORLD);
-		fmt::print("rank: {} -> {}\n", rank, vec);
+		std::cout << "rank: " << rank << " -> ";
+		write_nested_range(std::cout, vec);
+		std::cout << '\n';
 		REQUIRE(v_empty.size() == vec.size());
 	}
 

@@ -80,9 +80,14 @@ inline auto exchange_neighbor_counts(std::span<std::size_t const> send_counts,
   auto const outgoing =
       std::vector<std::uint64_t>(send_counts.begin(), send_counts.end());
   auto incoming = std::vector<std::uint64_t>(indegree);
+  // Some MPI implementations validate the buffers before checking the degree.
+  auto const ignored_send = std::uint64_t{0};
+  auto ignored_receive = std::uint64_t{0};
   check_or_abort(
-      MPI_Neighbor_alltoall(outgoing.data(), 1, MPI_UINT64_T, incoming.data(),
-                            1, MPI_UINT64_T, communicator.native_handle()),
+      MPI_Neighbor_alltoall(
+          outgoing.empty() ? &ignored_send : outgoing.data(), 1, MPI_UINT64_T,
+          incoming.empty() ? &ignored_receive : incoming.data(), 1,
+          MPI_UINT64_T, communicator.native_handle()),
       communicator.native_handle(),
       "MPI_Neighbor_alltoall(exchange neighbor counts)");
 

@@ -157,30 +157,52 @@ git clone https://github.com/KaHIP/KaHIP
 
 ## Compiling KaHIP
 
-KaHIP requires a C++23 compiler and CMake 4.0 or newer. The checked-in vcpkg manifest supplies fmt, spdlog, Boost.Hana, Boost.MP11, and Catch2. MPI remains a system or HPC-environment dependency; MPI 3.1 is the portable minimum for ParHIP, while MPI 4 implementations enable additional collective paths when available.
+KaHIP requires a C++23 compiler and CMake 4.0 or newer. MPI 3.1 is the portable minimum for ParHIP, while MPI 4 implementations enable additional collective paths when available.
 
-Set `VCPKG_ROOT` to your vcpkg checkout and use one of the checked-in configure, build, and strict test presets:
+The supported local development environment uses [devenv](https://devenv.sh/). Its checked-in lockfile supplies CMake 4, Clang, Ninja, pkg-config, Catch2 3, and MPICH without adding those packages to KaHIP's installed link interface. MPICH 4.3.2 is selected through [nixpkgs-multiverse](https://devenv.sh/packages/#installing-a-specific-version), independently of the rolling toolchain input:
 
 ```console
-export VCPKG_ROOT="$HOME/Projects/vcpkg"
-cmake --preset unix-gcc-release
-cmake --build --preset build-unix-gcc-release --parallel 2
-ctest --preset test-unix-gcc-release
+devenv shell
+cmake --fresh --preset unix-clang-release -DNONATIVEOPTIMIZATIONS=ON
+cmake --build --preset build-unix-clang-release --parallel 2
+ctest --preset test-unix-clang-release
 ```
 
-Equivalent Clang debug and release presets are named `unix-clang-debug` and `unix-clang-release`. Build output is placed below `out/build/<preset>` and staged installs below `out/install/<preset>`. `CMakeUserPresets.json.example` shows a local vcpkg override; copy it to the ignored `CMakeUserPresets.json` only when local settings are useful.
+From outside the shell, `devenv tasks run kahip:test` performs the same
+configure, build, and test sequence. Fresh configuration prevents cached MPI
+paths from surviving a development-package update.
 
-The ordinary CMake workflow remains supported for package builds and custom toolchains:
+GCC debug and release presets are named `unix-gcc-debug` and `unix-gcc-release` on systems where GCC is available. Build output is placed below `out/build/<preset>` and staged installs below `out/install/<preset>`. `CMakeUserPresets.json.example` shows optional local Clang aliases; copy it to the ignored `CMakeUserPresets.json` only when those aliases are useful. Run `devenv update` only when intentionally refreshing the locked development packages.
+
+The ordinary CMake workflow remains supported for package builds and custom toolchains. Disable tests when Catch2 3 is not provided by the surrounding environment:
 
 ```console
-cmake -S . -B out/build/release \
+cmake -S . -B out/build/release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+  -DBUILD_TESTING=OFF
 cmake --build out/build/release --parallel 2
-ctest --test-dir out/build/release --output-on-failure
 ```
 
 Set `-DNOMPI=ON -DPARHIP=OFF` for a serial-only build. Tests follow standard CMake/CTest behavior and can be disabled with `-DBUILD_TESTING=OFF`.
+
+On Cirrus, use the installed programming-environment modules and Cray compiler wrappers; do not install a second toolchain. From the KaHIP checkout, the default Cray Clang 19 environment builds with:
+
+```console
+module load cmake/4.1.2
+cmake --preset cirrus-cray-release
+cmake --build --preset build-cirrus-cray-release
+```
+
+For GCC 14, switch the programming environment before configuring:
+
+```console
+module swap PrgEnv-cray PrgEnv-gnu/8.6.0
+module load cmake/4.1.2
+cmake --preset cirrus-gnu-release
+cmake --build --preset build-cirrus-gnu-release
+```
+
+These Cirrus presets use `cc` and `CC`, Cray MPICH, Unix Makefiles, and build entirely below `out/build/`; they disable tests so that no test package must be installed on the cluster. The checked-in vcpkg manifest remains only for the existing CI jobs.
 
 We also provide the option to link against TCMalloc. If you have it installed, configure with `-DUSE_TCMALLOC=ON`.
 

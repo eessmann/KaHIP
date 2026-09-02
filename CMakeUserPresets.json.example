@@ -9,27 +9,24 @@
     {
       "name": "local-common",
       "description": "Settings shared by local workstation configurations",
-      "hidden": true,
-      "environment": {
-        "VCPKG_ROOT": "$env{HOME}/Projects/vcpkg"
-      }
+      "hidden": true
     },
     {
-      "name": "local-gcc-debug",
-      "displayName": "Local GCC Debug",
-      "description": "Build KaHIP locally with GCC in Debug mode",
+      "name": "local-clang-debug",
+      "displayName": "Local Clang Debug",
+      "description": "Build KaHIP locally with the Clang supplied by devenv in Debug mode",
       "inherits": [
         "local-common",
-        "unix-gcc-debug"
+        "unix-clang-debug"
       ]
     },
     {
-      "name": "local-gcc-release",
-      "displayName": "Local GCC Release",
-      "description": "Build KaHIP locally with GCC in Release mode",
+      "name": "local-clang-release",
+      "displayName": "Local Clang Release",
+      "description": "Build KaHIP locally with the Clang supplied by devenv in Release mode",
       "inherits": [
         "local-common",
-        "unix-gcc-release"
+        "unix-clang-release"
       ]
     }
   ],
@@ -41,30 +38,30 @@
       "jobs": 2
     },
     {
-      "name": "build-local-gcc-debug",
-      "description": "Build the local GCC Debug configuration",
+      "name": "build-local-clang-debug",
+      "description": "Build the local Clang Debug configuration",
       "inherits": "build-local-common",
-      "configurePreset": "local-gcc-debug"
+      "configurePreset": "local-clang-debug"
     },
     {
-      "name": "build-local-gcc-release",
-      "description": "Build the local GCC Release configuration",
+      "name": "build-local-clang-release",
+      "description": "Build the local Clang Release configuration",
       "inherits": "build-local-common",
-      "configurePreset": "local-gcc-release"
+      "configurePreset": "local-clang-release"
     }
   ],
   "testPresets": [
     {
-      "name": "test-local-gcc-debug",
-      "displayName": "Local GCC Debug tests (strict)",
+      "name": "test-local-clang-debug",
+      "displayName": "Local Clang Debug tests (strict)",
       "inherits": "test-common",
-      "configurePreset": "local-gcc-debug"
+      "configurePreset": "local-clang-debug"
     },
     {
-      "name": "test-local-gcc-release",
-      "displayName": "Local GCC Release tests (strict)",
+      "name": "test-local-clang-release",
+      "displayName": "Local Clang Release tests (strict)",
       "inherits": "test-common",
-      "configurePreset": "local-gcc-release"
+      "configurePreset": "local-clang-release"
     }
   ]
 }

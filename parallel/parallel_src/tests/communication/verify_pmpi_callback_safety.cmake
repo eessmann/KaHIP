@@ -69,8 +69,8 @@ reject_callback_pattern(
     [=[std::make_unique[ \t\r\n]*<|std::make_shared[ \t\r\n]*<|std::allocate_shared[ \t\r\n]*<]=]
 )
 reject_callback_pattern(
-    "allocation-capable formatting or logging in callback code"
-    [=[(fmt|spdlog)::|std::(format|vformat|to_string|print|println)[ \t\r\n]*\(|std::((basic_)?(ostringstream|stringstream|istringstream|fstream|ofstream|ifstream)|ostream|iostream|cout|cerr|clog)([^A-Za-z0-9_]|$)]=]
+    "allocation-capable formatting or diagnostics in callback code"
+    [=[(fmt|spdlog)::|kahip::diagnostics::critical[ \t\r\n]*\(|std::(format|vformat|to_string|print|println)[ \t\r\n]*\(|std::((basic_)?(ostringstream|stringstream|istringstream|fstream|ofstream|ifstream)|ostream|iostream|cout|cerr|clog)([^A-Za-z0-9_]|$)]=]
 )
 
 if(PROFILE STREQUAL "projection")

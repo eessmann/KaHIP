@@ -17,8 +17,8 @@
       }
     },
     {
-      "name": "vcpkg-common",
-      "description": "General settings for using vcpkg",
+      "name": "ci-vcpkg-common",
+      "description": "CI-only settings for using vcpkg",
       "hidden": true,
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
     },
@@ -26,10 +26,7 @@
       "name": "conf-unix-common",
       "description": "Unix-like settings shared by GCC and Clang",
       "hidden": true,
-      "inherits": [
-        "conf-common",
-        "vcpkg-common"
-      ],
+      "inherits": "conf-common",
       "generator": "Ninja",
       "condition": {
         "type": "inList",
@@ -97,10 +94,47 @@
       }
     },
     {
+      "name": "cirrus-common",
+      "description": "Cirrus settings for the Cray compiler wrappers and system MPI",
+      "hidden": true,
+      "inherits": "conf-common",
+      "generator": "Unix Makefiles",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cc",
+        "CMAKE_CXX_COMPILER": "CC",
+        "NOMPI": "OFF",
+        "PARHIP": "ON",
+        "DETERMINISTIC_PARHIP": "ON",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "cirrus-gnu-release",
+      "displayName": "Cirrus GCC 14 release",
+      "description": "Build ParHIP after switching Cirrus to PrgEnv-gnu/8.6.0",
+      "inherits": "cirrus-common"
+    },
+    {
+      "name": "cirrus-cray-release",
+      "displayName": "Cirrus Cray Clang 19 release",
+      "description": "Build ParHIP in the default Cirrus PrgEnv-cray/8.6.0 environment",
+      "inherits": "cirrus-common"
+    },
+    {
       "name": "ci-serial-gcc",
       "displayName": "CI serial GCC",
       "description": "Reproducible GCC release build without MPI",
-      "inherits": "gcc-common",
+      "inherits": [
+        "gcc-common",
+        "ci-vcpkg-common"
+      ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "NOMPI": "ON",
@@ -121,7 +155,10 @@
       "name": "ci-serial-clang",
       "displayName": "CI serial Clang",
       "description": "Reproducible Clang release build without MPI",
-      "inherits": "clang-common",
+      "inherits": [
+        "clang-common",
+        "ci-vcpkg-common"
+      ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "NOMPI": "ON",
@@ -133,7 +170,10 @@
       "name": "ci-mpi-gcc",
       "displayName": "CI MPI GCC",
       "description": "Deterministic ParHIP release build with GCC",
-      "inherits": "gcc-common",
+      "inherits": [
+        "gcc-common",
+        "ci-vcpkg-common"
+      ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "NOMPI": "OFF",
@@ -147,7 +187,10 @@
       "name": "ci-mpi-clang",
       "displayName": "CI MPI Clang",
       "description": "Deterministic ParHIP release build with Clang",
-      "inherits": "clang-common",
+      "inherits": [
+        "clang-common",
+        "ci-vcpkg-common"
+      ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "NOMPI": "OFF",
@@ -161,7 +204,10 @@
       "name": "ci-sanitizer-clang",
       "displayName": "CI Clang ASan and UBSan",
       "description": "Debug serial build with address and undefined-behaviour sanitizers",
-      "inherits": "clang-common",
+      "inherits": [
+        "clang-common",
+        "ci-vcpkg-common"
+      ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "NOMPI": "ON",
@@ -182,7 +228,7 @@
       "description": "Reproducible MSVC release build without MPI",
       "inherits": [
         "conf-common",
-        "vcpkg-common"
+        "ci-vcpkg-common"
       ],
       "generator": "Ninja",
       "condition": {
@@ -219,6 +265,18 @@
       "name": "build-unix-clang-release",
       "description": "Build the Clang Release configuration",
       "configurePreset": "unix-clang-release"
+    },
+    {
+      "name": "build-cirrus-gnu-release",
+      "description": "Build the Cirrus GCC 14 configuration with at most two jobs",
+      "configurePreset": "cirrus-gnu-release",
+      "jobs": 2
+    },
+    {
+      "name": "build-cirrus-cray-release",
+      "description": "Build the Cirrus Cray Clang 19 configuration with at most two jobs",
+      "configurePreset": "cirrus-cray-release",
+      "jobs": 2
     },
     {
       "name": "build-ci-serial-gcc",

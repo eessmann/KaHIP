@@ -25,7 +25,7 @@ set(parhip_cmake "${KAHIP_SOURCE_DIR}/parallel/parallel_src/CMakeLists.txt")
 require_source_pattern(
     "${root_cmake}"
     "cmake_minimum_required\\(VERSION 4\\.0\\.\\.\\.4\\.3\\)"
-    "KaHIP must require the tested CMake 4 policy range"
+    "KaHIP must require the tested CMake 4.0 policy range"
 )
 foreach(
     object_target

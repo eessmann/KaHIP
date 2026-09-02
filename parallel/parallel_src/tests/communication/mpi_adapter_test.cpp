@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
@@ -45,21 +46,31 @@ struct non_default_wire_entry {
 
   auto operator==(non_default_wire_entry const&) const -> bool = default;
 };
+
+struct unsupported_wire_entry {
+  std::array<int, 2> values;
+};
 }  // namespace test_support
 
 template <>
 struct parhip::mpi::wire_members<test_support::wire_entry> {
-  inline static constexpr auto value =
-      boost::hana::make_tuple(&test_support::wire_entry::id,
-                              &test_support::wire_entry::owner,
-                              &test_support::wire_entry::weight);
+  inline static constexpr auto value = std::tuple{
+      &test_support::wire_entry::id,
+      &test_support::wire_entry::owner,
+      &test_support::wire_entry::weight};
 };
 
 template <>
 struct parhip::mpi::wire_members<test_support::non_default_wire_entry> {
+  inline static constexpr auto value = std::tuple{
+      &test_support::non_default_wire_entry::id,
+      &test_support::non_default_wire_entry::owner};
+};
+
+template <>
+struct parhip::mpi::wire_members<test_support::unsupported_wire_entry> {
   inline static constexpr auto value =
-      boost::hana::make_tuple(&test_support::non_default_wire_entry::id,
-                              &test_support::non_default_wire_entry::owner);
+      std::tuple{&test_support::unsupported_wire_entry::values};
 };
 
 namespace semantic_error_protocol_probe {
@@ -544,7 +555,7 @@ TEST_CASE("capacity issues have stable bits diagnostics and fatal priority",
   STATIC_REQUIRE(capacity_route_for(fallback) == capacity_route::bounded);
   STATIC_REQUIRE_FALSE(capacity_route_for(mixed).has_value());
   STATIC_REQUIRE(noexcept(resolve_capacity_collectively(
-      capacity_result{}, MPI_COMM_WORLD, MPI_COMM_WORLD, "capacity test")));
+      capacity_result{}, MPI_COMM_WORLD, MPI_COMM_WORLD, std::string_view{})));
 }
 
 TEST_CASE("capacity resolver performs one BOR and agrees direct or bounded",
@@ -719,7 +730,42 @@ TEST_CASE("contiguous ownership uses exact integer boundaries",
   }
 }
 
-TEST_CASE("native MPI types use the closed MP11 mapping", "[unit][mpi]") {
+TEST_CASE("native MPI types use the closed tuple mapping", "[unit][mpi]") {
+  using native_types = parhip::mpi::detail::native_mpi_types;
+  STATIC_REQUIRE(
+      parhip::mpi::detail::tuple_contains_v<int, native_types>);
+  STATIC_REQUIRE_FALSE(
+      parhip::mpi::detail::tuple_contains_v<std::string, native_types>);
+  STATIC_REQUIRE(parhip::mpi::detail::tuple_index_v<char, native_types> == 0);
+  STATIC_REQUIRE(parhip::mpi::detail::tuple_index_v<int, native_types> == 6);
+  STATIC_REQUIRE(
+      parhip::mpi::detail::tuple_index_v<double, native_types> == 13);
+  STATIC_REQUIRE(
+      std::tuple_size_v<native_types> ==
+      std::tuple_size_v<std::remove_cvref_t<
+          decltype(parhip::mpi::detail::native_mpi_handles)>>);
+
+  REQUIRE(parhip::mpi::detail::native_mpi_handles ==
+          std::array{MPI_CHAR,
+                     MPI_WCHAR,
+                     MPI_SIGNED_CHAR,
+                     MPI_UNSIGNED_CHAR,
+                     MPI_SHORT,
+                     MPI_UNSIGNED_SHORT,
+                     MPI_INT,
+                     MPI_UNSIGNED,
+                     MPI_LONG,
+                     MPI_UNSIGNED_LONG,
+                     MPI_LONG_LONG_INT,
+                     MPI_UNSIGNED_LONG_LONG,
+                     MPI_FLOAT,
+                     MPI_DOUBLE,
+                     MPI_LONG_DOUBLE,
+                     MPI_CXX_BOOL,
+                     MPI_CXX_FLOAT_COMPLEX,
+                     MPI_CXX_DOUBLE_COMPLEX,
+                     MPI_CXX_LONG_DOUBLE_COMPLEX});
+
   STATIC_REQUIRE(parhip::mpi::mpi_native_datatype<int>);
   STATIC_REQUIRE(parhip::mpi::mpi_native_datatype<std::uint64_t>);
   STATIC_REQUIRE(parhip::mpi::mpi_native_datatype<double>);
@@ -730,6 +776,18 @@ TEST_CASE("native MPI types use the closed MP11 mapping", "[unit][mpi]") {
           MPI_UNSIGNED_LONG);
   REQUIRE(make_mpi_datatype<double>().native_handle() == MPI_DOUBLE);
   REQUIRE_FALSE(make_mpi_datatype<int>().owns_handle());
+}
+
+TEST_CASE("wire metadata rejects members without native MPI handles",
+          "[unit][mpi]") {
+  STATIC_REQUIRE(
+      std::is_standard_layout_v<test_support::unsupported_wire_entry>);
+  STATIC_REQUIRE(
+      std::is_trivially_copyable_v<test_support::unsupported_wire_entry>);
+  STATIC_REQUIRE_FALSE(
+      parhip::mpi::mpi_wire_datatype<test_support::unsupported_wire_entry>);
+  STATIC_REQUIRE_FALSE(
+      parhip::mpi::mpi_datatype<test_support::unsupported_wire_entry>);
 }
 
 TEST_CASE("communicator and topology ownership stays scoped", "[unit][mpi]") {
@@ -787,11 +845,20 @@ TEST_CASE("exported partition boundary is non-throwing", "[unit][mpi]") {
       std::is_same_v<decltype(&ParHIPPartitionKWay), partition_function*>);
 }
 
-TEST_CASE("explicit Hana wire metadata produces array-safe extent",
+TEST_CASE("explicit tuple wire metadata preserves order and array-safe extent",
           "[unit][mpi]") {
   STATIC_REQUIRE(parhip::mpi::mpi_wire_datatype<test_support::wire_entry>);
   STATIC_REQUIRE(std::is_standard_layout_v<test_support::wire_entry>);
   STATIC_REQUIRE(std::is_trivially_copyable_v<test_support::wire_entry>);
+  STATIC_REQUIRE(
+      std::get<0>(parhip::mpi::wire_members<test_support::wire_entry>::value) ==
+      &test_support::wire_entry::id);
+  STATIC_REQUIRE(
+      std::get<1>(parhip::mpi::wire_members<test_support::wire_entry>::value) ==
+      &test_support::wire_entry::owner);
+  STATIC_REQUIRE(
+      std::get<2>(parhip::mpi::wire_members<test_support::wire_entry>::value) ==
+      &test_support::wire_entry::weight);
 
   auto datatype = make_mpi_datatype<test_support::wire_entry>();
   REQUIRE(datatype.owns_handle());
@@ -805,6 +872,8 @@ TEST_CASE("explicit Hana wire metadata produces array-safe extent",
 }
 
 TEST_CASE("wire-record exchange needs no default constructor", "[unit][mpi]") {
+  STATIC_REQUIRE(parhip::mpi::detail::is_implicit_lifetime_v<
+                 test_support::non_default_wire_entry>);
   STATIC_REQUIRE(
       parhip::mpi::mpi_wire_datatype<test_support::non_default_wire_entry>);
   STATIC_REQUIRE(

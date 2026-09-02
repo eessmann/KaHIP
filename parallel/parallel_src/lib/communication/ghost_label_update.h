@@ -1,7 +1,6 @@
 #pragma once
 
-#include <boost/hana/tuple.hpp>
-
+#include <tuple>
 #include <type_traits>
 
 #include "communication/mpi_types.h"
@@ -21,7 +20,7 @@ static_assert(std::is_trivially_copyable_v<ghost_label_update>);
 
 template <>
 struct parhip::mpi::wire_members<parhip::ghost_label_update> {
-  inline static constexpr auto value =
-      boost::hana::make_tuple(&parhip::ghost_label_update::global_id,
-                              &parhip::ghost_label_update::label);
+  inline static constexpr auto value = std::tuple{
+      &parhip::ghost_label_update::global_id,
+      &parhip::ghost_label_update::label};
 };

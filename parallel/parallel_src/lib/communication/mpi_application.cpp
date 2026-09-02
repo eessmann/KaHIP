@@ -3,40 +3,23 @@
 #include <cstdlib>
 #include <string_view>
 
-#include <spdlog/spdlog.h>
+#include "tools/fatal_diagnostics.h"
 
 namespace parhip::mpi {
 namespace {
-void flush_diagnostics() noexcept {
-  try {
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
-    }
-  } catch (...) {
-    // Failure logging must not replace fail-fast termination.
-  }
-}
-
 [[noreturn]] void abort_on_unusable_runtime(int error_code,
                                             std::string_view boundary,
                                             std::string_view operation,
                                             int rank) noexcept {
-  try {
-    if (rank >= 0) {
-      spdlog::critical(
-          "MPI lifecycle failure: {}: {} returned raw error {} on rank {}",
-          boundary, operation, error_code, rank);
-    } else {
-      spdlog::critical(
-          "MPI lifecycle failure: {}: {} returned raw error {} (rank "
-          "unavailable)",
-          boundary, operation, error_code);
-    }
-  } catch (...) {
-    // The MPI runtime is unavailable or has an indeterminate state. Logging
-    // must not trigger another MPI call or replace process termination.
+  if (rank >= 0) {
+    kahip::diagnostics::critical(
+        "MPI lifecycle failure: ", boundary, ": ", operation,
+        " returned raw error ", error_code, " on rank ", rank);
+  } else {
+    kahip::diagnostics::critical(
+        "MPI lifecycle failure: ", boundary, ": ", operation,
+        " returned raw error ", error_code, " (rank unavailable)");
   }
-  flush_diagnostics();
   std::abort();
 }
 }  // namespace

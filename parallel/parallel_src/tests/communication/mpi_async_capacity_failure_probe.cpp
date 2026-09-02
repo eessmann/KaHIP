@@ -1,7 +1,5 @@
 #include <mpi.h>
 
-#include <boost/hana/tuple.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -11,6 +9,7 @@
 #include <limits>
 #include <new>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -30,13 +29,13 @@ struct byte_wire_record final {
 template <>
 struct parhip::mpi::wire_members<async_capacity_probe::wire_record> {
   inline static constexpr auto value =
-      boost::hana::make_tuple(&async_capacity_probe::wire_record::value);
+      std::tuple{&async_capacity_probe::wire_record::value};
 };
 
 template <>
 struct parhip::mpi::wire_members<async_capacity_probe::byte_wire_record> {
   inline static constexpr auto value =
-      boost::hana::make_tuple(&async_capacity_probe::byte_wire_record::value);
+      std::tuple{&async_capacity_probe::byte_wire_record::value};
 };
 
 static_assert(std::is_standard_layout_v<async_capacity_probe::wire_record>);

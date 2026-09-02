@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <numeric>
 #include <ranges>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -49,18 +50,18 @@ static_assert(sizeof(complete_graph_edge_record) == 2 * sizeof(std::uint64_t));
 namespace mpi {
 template <>
 struct wire_members<mpi_tools_detail::complete_graph_node_record> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &mpi_tools_detail::complete_graph_node_record::global_id,
       &mpi_tools_detail::complete_graph_node_record::second_partition,
       &mpi_tools_detail::complete_graph_node_record::weight,
-      &mpi_tools_detail::complete_graph_node_record::degree);
+      &mpi_tools_detail::complete_graph_node_record::degree};
 };
 
 template <>
 struct wire_members<mpi_tools_detail::complete_graph_edge_record> {
-  inline static constexpr auto value = boost::hana::make_tuple(
+  inline static constexpr auto value = std::tuple{
       &mpi_tools_detail::complete_graph_edge_record::target_global_id,
-      &mpi_tools_detail::complete_graph_edge_record::weight);
+      &mpi_tools_detail::complete_graph_edge_record::weight};
 };
 }  // namespace mpi
 

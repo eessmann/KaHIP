@@ -4,38 +4,23 @@
 #include <exception>
 #include <string_view>
 
-#include <spdlog/spdlog.h>
+#include "tools/fatal_diagnostics.h"
 
 namespace kahip::mpi {
 namespace {
-void flush_diagnostics() noexcept {
-  try {
-    if (auto* logger = spdlog::default_logger_raw(); logger != nullptr) {
-      logger->flush();
-    }
-  } catch (...) {
-    // Diagnostics must not replace fail-fast termination.
-  }
-}
-
 [[noreturn]] void abort_without_mpi(int error_code,
                                     std::string_view boundary,
                                     std::string_view operation,
                                     int rank) noexcept {
-  try {
-    if (rank >= 0) {
-      spdlog::critical(
-          "MPI lifecycle failure: {}: {} returned raw error {} on rank {}",
-          boundary, operation, error_code, rank);
-    } else {
-      spdlog::critical(
-          "MPI lifecycle failure: {}: {} returned raw error {} (rank "
-          "unavailable)",
-          boundary, operation, error_code);
-    }
-  } catch (...) {
+  if (rank >= 0) {
+    kahip::diagnostics::critical(
+        "MPI lifecycle failure: ", boundary, ": ", operation,
+        " returned raw error ", error_code, " on rank ", rank);
+  } else {
+    kahip::diagnostics::critical(
+        "MPI lifecycle failure: ", boundary, ": ", operation,
+        " returned raw error ", error_code, " (rank unavailable)");
   }
-  flush_diagnostics();
   std::abort();
 }
 
@@ -44,20 +29,15 @@ void flush_diagnostics() noexcept {
                                 std::string_view boundary,
                                 std::string_view operation,
                                 int rank) noexcept {
-  try {
-    if (rank >= 0) {
-      spdlog::critical(
-          "MPI backend failure: {}: {} returned raw error {} on rank {}",
-          boundary, operation, error_code, rank);
-    } else {
-      spdlog::critical(
-          "MPI backend failure: {}: {} returned raw error {} (rank "
-          "unavailable)",
-          boundary, operation, error_code);
-    }
-  } catch (...) {
+  if (rank >= 0) {
+    kahip::diagnostics::critical(
+        "MPI backend failure: ", boundary, ": ", operation,
+        " returned raw error ", error_code, " on rank ", rank);
+  } else {
+    kahip::diagnostics::critical(
+        "MPI backend failure: ", boundary, ": ", operation,
+        " returned raw error ", error_code, " (rank unavailable)");
   }
-  flush_diagnostics();
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
   std::abort();
 }
@@ -138,11 +118,8 @@ void application_runtime::free_operation_communicator(
       diagnostic = "non-standard operation exception";
     }
   }
-  try {
-    spdlog::critical("{}: {} (rank {})", boundary_, diagnostic, rank_);
-  } catch (...) {
-  }
-  flush_diagnostics();
+  kahip::diagnostics::critical(boundary_, ": ", diagnostic, " (rank ", rank_,
+                               ")");
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
   std::abort();
 }

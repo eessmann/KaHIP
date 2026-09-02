@@ -6,17 +6,12 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <memory>
 #include <new>
-#include <string>
 #include <string_view>
 #include <unistd.h>
 
-#include <spdlog/logger.h>
-#include <spdlog/sinks/sink.h>
-#include <spdlog/spdlog.h>
-
 #include "kaHIP_interface.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace {
 std::atomic_bool fail_next_allocation = false;
@@ -26,20 +21,19 @@ void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
 }
 
-class observing_sink final : public spdlog::sinks::sink {
- public:
-  void log(spdlog::details::log_msg const& message) override {
-    write_text(std::string_view{message.payload.data(), message.payload.size()});
-    write_text("\n");
-  }
+void observe_diagnostic(std::string_view message) noexcept {
+  write_text(message);
+  write_text("\n");
+}
 
-  void flush() override {
-    diagnostic_was_flushed = 1;
-    write_text("observed synchronous spdlog flush\n");
-  }
+void observe_flush() noexcept {
+  diagnostic_was_flushed = 1;
+  write_text("observed synchronous diagnostic flush\n");
+}
 
-  void set_pattern(std::string const&) override {}
-  void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+constexpr auto observing_sink = kahip::diagnostics::sink{
+    .write = observe_diagnostic,
+    .flush = observe_flush,
 };
 }  // namespace
 
@@ -61,7 +55,7 @@ void operator delete(void* storage, std::size_t) noexcept {
 
 extern "C" int MPI_Abort(MPI_Comm communicator, int) {
   if (diagnostic_was_flushed == 0) {
-    write_text("kaffpaE boundary aborted before spdlog flush\n");
+    write_text("kaffpaE boundary aborted before diagnostic flush\n");
     std::_Exit(91);
   }
   auto comparison = int{MPI_UNEQUAL};
@@ -72,7 +66,7 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int) {
     write_text("kaffpaE boundary aborted the wrong communicator\n");
     std::_Exit(92);
   }
-  write_text("observed kaffpaE communicator abort after spdlog flush\n");
+  write_text("observed kaffpaE communicator abort after diagnostic flush\n");
   std::_Exit(86);
 }
 
@@ -86,9 +80,8 @@ int main(int argc, char** argv) {
     return 70;
   }
 
-  spdlog::set_default_logger(
-      std::make_shared<spdlog::logger>("observing",
-                                       std::make_shared<observing_sink>()));
+  static_cast<void>(
+      kahip::diagnostics::exchange_sink_for_testing(&observing_sink));
 
   auto n = 1;
   auto xadj = std::array{0, 0};

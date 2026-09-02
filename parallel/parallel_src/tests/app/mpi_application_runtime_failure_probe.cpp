@@ -3,18 +3,13 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
-#include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unistd.h>
 
-#include <spdlog/logger.h>
-#include <spdlog/sinks/sink.h>
-#include <spdlog/spdlog.h>
-
 #include "communication/mpi_application.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace {
 enum class failure_mode {
@@ -33,28 +28,27 @@ void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
 }
 
-class observing_sink final : public spdlog::sinks::sink {
- public:
-  void log(spdlog::details::log_msg const& message) override {
-    write_text(std::string_view{message.payload.data(), message.payload.size()});
-    write_text("\n");
-  }
+void observe_diagnostic(std::string_view message) noexcept {
+  write_text(message);
+  write_text("\n");
+}
 
-  void flush() override {
-    diagnostic_was_flushed = 1;
-    write_text("observed synchronous spdlog flush\n");
-  }
+void observe_flush() noexcept {
+  diagnostic_was_flushed = 1;
+  write_text("observed synchronous diagnostic flush\n");
+}
 
-  void set_pattern(std::string const&) override {}
-  void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+constexpr auto observing_sink = kahip::diagnostics::sink{
+    .write = observe_diagnostic,
+    .flush = observe_flush,
 };
 
 [[noreturn]] void observed_process_abort(int) noexcept {
   if (diagnostic_was_flushed == 0) {
-    write_text("process aborted before spdlog flush\n");
+    write_text("process aborted before diagnostic flush\n");
     std::_Exit(91);
   }
-  write_text("observed process abort after spdlog flush\n");
+  write_text("observed process abort after diagnostic flush\n");
   std::_Exit(86);
 }
 }  // namespace
@@ -80,7 +74,7 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int) {
     std::_Exit(92);
   }
   if (diagnostic_was_flushed == 0) {
-    write_text("MPI_Abort occurred before spdlog flush\n");
+    write_text("MPI_Abort occurred before diagnostic flush\n");
     std::_Exit(91);
   }
 
@@ -92,7 +86,8 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int) {
     write_text("MPI_Abort did not target the operation communicator\n");
     std::_Exit(93);
   }
-  write_text("observed operation communicator MPI_Abort after spdlog flush\n");
+  write_text(
+      "observed operation communicator MPI_Abort after diagnostic flush\n");
   std::_Exit(86);
 }
 
@@ -116,9 +111,8 @@ int main(int argc, char** argv) {
     return 64;
   }
 
-  spdlog::set_default_logger(
-      std::make_shared<spdlog::logger>("observing",
-                                       std::make_shared<observing_sink>()));
+  static_cast<void>(
+      kahip::diagnostics::exchange_sink_for_testing(&observing_sink));
   if (std::signal(SIGABRT, observed_process_abort) == SIG_ERR) {
     std::fputs("could not install SIGABRT handler\n", stderr);
     return 70;

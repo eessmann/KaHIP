@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -21,9 +22,9 @@ struct wire_entry {
 
 template <>
 struct parhip::mpi::wire_members<async_failure_support::wire_entry> {
-  inline static constexpr auto value =
-      boost::hana::make_tuple(&async_failure_support::wire_entry::value,
-                              &async_failure_support::wire_entry::rank);
+  inline static constexpr auto value = std::tuple{
+      &async_failure_support::wire_entry::value,
+      &async_failure_support::wire_entry::rank};
 };
 
 namespace {

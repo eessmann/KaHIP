@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 4.0...4.3)
 project(parhip_example LANGUAGES CXX)
 
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(
     parhip

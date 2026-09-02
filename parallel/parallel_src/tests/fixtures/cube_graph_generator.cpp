@@ -6,8 +6,6 @@
 #include <string_view>
 #include <system_error>
 
-#include <fmt/base.h>
-
 #include "fixtures/cube_graph.h"
 
 namespace {
@@ -21,8 +19,9 @@ namespace {
 
 int main(int argc, char* argv[]) {
   if (argc != 5) {
-    fmt::println(stderr, "usage: {} NX NY NZ OUTPUT.graph",
-                 argc > 0 ? argv[0] : "kahip_cube_generator");
+    std::cerr << "usage: "
+              << (argc > 0 ? argv[0] : "kahip_cube_generator")
+              << " NX NY NZ OUTPUT.graph\n";
     return 64;
   }
 
@@ -30,7 +29,7 @@ int main(int argc, char* argv[]) {
   if (!parse_dimension(argv[1], dimensions.nx) ||
       !parse_dimension(argv[2], dimensions.ny) ||
       !parse_dimension(argv[3], dimensions.nz)) {
-    fmt::println(stderr, "cube dimensions must be unsigned integers");
+    std::cerr << "cube dimensions must be unsigned integers\n";
     return 64;
   }
 
@@ -38,14 +37,15 @@ int main(int argc, char* argv[]) {
     auto const graph = parhip::testing::cube_graph{dimensions};
     auto output = std::ofstream{argv[4], std::ios::out | std::ios::trunc};
     if (!output) {
-      fmt::println(stderr, "cannot open cube graph output '{}'", argv[4]);
+      std::cerr << "cannot open cube graph output '" << argv[4] << "'\n";
       return 1;
     }
     graph.write_metis(output);
-    fmt::println("generated {} vertices and {} undirected edges in {}",
-                 graph.vertex_count(), graph.undirected_edge_count(), argv[4]);
+    std::cout << "generated " << graph.vertex_count() << " vertices and "
+              << graph.undirected_edge_count() << " undirected edges in "
+              << argv[4] << '\n';
   } catch (std::exception const& error) {
-    fmt::println(stderr, "cannot generate cube graph: {}", error.what());
+    std::cerr << "cannot generate cube graph: " << error.what() << '\n';
     return 1;
   }
 }
