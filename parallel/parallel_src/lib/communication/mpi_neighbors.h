@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "communication/mpi_collectives.h"
+#include "kahip_mpi_capabilities.h"
 
 namespace parhip::mpi {
 class distributed_graph {

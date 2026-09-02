@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "communication/mpi_neighbors.h"
+#include "kahip_mpi_capabilities.h"
 
 namespace parhip::mpi {
 enum class persistence_policy : std::uint8_t {

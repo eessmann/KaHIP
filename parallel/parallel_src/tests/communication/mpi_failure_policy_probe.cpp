@@ -1,4 +1,6 @@
 #include <mpi.h>
+#include <limits.h>
+#include <unistd.h>
 
 #include <array>
 #include <cstddef>
@@ -14,6 +16,7 @@
 #include <vector>
 
 #include "communication/mpi_adapter.h"
+#include "kahip_mpi_capabilities.h"
 
 namespace failure_probe {
 struct dense_wire_record final {
@@ -167,7 +170,42 @@ void record_forbidden_datatype_attempt(char const* operation) noexcept {
   std::fprintf(stderr, "returned-from-failure: %s\n", mode);
   std::_Exit(2);
 }
+
+void write_abort_observation(std::string_view affected) noexcept {
+  constexpr auto buffer_capacity = std::size_t{512};
+  static_assert(buffer_capacity <= PIPE_BUF);
+  auto buffer = std::array<char, buffer_capacity>{};
+  auto const length = std::snprintf(
+      buffer.data(), buffer.size(),
+      "observed MPI_Abort rank=%d affected=%.*s "
+      "error-string-attempts=%d cleanup-attempts=%d "
+      "capacity-allreduce-attempts=%d "
+      "dense-count-exchange-attempts=%d "
+      "dense-payload-attempts=%d dense-datatype-attempts=%d "
+      "graph-semantic-validation-attempts=%d "
+      "graph-create-attempts=%d "
+      "neighbor-count-exchange-attempts=%d "
+      "neighbor-payload-attempts=%d "
+      "neighbor-datatype-attempts=%d "
+      "neighbor-phase-round-attempts=%d "
+      "neighbor-capacity-after-injection-attempts=%d\n",
+      cached_rank, static_cast<int>(affected.size()), affected.data(),
+      error_string_attempts, cleanup_attempts, capacity_allreduce_attempts,
+      dense_count_exchange_attempts, dense_payload_attempts,
+      dense_datatype_attempts, graph_semantic_validation_attempts,
+      graph_create_attempts, neighbor_count_exchange_attempts,
+      neighbor_payload_attempts, neighbor_datatype_attempts,
+      neighbor_phase_round_attempts,
+      neighbor_capacity_after_injection_attempts);
+  if (length < 0 || static_cast<std::size_t>(length) >= buffer.size() ||
+      ::write(STDERR_FILENO, buffer.data(), static_cast<std::size_t>(length)) !=
+          length) {
+    std::_Exit(89);
+  }
+}
 }  // namespace
+
+static_assert(noexcept(write_abort_observation({})));
 
 extern "C" int MPI_Error_string(int error_code,
                                 char* error_text,
@@ -239,27 +277,10 @@ extern "C" int MPI_Abort(MPI_Comm communicator, int error_code) {
   }
   if (injection_is_armed) {
     auto const affected = affected_name(communicator);
-    std::fprintf(stderr,
-                 "observed MPI_Abort rank=%d affected=%.*s "
-                 "error-string-attempts=%d cleanup-attempts=%d "
-                 "capacity-allreduce-attempts=%d "
-                 "dense-count-exchange-attempts=%d "
-                 "dense-payload-attempts=%d dense-datatype-attempts=%d "
-                 "graph-semantic-validation-attempts=%d "
-                 "graph-create-attempts=%d "
-                 "neighbor-count-exchange-attempts=%d "
-                 "neighbor-payload-attempts=%d "
-                 "neighbor-datatype-attempts=%d "
-                 "neighbor-phase-round-attempts=%d "
-                 "neighbor-capacity-after-injection-attempts=%d\n",
-                 cached_rank, static_cast<int>(affected.size()),
-                 affected.data(), error_string_attempts, cleanup_attempts,
-                 capacity_allreduce_attempts, dense_count_exchange_attempts,
-                 dense_payload_attempts, dense_datatype_attempts,
-                 graph_semantic_validation_attempts, graph_create_attempts,
-                 neighbor_count_exchange_attempts, neighbor_payload_attempts,
-                 neighbor_datatype_attempts, neighbor_phase_round_attempts,
-                 neighbor_capacity_after_injection_attempts);
+    if (std::fflush(stderr) != 0) {
+      std::_Exit(89);
+    }
+    write_abort_observation(affected);
     std::_Exit(86);
   }
   return PMPI_Abort(communicator, error_code);
