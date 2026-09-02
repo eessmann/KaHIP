@@ -10,6 +10,7 @@
 
 #include "data_structure/parallel_graph_access.h"
 #include "definitions.h"
+#include "kahip_mpi_capabilities.h"
 #include "partition_config.h"
 #include "tools/distributed_quality_metrics.h"
 
