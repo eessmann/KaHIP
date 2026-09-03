@@ -294,7 +294,7 @@ TEST_CASE("serial-kernel profile detects checked byte arithmetic overflow",
         profile_reason::byte_count_overflow);
 }
 
-TEST_CASE("serial-kernel profile retains every derived byte total at its boundary",
+TEST_CASE("serial-kernel profile accounts every byte stage at its boundary",
           "[serial-kernel][profile]") {
   auto const input = profile_input{
       .global_nodes = 3,
@@ -306,33 +306,77 @@ TEST_CASE("serial-kernel profile retains every derived byte total at its boundar
       .block_count = 2,
       .absolute_bound = 2,
   };
-  auto const profile = kahip::serial_kernel::make_profile(input);
-  REQUIRE(profile.safe());
+  using kahip::serial_kernel::byte_accounting_stage;
+  auto const accounting = kahip::serial_kernel::account_profile_bytes(input);
+  REQUIRE(accounting.safe());
   struct byte_total_case final {
-    std::uint64_t kahip::serial_kernel::serial_kernel_profile::*member;
+    std::uint64_t kahip::serial_kernel::profile_byte_accounting::*member;
+    std::uint64_t profile_limits::*limit;
+    byte_accounting_stage rejection_stage;
     std::uint64_t exact;
   };
-  auto const totals = std::array<byte_total_case, 6>{
-      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::wire_record_bytes,
-                      160},
-      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::csr_bytes,
-                      60},
-      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::serial_input_bytes,
-                      72},
-      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::complete_graph_bytes,
-                      192},
-      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::structural_validation_bytes,
-                      96},
-      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::base_memory_bytes,
-                      448},
+  auto const totals = std::array<byte_total_case, 15>{
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::node_wire_bytes,
+                      &profile_limits::node_wire_byte_limit,
+                      byte_accounting_stage::node_wire, 96},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::edge_wire_bytes,
+                      &profile_limits::edge_wire_byte_limit,
+                      byte_accounting_stage::edge_wire, 64},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::wire_record_bytes,
+                      &profile_limits::wire_record_byte_limit,
+                      byte_accounting_stage::wire_record, 160},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::xadj_bytes,
+                      &profile_limits::xadj_byte_limit,
+                      byte_accounting_stage::xadj, 16},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::adjacency_bytes,
+                      &profile_limits::adjacency_byte_limit,
+                      byte_accounting_stage::adjacency, 16},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::node_weight_bytes,
+                      &profile_limits::node_weight_byte_limit,
+                      byte_accounting_stage::node_weight, 12},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::edge_weight_bytes,
+                      &profile_limits::edge_weight_byte_limit,
+                      byte_accounting_stage::edge_weight, 16},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::csr_bytes,
+                      &profile_limits::csr_byte_limit,
+                      byte_accounting_stage::csr, 60},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::partition_bytes,
+                      &profile_limits::partition_byte_limit,
+                      byte_accounting_stage::partition, 12},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::serial_input_bytes,
+                      &profile_limits::serial_input_byte_limit,
+                      byte_accounting_stage::serial_input, 72},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::complete_node_bytes,
+                      &profile_limits::complete_node_byte_limit,
+                      byte_accounting_stage::complete_node, 32},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::complete_node_data_bytes,
+                      &profile_limits::complete_node_data_byte_limit,
+                      byte_accounting_stage::complete_node_data, 96},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::complete_edge_bytes,
+                      &profile_limits::complete_edge_byte_limit,
+                      byte_accounting_stage::complete_edge, 64},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::complete_graph_bytes,
+                      &profile_limits::complete_graph_byte_limit,
+                      byte_accounting_stage::complete_graph, 192},
+      byte_total_case{&kahip::serial_kernel::profile_byte_accounting::structural_validation_bytes,
+                      &profile_limits::structural_validation_byte_limit,
+                      byte_accounting_stage::structural_validation, 96},
   };
   for (auto const& test : totals) {
-    CHECK(profile.*(test.member) == test.exact);
-    auto one_past = profile_limits::native();
-    one_past.size_limit = test.exact - 1;
-    CHECK(kahip::serial_kernel::make_profile(input, one_past).reason ==
-          profile_reason::byte_count_overflow);
+    CHECK(accounting.*(test.member) == test.exact);
+    auto at_limit = profile_limits::native();
+    at_limit.*(test.limit) = test.exact;
+    CHECK(kahip::serial_kernel::account_profile_bytes(input, at_limit).safe());
+    at_limit.*(test.limit) = test.exact - 1;
+    CHECK(kahip::serial_kernel::account_profile_bytes(input, at_limit).stage ==
+          test.rejection_stage);
   }
+  auto base_limit = profile_limits::native();
+  base_limit.base_memory_byte_limit = 448;
+  CHECK(kahip::serial_kernel::account_profile_bytes(input, base_limit).safe());
+  base_limit.base_memory_byte_limit = 447;
+  CHECK(kahip::serial_kernel::account_profile_bytes(input, base_limit).stage ==
+        byte_accounting_stage::base_memory);
 }
 
 TEST_CASE("serial-kernel profile has independent exact vector boundaries",

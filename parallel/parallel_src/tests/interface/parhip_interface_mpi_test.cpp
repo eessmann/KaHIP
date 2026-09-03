@@ -41,14 +41,18 @@ struct local_cycle final {
 struct profile_capture final {
   std::array<kahip::serial_kernel::serial_kernel_profile, 2> profiles{};
   std::size_t count{};
+  bool overflow{};
 };
 
 void capture_profile(
     void* context,
     kahip::serial_kernel::serial_kernel_profile const& profile) noexcept {
   auto& capture = *static_cast<profile_capture*>(context);
-  if (capture.count < capture.profiles.size()) {
-    capture.profiles[capture.count++] = profile;
+  auto const index = capture.count++;
+  if (index < capture.profiles.size()) {
+    capture.profiles[index] = profile;
+  } else {
+    capture.overflow = true;
   }
 }
 
@@ -330,6 +334,7 @@ TEST_CASE("ParHIP FASTSOCIAL C call observes each checked quotient once") {
                       &edge_cut, partition.data(), &communicator);
 
   REQUIRE(capture.count == 2);
+  CHECK_FALSE(capture.overflow);
   auto const nodes = static_cast<std::uint64_t>(size);
   auto const expected = std::array<std::uint64_t, 17>{
       nodes, 0, nodes, 1, 0, 0, 1, nodes, 32 * nodes, 8 * nodes + 4,
