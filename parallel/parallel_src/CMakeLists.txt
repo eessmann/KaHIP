@@ -164,6 +164,7 @@ set(
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/io
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/partition/uncoarsening/refinement/quotient_graph_refinement/flow_refinement
+    ${PROJECT_SOURCE_DIR}/parallel/shared
 )
 
 function(kahip_configure_parhip_object target)

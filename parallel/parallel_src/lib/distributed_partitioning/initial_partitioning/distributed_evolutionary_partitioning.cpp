@@ -6,7 +6,11 @@
  *****************************************************************************/
 
 #include <cstddef>
+#include <limits>
+#include <optional>
 #include <span>
+#include <stdexcept>
+#include <vector>
 
 #include "communication/mpi_fixed_broadcast.h"
 #include "communication/mpi_tools.h"
@@ -17,6 +21,68 @@
 #include "io/parallel_graph_io.h"
 #include "tools/distributed_quality_metrics.h"
 namespace parhip {
+namespace {
+struct checked_serial_input final {
+  int node_count{};
+  std::vector<int> xadj;
+  std::vector<int> adjncy;
+  std::vector<int> node_weights;
+  std::vector<int> edge_weights;
+  std::vector<int> partition;
+
+  [[nodiscard]] static auto from_graph(complete_graph_access& graph,
+                                       bool preserve_vcycle_labels)
+      -> checked_serial_input {
+    if (!std::in_range<int>(graph.number_of_local_nodes()) ||
+        !std::in_range<int>(graph.number_of_local_edges())) {
+      throw std::overflow_error{"serial graph counts exceed int"};
+    }
+    auto const nodes = static_cast<std::size_t>(graph.number_of_local_nodes());
+    auto const edges = static_cast<std::size_t>(graph.number_of_local_edges());
+    auto input = checked_serial_input{
+        .node_count = static_cast<int>(nodes),
+        .xadj = std::vector<int>(nodes + 1),
+        .adjncy = std::vector<int>(edges),
+        .node_weights = std::vector<int>(nodes),
+        .edge_weights = std::vector<int>(edges),
+        .partition = std::vector<int>(nodes),
+    };
+    for (std::size_t node = 0; node < nodes; ++node) {
+      auto const node_id = static_cast<NodeID>(node);
+      auto const first_edge = graph.get_first_edge(node_id);
+      auto const weight = graph.getNodeWeight(node_id);
+      if (!std::in_range<int>(first_edge) || !std::in_range<int>(weight) ||
+          (preserve_vcycle_labels &&
+           !std::in_range<int>(graph.getSecondPartitionIndex(node_id)))) {
+        throw std::overflow_error{"serial graph node field exceeds int"};
+      }
+      input.xadj[node] = static_cast<int>(first_edge);
+      input.node_weights[node] = static_cast<int>(weight);
+      if (preserve_vcycle_labels) {
+        input.partition[node] =
+            static_cast<int>(graph.getSecondPartitionIndex(node_id));
+      }
+    }
+    if (!std::in_range<int>(graph.get_first_edge(static_cast<NodeID>(nodes)))) {
+      throw std::overflow_error{"serial CSR sentinel exceeds int"};
+    }
+    input.xadj[nodes] =
+        static_cast<int>(graph.get_first_edge(static_cast<NodeID>(nodes)));
+    for (std::size_t edge = 0; edge < edges; ++edge) {
+      auto const edge_id = static_cast<EdgeID>(edge);
+      auto const target = graph.getEdgeTarget(edge_id);
+      auto const weight = graph.getEdgeWeight(edge_id);
+      if (!std::in_range<int>(target) || !std::in_range<int>(weight)) {
+        throw std::overflow_error{"serial graph edge field exceeds int"};
+      }
+      input.adjncy[edge] = static_cast<int>(target);
+      input.edge_weights[edge] = static_cast<int>(weight);
+    }
+    return input;
+  }
+};
+}  // namespace
+
 distributed_evolutionary_partitioning::distributed_evolutionary_partitioning() {
                 
 }
@@ -31,21 +97,26 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
   mpi_tools mpitools;
   parallel_graph_access Q_bar;
   distributed_quality_metrics dqm;
-  mpitools.collect_parallel_graph_to_local_graph( communicator, config, Q, Q_bar);
+  static_cast<void>(mpitools.preflight_serial_kernel(communicator, config, Q));
+  mpitools.collect_parallel_graph_to_checked_serial_graph(communicator, config,
+                                                          Q, Q_bar);
   mpitools.distribute_local_graph( communicator, config, Q_bar);
 
-
-
-  int n       = Q_bar.number_of_local_nodes();
+  auto serial_input = std::optional<checked_serial_input>{};
+  try {
+    serial_input.emplace(checked_serial_input::from_graph(Q_bar,
+                                                          config.vcycle));
+  } catch (...) {
+    mpi::abort_on_exception(communicator, "serial input construction failure");
+  }
+  int n       = serial_input->node_count;
   int nparts  = config.k;    // k-way partitioning.
 
-  int* xadj   = Q_bar.UNSAFE_metis_style_xadj_array();
-  int* adjncy = Q_bar.UNSAFE_metis_style_adjncy_array();
-
-  int* vwgt   = Q_bar.UNSAFE_metis_style_vwgt_array();
-  int* adjwgt = Q_bar.UNSAFE_metis_style_adjwgt_array();
-
-  int* partition_map = new int[n];
+  auto* xadj = serial_input->xadj.data();
+  auto* adjncy = serial_input->adjncy.data();
+  auto* vwgt = serial_input->node_weights.data();
+  auto* adjwgt = serial_input->edge_weights.data();
+  auto* partition_map = serial_input->partition.data();
 
   auto const mpi_communicator = mpi::communicator_view{communicator};
   PEID const rank = mpi_communicator.rank();
@@ -198,10 +269,5 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
   }
 #endif
 
-  delete[] xadj;
-  delete[] adjncy;
-  delete[] vwgt;
-  delete[] adjwgt;
-  delete[] partition_map;
 }
 }

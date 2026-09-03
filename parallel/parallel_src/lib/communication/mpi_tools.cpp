@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -20,11 +21,238 @@
 #include <vector>
 
 #include "communication/mpi_fixed_broadcast.h"
+#include "tools/fatal_diagnostics.h"
 
 namespace parhip {
 namespace {
 using graph_node_record = mpi_tools_detail::complete_graph_node_record;
 using graph_edge_record = mpi_tools_detail::complete_graph_edge_record;
+using serial_kernel_profile = kahip::serial_kernel::serial_kernel_profile;
+using serial_profile_input = kahip::serial_kernel::profile_input;
+using serial_profile_limits = kahip::serial_kernel::profile_limits;
+using serial_profile_reason = kahip::serial_kernel::profile_reason;
+
+constexpr auto serial_profile_fields = std::size_t{12};
+
+struct local_serial_observation final {
+  std::uint64_t local_nodes{};
+  std::uint64_t local_edges{};
+  std::uint64_t total_node_weight{};
+  std::uint64_t maximum_node_weight{};
+  std::uint64_t total_edge_weight{};
+  std::uint64_t maximum_edge_weight{};
+  std::uint64_t reported_global_nodes{};
+  std::uint64_t reported_global_edges{};
+  std::uint64_t block_count{};
+  std::uint64_t absolute_bound{};
+  std::uint64_t bank_factor_twice{};
+  std::uint64_t flags{};
+};
+
+constexpr auto csr_offsets_are_valid = std::uint64_t{1} << 0;
+constexpr auto targets_are_valid = std::uint64_t{1} << 1;
+constexpr auto labels_are_valid = std::uint64_t{1} << 2;
+constexpr auto sums_are_valid = std::uint64_t{1} << 3;
+constexpr auto social_mode = std::uint64_t{1} << 4;
+constexpr auto all_local_observation_flags = csr_offsets_are_valid |
+                                            targets_are_valid |
+                                            labels_are_valid |
+                                            sums_are_valid;
+
+[[nodiscard]] auto native_serial_profile_limits() -> serial_profile_limits {
+  auto result = serial_profile_limits::native();
+  result.int_elements = std::vector<int>{}.max_size();
+  result.wire_node_elements = std::vector<graph_node_record>{}.max_size();
+  result.wire_edge_elements = std::vector<graph_edge_record>{}.max_size();
+  result.complete_node_elements = std::vector<Node>{}.max_size();
+  result.complete_node_data_elements = std::vector<NodeData>{}.max_size();
+  result.complete_edge_elements = std::vector<Edge>{}.max_size();
+  result.wire_node_bytes = sizeof(graph_node_record);
+  result.wire_edge_bytes = sizeof(graph_edge_record);
+  result.complete_node_bytes = sizeof(Node);
+  result.complete_node_data_bytes = sizeof(NodeData);
+  result.complete_edge_bytes = sizeof(Edge);
+  return result;
+}
+
+[[nodiscard]] auto observe_serial_kernel(parallel_graph_access& graph,
+                                         PPartitionConfig const& config)
+    -> local_serial_observation {
+  auto result = local_serial_observation{
+      .local_nodes = static_cast<std::uint64_t>(graph.number_of_local_nodes()),
+      .local_edges = static_cast<std::uint64_t>(graph.number_of_local_edges()),
+      .reported_global_nodes =
+          static_cast<std::uint64_t>(graph.number_of_global_nodes()),
+      .reported_global_edges =
+          static_cast<std::uint64_t>(graph.number_of_global_edges()),
+      .block_count = static_cast<std::uint64_t>(config.k),
+      .absolute_bound = static_cast<std::uint64_t>(config.upper_bound_partition),
+      .bank_factor_twice =
+          (config.initial_partitioning_algorithm ==
+               InitialPartitioningAlgorithm::KAFFPAESTRONG ||
+           config.initial_partitioning_algorithm ==
+               InitialPartitioningAlgorithm::KAFFPAESTRONGSNW)
+              ? std::uint64_t{6}
+              : (config.initial_partitioning_algorithm ==
+                     InitialPartitioningAlgorithm::KAFFPAEFAST
+                     ? std::uint64_t{2}
+                     : std::uint64_t{3}),
+      .flags = all_local_observation_flags,
+  };
+  if (config.initial_partitioning_algorithm ==
+          InitialPartitioningAlgorithm::KAFFPAEULTRAFASTSNW ||
+      config.initial_partitioning_algorithm ==
+          InitialPartitioningAlgorithm::KAFFPAEFASTSNW ||
+      config.initial_partitioning_algorithm ==
+          InitialPartitioningAlgorithm::KAFFPAEECOSNW ||
+      config.initial_partitioning_algorithm ==
+          InitialPartitioningAlgorithm::KAFFPAESTRONGSNW) {
+    result.flags |= social_mode;
+  }
+  auto expected_edge = EdgeID{0};
+  for (NodeID node = 0; node < graph.number_of_local_nodes(); ++node) {
+    auto const first = graph.get_first_edge(node);
+    auto const end = graph.get_first_invalid_edge(node);
+    if (first != expected_edge || end < first ||
+        end > graph.number_of_local_edges() ||
+        end > static_cast<EdgeID>(std::numeric_limits<int>::max())) {
+      result.flags &= ~csr_offsets_are_valid;
+    }
+    expected_edge = end;
+    auto const node_weight = graph.getNodeWeight(node);
+    result.maximum_node_weight = std::max(
+        result.maximum_node_weight, static_cast<std::uint64_t>(node_weight));
+    if (!kahip::serial_kernel::checked_add(
+            result.total_node_weight, static_cast<std::uint64_t>(node_weight),
+            std::numeric_limits<std::uint64_t>::max(), result.total_node_weight)) {
+      result.flags &= ~sums_are_valid;
+    }
+    if (config.vcycle &&
+        (config.k == 0 || graph.getSecondPartitionIndex(node) >= config.k)) {
+      result.flags &= ~labels_are_valid;
+    }
+    for (EdgeID edge = first; edge < end && edge < graph.number_of_local_edges();
+         ++edge) {
+      auto const target = graph.getGlobalID(graph.getEdgeTarget(edge));
+      if (target > static_cast<NodeID>(std::numeric_limits<int>::max())) {
+        result.flags &= ~targets_are_valid;
+      }
+      auto const edge_weight = graph.getEdgeWeight(edge);
+      result.maximum_edge_weight = std::max(
+          result.maximum_edge_weight, static_cast<std::uint64_t>(edge_weight));
+      if (!kahip::serial_kernel::checked_add(
+              result.total_edge_weight,
+              static_cast<std::uint64_t>(edge_weight),
+              std::numeric_limits<std::uint64_t>::max(),
+              result.total_edge_weight)) {
+        result.flags &= ~sums_are_valid;
+      }
+    }
+  }
+  if (expected_edge != graph.number_of_local_edges()) {
+    result.flags &= ~csr_offsets_are_valid;
+  }
+  return result;
+}
+
+[[nodiscard]] auto serial_profile_from_observations(
+    std::span<local_serial_observation const> observations)
+    -> serial_kernel_profile {
+  auto input = serial_profile_input{};
+  auto node_sum_ok = true;
+  auto edge_sum_ok = true;
+  auto node_weight_sum_ok = true;
+  auto edge_weight_sum_ok = true;
+  auto common_metadata = !observations.empty();
+  auto const first = common_metadata ? observations.front()
+                                     : local_serial_observation{};
+  input.social_mode = (first.flags & social_mode) != 0;
+  input.bank_factor_twice = first.bank_factor_twice;
+  for (auto const& observation : observations) {
+    node_sum_ok = node_sum_ok && kahip::serial_kernel::checked_add(
+        input.global_nodes, observation.local_nodes,
+        std::numeric_limits<std::uint64_t>::max(), input.global_nodes);
+    edge_sum_ok = edge_sum_ok && kahip::serial_kernel::checked_add(
+        input.global_directed_edges, observation.local_edges,
+        std::numeric_limits<std::uint64_t>::max(), input.global_directed_edges);
+    node_weight_sum_ok =
+        node_weight_sum_ok && kahip::serial_kernel::checked_add(
+                                  input.total_node_weight,
+                                  observation.total_node_weight,
+                                  std::numeric_limits<std::uint64_t>::max(),
+                                  input.total_node_weight);
+    edge_weight_sum_ok =
+        edge_weight_sum_ok && kahip::serial_kernel::checked_add(
+                                  input.total_directed_edge_weight,
+                                  observation.total_edge_weight,
+                                  std::numeric_limits<std::uint64_t>::max(),
+                                  input.total_directed_edge_weight);
+    input.maximum_node_weight =
+        std::max(input.maximum_node_weight, observation.maximum_node_weight);
+    input.maximum_directed_edge_weight = std::max(
+        input.maximum_directed_edge_weight, observation.maximum_edge_weight);
+    input.csr_offsets_are_valid =
+        input.csr_offsets_are_valid &&
+        (observation.flags & csr_offsets_are_valid) != 0;
+    input.targets_are_valid = input.targets_are_valid &&
+                              (observation.flags & targets_are_valid) != 0;
+    input.labels_are_valid = input.labels_are_valid &&
+                             (observation.flags & labels_are_valid) != 0;
+    common_metadata = common_metadata &&
+                      observation.reported_global_nodes == first.reported_global_nodes &&
+                      observation.reported_global_edges == first.reported_global_edges &&
+                      observation.block_count == first.block_count &&
+                      observation.absolute_bound == first.absolute_bound &&
+                      observation.bank_factor_twice == first.bank_factor_twice &&
+                      (observation.flags & social_mode) ==
+                          (first.flags & social_mode);
+    node_weight_sum_ok = node_weight_sum_ok &&
+                         (observation.flags & sums_are_valid) != 0;
+    edge_weight_sum_ok = edge_weight_sum_ok &&
+                         (observation.flags & sums_are_valid) != 0;
+  }
+  input.block_count = first.block_count;
+  input.absolute_bound = first.absolute_bound;
+  auto profile = kahip::serial_kernel::make_profile(input,
+                                                     native_serial_profile_limits());
+  if (!node_sum_ok || !edge_sum_ok || !node_weight_sum_ok || !edge_weight_sum_ok) {
+    profile.reason = serial_profile_reason::collective_aggregate_overflow;
+  } else if (!common_metadata) {
+    profile.reason = serial_profile_reason::collective_configuration_mismatch;
+  } else if (input.global_nodes != first.reported_global_nodes) {
+    profile.reason = serial_profile_reason::global_node_count_mismatch;
+  } else if (input.global_directed_edges != first.reported_global_edges) {
+    profile.reason = serial_profile_reason::global_directed_edge_count_mismatch;
+  }
+  return profile;
+}
+
+[[noreturn]] void abort_unsafe_serial_profile(
+    MPI_Comm communicator,
+    int rank,
+    serial_kernel_profile const& profile) noexcept {
+  if (rank == static_cast<int>(ROOT)) {
+    kahip::diagnostics::critical(
+        "ParHIP serial kernel profile failure: reason=",
+        kahip::serial_kernel::reason_name(profile.reason),
+        ", global nodes=", profile.global_nodes,
+        ", global directed edges=", profile.global_directed_edges,
+        ", total node weight=", profile.total_node_weight,
+        ", maximum node weight=", profile.maximum_node_weight,
+        ", total directed edge weight=", profile.total_directed_edge_weight,
+        ", maximum directed edge weight=", profile.maximum_directed_edge_weight,
+        ", block count=", profile.block_count,
+        ", absolute bound=", profile.absolute_bound,
+        ", wire record bytes=", profile.wire_record_bytes,
+        ", CSR bytes=", profile.csr_bytes,
+        ", partition bytes=", profile.partition_bytes,
+        ", serial input bytes=", profile.serial_input_bytes,
+        ", complete graph bytes=", profile.complete_graph_bytes,
+        ", base memory bytes=", profile.base_memory_bytes);
+  }
+  static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
+  std::abort();
+}
 
 static_assert(std::numeric_limits<NodeID>::digits <=
               std::numeric_limits<std::uint64_t>::digits);
@@ -255,9 +483,86 @@ enum class distribution_status : std::uint64_t {
 }
 }  // namespace
 
+auto mpi_tools::preflight_serial_kernel(
+    MPI_Comm communicator,
+    PPartitionConfig const& config,
+    parallel_graph_access& graph) const -> serial_kernel_profile {
+  auto const collective = mpi::communicator_view{communicator};
+  mpi::require_live_intracommunicator(
+      collective, "serial kernel profile requires a live intracommunicator");
+  auto const local = observe_serial_kernel(graph, config);
+  auto const rank = collective.rank();
+  auto const size = static_cast<std::size_t>(collective.size());
+  auto received = std::vector<local_serial_observation>(size);
+  static_assert(sizeof(local_serial_observation) ==
+                serial_profile_fields * sizeof(std::uint64_t));
+  mpi::check_or_abort(
+      MPI_Allgather(&local, static_cast<int>(serial_profile_fields), MPI_UINT64_T,
+                    received.data(), static_cast<int>(serial_profile_fields),
+                    MPI_UINT64_T, communicator),
+      communicator, "MPI_Allgather(serial kernel profile)");
+
+  auto profile = serial_kernel_profile{};
+  if (rank == static_cast<int>(ROOT)) {
+    profile = serial_profile_from_observations(received);
+  }
+  auto packed = std::array<std::uint64_t, 15>{
+      profile.global_nodes,
+      profile.global_directed_edges,
+      profile.total_node_weight,
+      profile.maximum_node_weight,
+      profile.total_directed_edge_weight,
+      profile.maximum_directed_edge_weight,
+      profile.block_count,
+      profile.absolute_bound,
+      profile.wire_record_bytes,
+      profile.csr_bytes,
+      profile.partition_bytes,
+      profile.serial_input_bytes,
+      profile.complete_graph_bytes,
+      profile.base_memory_bytes,
+      static_cast<std::uint64_t>(profile.reason),
+  };
+  mpi::check_or_abort(
+      MPI_Bcast(packed.data(), static_cast<int>(packed.size()), MPI_UINT64_T,
+                ROOT, communicator),
+      communicator, "MPI_Bcast(serial kernel profile)");
+  profile = serial_kernel_profile{
+      .global_nodes = packed[0],
+      .global_directed_edges = packed[1],
+      .total_node_weight = packed[2],
+      .maximum_node_weight = packed[3],
+      .total_directed_edge_weight = packed[4],
+      .maximum_directed_edge_weight = packed[5],
+      .block_count = packed[6],
+      .absolute_bound = packed[7],
+      .wire_record_bytes = packed[8],
+      .csr_bytes = packed[9],
+      .partition_bytes = packed[10],
+      .serial_input_bytes = packed[11],
+      .complete_graph_bytes = packed[12],
+      .base_memory_bytes = packed[13],
+      .reason = static_cast<serial_profile_reason>(packed[14]),
+  };
+  if (!profile.safe()) {
+    abort_unsafe_serial_profile(communicator, rank, profile);
+  }
+  return profile;
+}
+
+void mpi_tools::collect_parallel_graph_to_checked_serial_graph(
+    MPI_Comm communicator,
+    PPartitionConfig const& config,
+    parallel_graph_access& distributed,
+    complete_graph_access& complete) {
+  static_cast<void>(preflight_serial_kernel(communicator, config, distributed));
+  collect_parallel_graph_to_local_graph(communicator, config, distributed,
+                                        complete);
+}
+
 void mpi_tools::collect_parallel_graph_to_local_graph(
     MPI_Comm communicator,
-    PPartitionConfig&,
+    PPartitionConfig const&,
     parallel_graph_access& distributed,
     complete_graph_access& complete) {
   auto const communicator_view = mpi::communicator_view{communicator};

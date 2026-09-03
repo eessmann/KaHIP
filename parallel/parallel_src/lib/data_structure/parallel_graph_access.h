@@ -22,6 +22,7 @@
 #include "communication/mpi_trace.h"
 #include "definitions.h"
 #include "partition_config.h"
+#include "range_owner.h"
 #include "tools/timer.h"
 namespace parhip {
 struct Node {
@@ -173,13 +174,7 @@ public:
         };
 
         PEID get_PEID_from_range_array(NodeID node) {
-                // TODO optimize with binary search
-                for( PEID peID = 1; peID < (PEID)m_range_array.size(); peID++) {
-                        if( node < m_range_array[peID] ) {
-                                return (peID-1);
-                        }
-                }
-                return -1;
+                return kahip::range_owner::from_boundaries(m_range_array, node);
         };
 
         NodeID new_node() {

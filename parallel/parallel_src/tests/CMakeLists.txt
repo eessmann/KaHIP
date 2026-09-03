@@ -3834,6 +3834,28 @@ catch_discover_tests(
     OUTPUT_PREFIX "unit-"
 )
 
+add_executable(
+    serial_kernel_profile_test
+    distributed_partitioning/serial_kernel_profile_test.cpp
+)
+target_link_libraries(
+    serial_kernel_profile_test
+    PRIVATE Catch2::Catch2WithMain kahip_options kahip_warnings
+)
+target_include_directories(
+    serial_kernel_profile_test
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/parallel/parallel_src"
+        "${PROJECT_SOURCE_DIR}/parallel/shared"
+        "${PROJECT_SOURCE_DIR}/parallel"
+)
+catch_discover_tests(
+    serial_kernel_profile_test
+    TEST_PREFIX "unit-"
+    OUTPUT_DIR .
+    OUTPUT_PREFIX "unit-"
+)
+
 foreach(
     failure_mode
     IN ITEMS

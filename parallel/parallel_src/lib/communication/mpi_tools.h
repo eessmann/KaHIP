@@ -21,6 +21,7 @@
 #include "communication/mpi_adapter.h"
 #include "data_structure/parallel_graph_access.h"
 #include "partition_config.h"
+#include "serial_kernel_profile.h"
 namespace parhip {
 namespace mpi_tools_detail {
 struct complete_graph_node_record final {
@@ -67,8 +68,20 @@ struct wire_members<mpi_tools_detail::complete_graph_edge_record> {
 
 class mpi_tools {
  public:
+  [[nodiscard]] auto preflight_serial_kernel(
+      MPI_Comm communicator,
+      PPartitionConfig const& config,
+      parallel_graph_access& graph) const
+      -> kahip::serial_kernel::serial_kernel_profile;
+
+  void collect_parallel_graph_to_checked_serial_graph(
+      MPI_Comm communicator,
+      PPartitionConfig const& config,
+      parallel_graph_access& distributed,
+      complete_graph_access& complete);
+
   void collect_parallel_graph_to_local_graph(MPI_Comm communicator,
-                                             PPartitionConfig& config,
+                                             PPartitionConfig const& config,
                                              parallel_graph_access& G,
                                              complete_graph_access& Q);
 
