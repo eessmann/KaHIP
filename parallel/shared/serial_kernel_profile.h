@@ -217,18 +217,30 @@ struct serial_kernel_profile final {
                         population_product)) {
     fail(profile_reason::stop_rule_domain_out_of_range);
   }
-  auto const half_edges = input.global_directed_edges / 2;
-  auto const odd_edge = input.global_directed_edges % 2;
-  auto scheduler_whole = std::uint64_t{};
-  auto scheduler_tail = std::uint64_t{};
-  auto scheduler_factor_ok = input.bank_factor_twice > 0 &&
-      checked_multiply(half_edges, input.bank_factor_twice, limits.int_max,
-                       scheduler_whole) &&
-      checked_add(input.bank_factor_twice, 1, limits.int_max,
-                  scheduler_tail) &&
-      (odd_edge == 0 ||
-       checked_add(scheduler_whole, scheduler_tail / 2, limits.int_max,
-                   scheduler_whole));
+  auto quotient_left = input.block_count;
+  auto quotient_right = input.block_count == 0 ? 0 : input.block_count - 1;
+  if (quotient_left % 2 == 0) {
+    quotient_left /= 2;
+  } else {
+    quotient_right /= 2;
+  }
+  auto quotient_pair_count = std::uint64_t{};
+  auto scheduler_twice = std::uint64_t{};
+  auto scheduler_factor_ok =
+      input.bank_factor_twice > 0 &&
+      checked_multiply(quotient_left, quotient_right,
+                       std::numeric_limits<std::uint64_t>::max(),
+                       quotient_pair_count);
+  auto const quotient_edge_max =
+      input.global_directed_edges / 2 < quotient_pair_count
+          ? input.global_directed_edges / 2
+          : quotient_pair_count;
+  scheduler_factor_ok =
+      scheduler_factor_ok &&
+      checked_multiply(input.bank_factor_twice, quotient_edge_max,
+                       std::numeric_limits<std::uint64_t>::max(),
+                       scheduler_twice) &&
+      scheduler_twice / 2 + scheduler_twice % 2 <= limits.int_max;
   if (!scheduler_factor_ok) {
     fail(profile_reason::quotient_scheduler_domain_out_of_range);
   }

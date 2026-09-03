@@ -22,10 +22,44 @@
 
 #include "communication/mpi_fixed_broadcast.h"
 #include "communication/mpi_fixed_reduction.h"
+#include "communication/serial_kernel_profile_observer.h"
 #include "serial_kernel_structure.h"
 #include "tools/fatal_diagnostics.h"
 
 namespace parhip {
+namespace {
+struct serial_kernel_profile_observer_state final {
+  mpi_tools_detail::serial_kernel_profile_observer_callback callback{};
+  void* context{};
+};
+
+auto serial_kernel_profile_observer = serial_kernel_profile_observer_state{};
+}
+
+namespace mpi_tools_detail {
+scoped_serial_kernel_profile_observer::scoped_serial_kernel_profile_observer(
+    serial_kernel_profile_observer_callback callback,
+    void* context) noexcept
+    : previous_{serial_kernel_profile_observer.callback},
+      previous_context_{serial_kernel_profile_observer.context} {
+  serial_kernel_profile_observer.callback = callback;
+  serial_kernel_profile_observer.context = context;
+}
+
+scoped_serial_kernel_profile_observer::~scoped_serial_kernel_profile_observer() noexcept {
+  serial_kernel_profile_observer.callback = previous_;
+  serial_kernel_profile_observer.context = previous_context_;
+}
+
+void observe_checked_serial_kernel_profile(
+    kahip::serial_kernel::serial_kernel_profile const& profile) noexcept {
+  if (serial_kernel_profile_observer.callback != nullptr) {
+    serial_kernel_profile_observer.callback(serial_kernel_profile_observer.context,
+                                            profile);
+  }
+}
+}  // namespace mpi_tools_detail
+
 namespace {
 using graph_node_record = mpi_tools_detail::complete_graph_node_record;
 using graph_edge_record = mpi_tools_detail::complete_graph_edge_record;
@@ -221,7 +255,8 @@ constexpr auto all_local_observation_flags = csr_offsets_are_valid |
         ", serial input bytes=", profile.serial_input_bytes,
         ", complete graph bytes=", profile.complete_graph_bytes,
         ", structural validation bytes=", profile.structural_validation_bytes,
-        ", base memory bytes=", profile.base_memory_bytes);
+        ", base memory bytes=", profile.base_memory_bytes,
+        ", flat payload elements=", profile.flat_payload_elements);
   }
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
   std::abort();
@@ -515,17 +550,19 @@ auto mpi_tools::preflight_serial_kernel(
                           mpi::reduction_kind::minimum, collective,
                           "MPI_Allreduce(serial kernel profile validity)");
 
-  auto const local_metadata = std::array<std::uint64_t, 11>{
+  // The public C API derives config.seed per rank before this handoff. It is
+  // intentionally not collective metadata; the remaining values select the
+  // same serial-kernel control flow on every rank.
+  auto const local_metadata = std::array<std::uint64_t, 10>{
       local.reported_global_nodes, local.reported_global_edges,
       local.block_count, local.absolute_bound, local.bank_factor_twice,
       (local.flags & social_mode) != 0,
       config.vcycle ? std::uint64_t{1} : std::uint64_t{0},
       static_cast<std::uint64_t>(config.initial_partitioning_algorithm),
       static_cast<std::uint64_t>(config.inbalance),
-      static_cast<std::uint64_t>(config.seed),
       static_cast<std::uint64_t>(config.evolutionary_time_limit)};
-  auto minimum_metadata = std::array<std::uint64_t, 11>{};
-  auto maximum_metadata = std::array<std::uint64_t, 11>{};
+  auto minimum_metadata = std::array<std::uint64_t, 10>{};
+  auto maximum_metadata = std::array<std::uint64_t, 10>{};
   mpi::all_reduce_bounded(std::span<std::uint64_t const>{local_metadata},
                           std::span<std::uint64_t>{minimum_metadata},
                           mpi::reduction_kind::minimum, collective,
@@ -621,7 +658,8 @@ void mpi_tools::collect_parallel_graph_to_checked_serial_graph(
     PPartitionConfig const& config,
     parallel_graph_access& distributed,
     complete_graph_access& complete) {
-  static_cast<void>(preflight_serial_kernel(communicator, config, distributed));
+  auto const profile = preflight_serial_kernel(communicator, config, distributed);
+  mpi_tools_detail::observe_checked_serial_kernel_profile(profile);
   collect_parallel_graph_to_local_graph_impl(communicator, config, distributed,
                                              complete, true);
 }

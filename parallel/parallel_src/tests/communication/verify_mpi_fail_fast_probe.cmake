@@ -57,6 +57,7 @@ foreach(
         "MPI_Comm_free(tracked duplicate)"
         "cleanup-attempts=1"
         "returned-from-failure"
+        "misleading safe observer profile"
         "Signal: Aborted"
         "SIGABRT"
 )

@@ -3,10 +3,12 @@
 
 #include <cstdlib>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <vector>
 
 #include "communication/mpi_tools.h"
+#include "communication/serial_kernel_profile_observer.h"
 #include "data_structure/parallel_graph_access.h"
 
 // KAHIP_PMPI_CALLBACK_REGION_BEGIN
@@ -25,6 +27,12 @@ inline bool profile_aggregate_overflow = false;
 
 void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
+}
+
+void observe_safe_serial_profile(
+    void*, kahip::serial_kernel::serial_kernel_profile const&) noexcept {
+  callback_error = true;
+  write_text("misleading safe observer profile\n");
 }
 
 [[nodiscard]] auto valid_count_exchange(void const* send_buffer,
@@ -266,6 +274,12 @@ int main(int argc, char** argv) {
   mpi_tools_failure_probe::expected_communicator = communicator;
   mpi_tools_failure_probe::communicator_rank = rank;
   mpi_tools_failure_probe::active = !mpi_tools_failure_probe::structural_self_loop;
+  auto observer =
+      std::optional<parhip::mpi_tools_detail::scoped_serial_kernel_profile_observer>{};
+  if (mpi_tools_failure_probe::unsafe_profile) {
+    observer.emplace(mpi_tools_failure_probe::observe_safe_serial_profile,
+                     nullptr);
+  }
   if (mpi_tools_failure_probe::unsafe_profile) {
     parhip::mpi_tools{}.collect_parallel_graph_to_checked_serial_graph(
         communicator, config, distributed, complete);

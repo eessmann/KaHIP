@@ -164,9 +164,29 @@ TEST_CASE("serial-kernel profile honors modified-kernel aggregate domains",
         profile_reason::stop_rule_domain_out_of_range);
 
   input.block_count = 2;
-  input.global_directed_edges = std::numeric_limits<int>::max();
-  input.bank_factor_twice = 3;
-  CHECK(kahip::serial_kernel::make_profile(input).reason ==
+  input.global_nodes = 2;
+  input.global_directed_edges = std::numeric_limits<int>::max() - 1;
+  input.bank_factor_twice = 6;
+  CHECK(kahip::serial_kernel::make_profile(input).safe());
+}
+
+TEST_CASE("serial-kernel profile bounds the quotient scheduler exactly",
+          "[serial-kernel][profile]") {
+  auto input = profile_input{
+      .global_nodes = 4,
+      .global_directed_edges = 12,
+      .total_node_weight = 4,
+      .maximum_node_weight = 1,
+      .block_count = 4,
+      .absolute_bound = 1,
+      .bank_factor_twice = 6,
+  };
+  auto limits = profile_limits::native();
+  limits.int_max = 18;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
+
+  limits.int_max = 17;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
         profile_reason::quotient_scheduler_domain_out_of_range);
 }
 
@@ -274,6 +294,47 @@ TEST_CASE("serial-kernel profile detects checked byte arithmetic overflow",
         profile_reason::byte_count_overflow);
 }
 
+TEST_CASE("serial-kernel profile retains every derived byte total at its boundary",
+          "[serial-kernel][profile]") {
+  auto const input = profile_input{
+      .global_nodes = 3,
+      .global_directed_edges = 4,
+      .total_node_weight = 3,
+      .maximum_node_weight = 1,
+      .total_directed_edge_weight = 4,
+      .maximum_directed_edge_weight = 1,
+      .block_count = 2,
+      .absolute_bound = 2,
+  };
+  auto const profile = kahip::serial_kernel::make_profile(input);
+  REQUIRE(profile.safe());
+  struct byte_total_case final {
+    std::uint64_t kahip::serial_kernel::serial_kernel_profile::*member;
+    std::uint64_t exact;
+  };
+  auto const totals = std::array<byte_total_case, 6>{
+      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::wire_record_bytes,
+                      160},
+      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::csr_bytes,
+                      60},
+      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::serial_input_bytes,
+                      72},
+      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::complete_graph_bytes,
+                      192},
+      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::structural_validation_bytes,
+                      96},
+      byte_total_case{&kahip::serial_kernel::serial_kernel_profile::base_memory_bytes,
+                      448},
+  };
+  for (auto const& test : totals) {
+    CHECK(profile.*(test.member) == test.exact);
+    auto one_past = profile_limits::native();
+    one_past.size_limit = test.exact - 1;
+    CHECK(kahip::serial_kernel::make_profile(input, one_past).reason ==
+          profile_reason::byte_count_overflow);
+  }
+}
+
 TEST_CASE("serial-kernel profile has independent exact vector boundaries",
           "[serial-kernel][profile]") {
   auto const input = profile_input{
@@ -343,6 +404,16 @@ TEST_CASE("serial-kernel profile exposes flag and mode-product boundaries",
   limits.int_max = 8;
   CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
   input.block_count = 3;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
+        profile_reason::stop_rule_domain_out_of_range);
+
+  input.global_nodes = 2;
+  input.total_node_weight = 2;
+  input.block_count = 2;
+  limits = profile_limits::native();
+  limits.modified_node_weight_max = 120;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
+  limits.modified_node_weight_max = 119;
   CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
         profile_reason::stop_rule_domain_out_of_range);
 }

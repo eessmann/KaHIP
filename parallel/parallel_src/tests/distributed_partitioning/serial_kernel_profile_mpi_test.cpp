@@ -7,6 +7,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "communication/mpi_tools.h"
+#include "communication/serial_kernel_profile_observer.h"
 #include "data_structure/parallel_graph_access.h"
 #include "distributed_partitioning/initial_partitioning/distributed_evolutionary_partitioning.h"
 #include "partition_config.h"
@@ -56,6 +57,20 @@ void build_zero_work_quotient(parhip::parallel_graph_access& graph,
           profile.flat_payload_elements,
           static_cast<std::uint64_t>(profile.reason)};
 }
+
+struct profile_capture final {
+  std::array<kahip::serial_kernel::serial_kernel_profile, 4> profiles{};
+  std::size_t count{};
+};
+
+void capture(
+    void* context,
+    kahip::serial_kernel::serial_kernel_profile const& profile) noexcept {
+  auto& destination = *static_cast<profile_capture*>(context);
+  if (destination.count < destination.profiles.size()) {
+    destination.profiles[destination.count++] = profile;
+  }
+}
 }  // namespace
 
 TEST_CASE("serial-kernel profile agrees exactly with zero-local-work ranks",
@@ -102,4 +117,52 @@ TEST_CASE("single-block distributed bridge never enters the generic kernel",
     CHECK(graph.getNodeLabel(node) == 0);
   }
   CHECK(parhip::random_functions::nextInt(0, 1'000'000) == expected_next);
+}
+
+TEST_CASE("private serial profile observer captures only checked gather profiles",
+          "[mpi][serial-kernel][profile][observer]") {
+  auto graph = parhip::parallel_graph_access{MPI_COMM_WORLD};
+  build_zero_work_quotient(graph, MPI_COMM_WORLD);
+  auto config = parhip::PPartitionConfig{};
+  config.k = 1;
+  config.upper_bound_partition = 2;
+  config.initial_partitioning_algorithm =
+      parhip::InitialPartitioningAlgorithm::KAFFPAEFASTSNW;
+  auto const expected = std::array<std::uint64_t, 17>{
+      2, 0, 2, 1, 0, 0, 1, 2, 64, 20, 8, 28, 120, 0, 184, 5,
+      static_cast<std::uint64_t>(
+          kahip::serial_kernel::profile_reason::none)};
+
+  auto outer_capture = profile_capture{};
+  auto inner_capture = profile_capture{};
+  parhip::distributed_evolutionary_partitioning{}.perform_partitioning(
+      MPI_COMM_WORLD, config, graph);
+  CHECK(outer_capture.count == 0);
+  CHECK(inner_capture.count == 0);
+
+  {
+    auto outer = parhip::mpi_tools_detail::scoped_serial_kernel_profile_observer{
+        capture, &outer_capture};
+    parhip::distributed_evolutionary_partitioning{}.perform_partitioning(
+        MPI_COMM_WORLD, config, graph);
+    REQUIRE(outer_capture.count == 1);
+    CHECK(fields(outer_capture.profiles[0]) == expected);
+    {
+      auto inner =
+          parhip::mpi_tools_detail::scoped_serial_kernel_profile_observer{
+              capture, &inner_capture};
+      parhip::distributed_evolutionary_partitioning{}.perform_partitioning(
+          MPI_COMM_WORLD, config, graph);
+      CHECK(outer_capture.count == 1);
+      REQUIRE(inner_capture.count == 1);
+      CHECK(fields(inner_capture.profiles[0]) == expected);
+    }
+    parhip::distributed_evolutionary_partitioning{}.perform_partitioning(
+        MPI_COMM_WORLD, config, graph);
+    CHECK(outer_capture.count == 2);
+  }
+  parhip::distributed_evolutionary_partitioning{}.perform_partitioning(
+      MPI_COMM_WORLD, config, graph);
+  CHECK(outer_capture.count == 2);
+  CHECK(inner_capture.count == 1);
 }

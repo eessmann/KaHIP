@@ -3783,10 +3783,13 @@ target_sources(
             "${PROJECT_SOURCE_DIR}/parallel/parallel_src/app/configuration.h"
             "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/mpi_failure.h"
             "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/mpi_handles.h"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/serial_kernel_profile_observer.h"
 )
 target_include_directories(
     parhip_interface_mpi_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/tools"
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/tools"
+        "${PROJECT_SOURCE_DIR}/parallel/shared"
 )
 target_link_libraries(
     parhip_interface_mpi_test

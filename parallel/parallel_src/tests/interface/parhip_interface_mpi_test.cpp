@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "communication/mpi_handles.h"
+#include "communication/serial_kernel_profile_observer.h"
 #include "configuration.h"
 #include "parhip_interface.h"
 
@@ -36,6 +37,42 @@ struct local_cycle final {
   std::vector<idxtype> neighbors;
   std::vector<idxtype> partition;
 };
+
+struct profile_capture final {
+  std::array<kahip::serial_kernel::serial_kernel_profile, 2> profiles{};
+  std::size_t count{};
+};
+
+void capture_profile(
+    void* context,
+    kahip::serial_kernel::serial_kernel_profile const& profile) noexcept {
+  auto& capture = *static_cast<profile_capture*>(context);
+  if (capture.count < capture.profiles.size()) {
+    capture.profiles[capture.count++] = profile;
+  }
+}
+
+[[nodiscard]] auto profile_fields(
+    kahip::serial_kernel::serial_kernel_profile const& profile)
+    -> std::array<std::uint64_t, 17> {
+  return {profile.global_nodes,
+          profile.global_directed_edges,
+          profile.total_node_weight,
+          profile.maximum_node_weight,
+          profile.total_directed_edge_weight,
+          profile.maximum_directed_edge_weight,
+          profile.block_count,
+          profile.absolute_bound,
+          profile.wire_record_bytes,
+          profile.csr_bytes,
+          profile.partition_bytes,
+          profile.serial_input_bytes,
+          profile.complete_graph_bytes,
+          profile.structural_validation_bytes,
+          profile.base_memory_bytes,
+          profile.flat_payload_elements,
+          static_cast<std::uint64_t>(profile.reason)};
+}
 
 [[nodiscard]] auto make_cycle(int rank, int size, idxtype vertex_count)
     -> local_cycle {
@@ -265,5 +302,44 @@ TEST_CASE("ParHIP accepts a leading zero-work rank") {
   REQUIRE(std::ranges::all_of(fixture.partition,
                               [](idxtype block) { return block == 0; }));
   REQUIRE(edge_cut == 0);
+  REQUIRE(MPI_Comm_free(&communicator) == MPI_SUCCESS);
+}
+
+TEST_CASE("ParHIP FASTSOCIAL C call observes each checked quotient once") {
+  auto communicator = reversed_world();
+  auto rank = -1;
+  auto size = 0;
+  REQUIRE(MPI_Comm_rank(communicator, &rank) == MPI_SUCCESS);
+  REQUIRE(MPI_Comm_size(communicator, &size) == MPI_SUCCESS);
+
+  auto distribution = std::vector<idxtype>(static_cast<std::size_t>(size) + 1);
+  for (auto index = 0; index <= size; ++index) {
+    distribution[static_cast<std::size_t>(index)] = index;
+  }
+  auto offsets = std::array<idxtype, 2>{0, 0};
+  auto partition = std::array<idxtype, 1>{};
+  auto blocks = 1;
+  auto imbalance = 0.0;
+  auto edge_cut = -1;
+  auto capture = profile_capture{};
+  auto observer = parhip::mpi_tools_detail::scoped_serial_kernel_profile_observer{
+      capture_profile, &capture};
+
+  ParHIPPartitionKWay(distribution.data(), offsets.data(), nullptr, nullptr,
+                      nullptr, &blocks, &imbalance, true, 19, FASTSOCIAL,
+                      &edge_cut, partition.data(), &communicator);
+
+  REQUIRE(capture.count == 2);
+  auto const nodes = static_cast<std::uint64_t>(size);
+  auto const expected = std::array<std::uint64_t, 17>{
+      nodes, 0, nodes, 1, 0, 0, 1, nodes, 32 * nodes, 8 * nodes + 4,
+      4 * nodes, 12 * nodes + 4, 40 * nodes + 40, 0,
+      72 * nodes + 40, 2 * nodes + 1,
+      static_cast<std::uint64_t>(
+          kahip::serial_kernel::profile_reason::none)};
+  CHECK(profile_fields(capture.profiles[0]) == expected);
+  CHECK(profile_fields(capture.profiles[1]) == expected);
+  CHECK(partition[0] == 0);
+  CHECK(edge_cut == 0);
   REQUIRE(MPI_Comm_free(&communicator) == MPI_SUCCESS);
 }
