@@ -98,6 +98,31 @@ TEST_CASE("serial-kernel profile rejects each narrowed scalar one past its domai
         profile_reason::total_directed_edge_weight_out_of_range);
 }
 
+TEST_CASE("serial-kernel profile accepts exact scalar limits",
+          "[serial-kernel][profile]") {
+  auto node_limit = profile_input{
+      .global_nodes = 1,
+      .total_node_weight = std::numeric_limits<int>::max(),
+      .maximum_node_weight = std::numeric_limits<int>::max(),
+      .block_count = 1,
+      .absolute_bound = std::numeric_limits<unsigned>::max() / 2,
+  };
+  CHECK(kahip::serial_kernel::make_profile(node_limit).safe());
+
+  auto edge_limit = profile_input{
+      .global_nodes = 1,
+      .global_directed_edges = std::numeric_limits<int>::max(),
+      .total_node_weight = 1,
+      .maximum_node_weight = 1,
+      .total_directed_edge_weight = std::numeric_limits<int>::max(),
+      .maximum_directed_edge_weight = std::numeric_limits<int>::max(),
+      .block_count = 1,
+      .absolute_bound = 1,
+      .bank_factor_twice = 1,
+  };
+  CHECK(kahip::serial_kernel::make_profile(edge_limit).safe());
+}
+
 TEST_CASE("serial-kernel profile honors modified-kernel aggregate domains",
           "[serial-kernel][profile]") {
   auto input = profile_input{
@@ -249,6 +274,105 @@ TEST_CASE("serial-kernel profile detects checked byte arithmetic overflow",
         profile_reason::byte_count_overflow);
 }
 
+TEST_CASE("serial-kernel profile has independent exact vector boundaries",
+          "[serial-kernel][profile]") {
+  auto const input = profile_input{
+      .global_nodes = 2,
+      .global_directed_edges = 2,
+      .total_node_weight = 2,
+      .maximum_node_weight = 1,
+      .total_directed_edge_weight = 2,
+      .maximum_directed_edge_weight = 1,
+      .block_count = 1,
+      .absolute_bound = 2,
+  };
+  auto check_boundary = [&](auto member, std::uint64_t required) {
+    auto limits = profile_limits::native();
+    limits.*member = required;
+    CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
+    limits.*member = required - 1;
+    CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
+          profile_reason::vector_capacity_exceeded);
+  };
+  check_boundary(&profile_limits::xadj_elements, 3);
+  check_boundary(&profile_limits::adjncy_elements, 2);
+  check_boundary(&profile_limits::node_weight_elements, 2);
+  check_boundary(&profile_limits::edge_weight_elements, 2);
+  check_boundary(&profile_limits::partition_elements, 2);
+  check_boundary(&profile_limits::wire_node_elements, 2);
+  check_boundary(&profile_limits::wire_edge_elements, 2);
+  check_boundary(&profile_limits::complete_node_elements, 3);
+  check_boundary(&profile_limits::complete_node_data_elements, 3);
+  check_boundary(&profile_limits::complete_edge_elements, 2);
+  check_boundary(&profile_limits::structural_validation_elements, 2);
+  check_boundary(&profile_limits::flat_payload_elements, 9);
+}
+
+TEST_CASE("serial-kernel profile exposes flag and mode-product boundaries",
+          "[serial-kernel][profile]") {
+  auto input = profile_input{
+      .global_nodes = 2,
+      .global_directed_edges = 0,
+      .total_node_weight = 2,
+      .maximum_node_weight = 1,
+      .block_count = 2,
+      .absolute_bound = 1,
+  };
+  input.csr_offsets_are_valid = false;
+  CHECK(kahip::serial_kernel::make_profile(input).reason ==
+        profile_reason::csr_offset_out_of_range);
+  input.csr_offsets_are_valid = true;
+  input.targets_are_valid = false;
+  CHECK(kahip::serial_kernel::make_profile(input).reason ==
+        profile_reason::target_out_of_range);
+
+  input.targets_are_valid = true;
+  input.social_mode = true;
+  auto limits = profile_limits::native();
+  limits.modified_node_weight_max = 10'000;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
+  input.global_nodes = 3;
+  input.total_node_weight = 3;
+  input.block_count = 3;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
+        profile_reason::stop_rule_domain_out_of_range);
+
+  input.block_count = 2;
+  input.social_mode = false;
+  limits = profile_limits::native();
+  limits.int_max = 8;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
+  input.block_count = 3;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
+        profile_reason::stop_rule_domain_out_of_range);
+}
+
+TEST_CASE("range owner lookup matches the legacy oracle at degenerate boundaries",
+          "[serial-kernel][owner]") {
+  auto const legacy_owner = [](auto const& ranges, std::uint64_t node) {
+    for (int pe = 1; pe < static_cast<int>(ranges.size()); ++pe) {
+      if (node < ranges[static_cast<std::size_t>(pe)]) {
+        return pe - 1;
+      }
+    }
+    return -1;
+  };
+  auto check = [&](auto const& ranges, auto const& nodes) {
+    for (auto node : nodes) {
+      CHECK(kahip::range_owner::from_boundaries(ranges, node) ==
+            legacy_owner(ranges, node));
+    }
+  };
+  check(std::array<std::uint64_t, 1>{0},
+        std::array<std::uint64_t, 3>{0, 1, 99});
+  check(std::array<std::uint64_t, 2>{7, 8},
+        std::array<std::uint64_t, 4>{6, 7, 8, 99});
+  check(std::array<std::uint64_t, 4>{0, 0, 0, 0},
+        std::array<std::uint64_t, 3>{0, 1, 99});
+  check(std::array<std::uint64_t, 5>{0, 2, 2, 2, 2},
+        std::array<std::uint64_t, 5>{0, 1, 2, 3, 99});
+}
+
 TEST_CASE("range owner lookup preserves the legacy scan across empty ranks",
           "[serial-kernel][owner]") {
   auto const legacy_owner = [](std::array<std::uint64_t, 5> const& ranges,
@@ -308,7 +432,7 @@ TEST_CASE("single-block bridge avoids the undefined generic kernel domain",
       1, partition, edgecut, balance));
   CHECK(partition == std::array<int, 3>{0, 0, 0});
   CHECK(edgecut == 0);
-  CHECK(balance == 0.0);
+  CHECK(balance == 1.0);
   CHECK_FALSE(kahip::serial_kernel::solve_trivial_single_block(
       2, partition, edgecut, balance));
 }

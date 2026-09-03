@@ -515,12 +515,17 @@ auto mpi_tools::preflight_serial_kernel(
                           mpi::reduction_kind::minimum, collective,
                           "MPI_Allreduce(serial kernel profile validity)");
 
-  auto const local_metadata = std::array<std::uint64_t, 6>{
+  auto const local_metadata = std::array<std::uint64_t, 11>{
       local.reported_global_nodes, local.reported_global_edges,
       local.block_count, local.absolute_bound, local.bank_factor_twice,
-      (local.flags & social_mode) != 0};
-  auto minimum_metadata = std::array<std::uint64_t, 6>{};
-  auto maximum_metadata = std::array<std::uint64_t, 6>{};
+      (local.flags & social_mode) != 0,
+      config.vcycle ? std::uint64_t{1} : std::uint64_t{0},
+      static_cast<std::uint64_t>(config.initial_partitioning_algorithm),
+      static_cast<std::uint64_t>(config.inbalance),
+      static_cast<std::uint64_t>(config.seed),
+      static_cast<std::uint64_t>(config.evolutionary_time_limit)};
+  auto minimum_metadata = std::array<std::uint64_t, 11>{};
+  auto maximum_metadata = std::array<std::uint64_t, 11>{};
   mpi::all_reduce_bounded(std::span<std::uint64_t const>{local_metadata},
                           std::span<std::uint64_t>{minimum_metadata},
                           mpi::reduction_kind::minimum, collective,

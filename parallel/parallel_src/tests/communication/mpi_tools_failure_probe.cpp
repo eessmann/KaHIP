@@ -2,6 +2,7 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -18,6 +19,9 @@ inline int finalizations = 0;
 inline bool callback_error = false;
 inline bool unsafe_profile = false;
 inline bool structural_self_loop = false;
+inline bool vcycle_mismatch = false;
+inline bool initial_algorithm_mismatch = false;
+inline bool profile_aggregate_overflow = false;
 
 void write_text(std::string_view text) noexcept {
   static_cast<void>(::write(STDERR_FILENO, text.data(), text.size()));
@@ -43,7 +47,11 @@ void write_text(std::string_view text) noexcept {
 [[nodiscard]] auto expected_abort_state() noexcept -> bool {
   return !callback_error &&
          all_to_all_calls ==
-             ((unsafe_profile || structural_self_loop) ? 0 : 1) &&
+             ((unsafe_profile || structural_self_loop || vcycle_mismatch ||
+               initial_algorithm_mismatch)
+                  || profile_aggregate_overflow
+                  ? 0
+                  : 1) &&
          finalizations == 0 &&
          (communicator_rank == 0 || communicator_rank == 1);
 }
@@ -59,7 +67,29 @@ void write_text(std::string_view text) noexcept {
     write_text("observed mpi-tools MPI_Abort with unexpected state\n");
     std::_Exit(91);
   }
-  if (structural_self_loop && communicator_rank == 0) {
+  if (profile_aggregate_overflow && communicator_rank == 0) {
+    write_text("observed MPI_Abort rank=0 "
+               "mpi-tools-profile-aggregate-overflow "
+               "affected-communicator; payload all-to-all calls are zero\n");
+  } else if (profile_aggregate_overflow) {
+    write_text("observed MPI_Abort rank=1 "
+               "mpi-tools-profile-aggregate-overflow "
+               "affected-communicator; payload all-to-all calls are zero\n");
+  } else if (vcycle_mismatch && communicator_rank == 0) {
+    write_text("observed MPI_Abort rank=0 mpi-tools-config-vcycle-mismatch "
+               "affected-communicator; payload all-to-all calls are zero\n");
+  } else if (vcycle_mismatch) {
+    write_text("observed MPI_Abort rank=1 mpi-tools-config-vcycle-mismatch "
+               "affected-communicator; payload all-to-all calls are zero\n");
+  } else if (initial_algorithm_mismatch && communicator_rank == 0) {
+    write_text("observed MPI_Abort rank=0 "
+               "mpi-tools-config-initial-algorithm-mismatch "
+               "affected-communicator; payload all-to-all calls are zero\n");
+  } else if (initial_algorithm_mismatch) {
+    write_text("observed MPI_Abort rank=1 "
+               "mpi-tools-config-initial-algorithm-mismatch "
+               "affected-communicator; payload all-to-all calls are zero\n");
+  } else if (structural_self_loop && communicator_rank == 0) {
     write_text("observed MPI_Abort rank=0 mpi-tools-structural-self-loop "
                "affected-communicator\n");
   } else if (structural_self_loop) {
@@ -141,7 +171,10 @@ int main(int argc, char** argv) {
   if (argc != 2 ||
       (std::string_view{argv[1]} != "backend" &&
        std::string_view{argv[1]} != "unsafe-profile" &&
-       std::string_view{argv[1]} != "structural-self-loop") ||
+       std::string_view{argv[1]} != "structural-self-loop" &&
+       std::string_view{argv[1]} != "config-vcycle-mismatch" &&
+       std::string_view{argv[1]} != "config-initial-algorithm-mismatch" &&
+       std::string_view{argv[1]} != "profile-aggregate-overflow") ||
       MPI_Init(&argc, &argv) != MPI_SUCCESS) {
     return 2;
   }
@@ -167,6 +200,12 @@ int main(int argc, char** argv) {
 
   mpi_tools_failure_probe::structural_self_loop =
       std::string_view{argv[1]} == "structural-self-loop";
+  mpi_tools_failure_probe::vcycle_mismatch =
+      std::string_view{argv[1]} == "config-vcycle-mismatch";
+  mpi_tools_failure_probe::initial_algorithm_mismatch =
+      std::string_view{argv[1]} == "config-initial-algorithm-mismatch";
+  mpi_tools_failure_probe::profile_aggregate_overflow =
+      std::string_view{argv[1]} == "profile-aggregate-overflow";
   parhip::parallel_graph_access distributed{communicator};
   auto const local_nodes = mpi_tools_failure_probe::structural_self_loop
                                ? (rank == 0 ? 1 : 0)
@@ -188,7 +227,10 @@ int main(int argc, char** argv) {
   distributed.set_range_array(ranges);
   if (local_nodes != 0) {
     auto const node = distributed.new_node();
-    distributed.setNodeWeight(node, 1);
+    distributed.setNodeWeight(
+        node, mpi_tools_failure_probe::profile_aggregate_overflow
+                  ? std::numeric_limits<parhip::NodeWeight>::max()
+                  : 1);
     distributed.setSecondPartitionIndex(node, 0);
     if (local_edges != 0) {
       auto const edge = distributed.new_edge(node, node);
@@ -208,6 +250,19 @@ int main(int argc, char** argv) {
     config.k = 1;
     config.upper_bound_partition = 1;
   }
+  if (mpi_tools_failure_probe::vcycle_mismatch ||
+      mpi_tools_failure_probe::initial_algorithm_mismatch ||
+      mpi_tools_failure_probe::profile_aggregate_overflow) {
+    config.k = 1;
+    config.upper_bound_partition = 1;
+  }
+  if (mpi_tools_failure_probe::vcycle_mismatch) {
+    config.vcycle = rank == 0;
+  }
+  if (mpi_tools_failure_probe::initial_algorithm_mismatch && rank == 1) {
+    config.initial_partitioning_algorithm =
+        parhip::InitialPartitioningAlgorithm::KAFFPAEFAST;
+  }
   mpi_tools_failure_probe::expected_communicator = communicator;
   mpi_tools_failure_probe::communicator_rank = rank;
   mpi_tools_failure_probe::active = !mpi_tools_failure_probe::structural_self_loop;
@@ -215,6 +270,11 @@ int main(int argc, char** argv) {
     parhip::mpi_tools{}.collect_parallel_graph_to_checked_serial_graph(
         communicator, config, distributed, complete);
   } else if (mpi_tools_failure_probe::structural_self_loop) {
+    parhip::mpi_tools{}.collect_parallel_graph_to_checked_serial_graph(
+        communicator, config, distributed, complete);
+  } else if (mpi_tools_failure_probe::vcycle_mismatch ||
+             mpi_tools_failure_probe::initial_algorithm_mismatch ||
+             mpi_tools_failure_probe::profile_aggregate_overflow) {
     parhip::mpi_tools{}.collect_parallel_graph_to_checked_serial_graph(
         communicator, config, distributed, complete);
   } else {

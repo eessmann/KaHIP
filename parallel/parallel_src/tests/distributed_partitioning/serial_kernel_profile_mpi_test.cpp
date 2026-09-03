@@ -10,6 +10,7 @@
 #include "data_structure/parallel_graph_access.h"
 #include "distributed_partitioning/initial_partitioning/distributed_evolutionary_partitioning.h"
 #include "partition_config.h"
+#include "tools/random_functions.h"
 
 namespace {
 void build_zero_work_quotient(parhip::parallel_graph_access& graph,
@@ -36,7 +37,7 @@ void build_zero_work_quotient(parhip::parallel_graph_access& graph,
 
 [[nodiscard]] auto fields(
     kahip::serial_kernel::serial_kernel_profile const& profile)
-    -> std::array<std::uint64_t, 16> {
+    -> std::array<std::uint64_t, 17> {
   return {profile.global_nodes,
           profile.global_directed_edges,
           profile.total_node_weight,
@@ -50,6 +51,7 @@ void build_zero_work_quotient(parhip::parallel_graph_access& graph,
           profile.partition_bytes,
           profile.serial_input_bytes,
           profile.complete_graph_bytes,
+          profile.structural_validation_bytes,
           profile.base_memory_bytes,
           profile.flat_payload_elements,
           static_cast<std::uint64_t>(profile.reason)};
@@ -71,7 +73,12 @@ TEST_CASE("serial-kernel profile agrees exactly with zero-local-work ranks",
   REQUIRE(profile.global_directed_edges == 0);
 
   auto local = fields(profile);
-  auto all = std::array<std::uint64_t, 16>{};
+  REQUIRE(local == std::array<std::uint64_t, 17>{
+                       2, 0, 2, 1, 0, 0, 1, 2, 64, 20, 8, 28, 120, 0,
+                       184, 5,
+                       static_cast<std::uint64_t>(
+                           kahip::serial_kernel::profile_reason::none)});
+  auto all = std::array<std::uint64_t, 17>{};
   REQUIRE(MPI_Allreduce(local.data(), all.data(),
                         static_cast<int>(local.size()), MPI_UINT64_T, MPI_MIN,
                         MPI_COMM_WORLD) == MPI_SUCCESS);
@@ -85,9 +92,14 @@ TEST_CASE("single-block distributed bridge never enters the generic kernel",
   auto config = parhip::PPartitionConfig{};
   config.k = 1;
   config.upper_bound_partition = 2;
+  config.seed = 73;
+  parhip::random_functions::setSeed(config.seed);
+  auto const expected_next = parhip::random_functions::nextInt(0, 1'000'000);
+  parhip::random_functions::setSeed(config.seed);
   parhip::distributed_evolutionary_partitioning{}.perform_partitioning(
       MPI_COMM_WORLD, config, graph);
   for (parhip::NodeID node = 0; node < graph.number_of_local_nodes(); ++node) {
     CHECK(graph.getNodeLabel(node) == 0);
   }
+  CHECK(parhip::random_functions::nextInt(0, 1'000'000) == expected_next);
 }

@@ -209,6 +209,28 @@ foreach(ranks RANGE 1 5)
     )
 endforeach()
 
+add_test(
+    NAME unit-mpi-tools-profile-aggregate-overflow-aborts-before-payload
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DPROBE=$<TARGET_FILE:mpi_tools_failure_probe>"
+        -DMODE=profile-aggregate-overflow
+        -DEXPECT_FAILURE=ON
+        -DMPI_RANKS=2
+        "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+        "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+        "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+        "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+        "-DEXPECTED_MARKER=mpi-tools-profile-aggregate-overflow affected-communicator; payload all-to-all calls are zero"
+        "-DEXPECTED_DIAGNOSTIC=ParHIP serial kernel profile failure: reason=collective-aggregate-overflow"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+)
+set_tests_properties(
+    unit-mpi-tools-profile-aggregate-overflow-aborts-before-payload
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+)
+
 add_executable(
     edge_balanced_graph_io_layout_test
     io/edge_balanced_graph_io_layout_test.cpp
@@ -2066,6 +2088,30 @@ set_tests_properties(
     unit-mpi-tools-structural-gate-rejects-self-loop
     PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
 )
+
+foreach(config_mismatch IN ITEMS vcycle initial-algorithm)
+    add_test(
+        NAME unit-mpi-tools-${config_mismatch}-mismatch-aborts-before-payload
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROBE=$<TARGET_FILE:mpi_tools_failure_probe>"
+            "-DMODE=config-${config_mismatch}-mismatch"
+            -DEXPECT_FAILURE=ON
+            -DMPI_RANKS=2
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DEXPECTED_MARKER=mpi-tools-config-${config_mismatch}-mismatch affected-communicator; payload all-to-all calls are zero"
+            "-DEXPECTED_DIAGNOSTIC=ParHIP serial kernel profile failure: reason=collective-configuration-mismatch"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+    )
+    set_tests_properties(
+        unit-mpi-tools-${config_mismatch}-mismatch-aborts-before-payload
+        PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+    )
+endforeach()
 
 add_projection_validation_test(
     unit-parallel-projection-domain-skew-3-rank

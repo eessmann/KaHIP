@@ -16,7 +16,7 @@ namespace kahip::serial_kernel {
     label = 0;
   }
   edgecut = 0;
-  balance = 0.0;
+  balance = 1.0;
   return true;
 }
 }  // namespace kahip::serial_kernel
