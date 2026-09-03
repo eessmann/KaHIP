@@ -205,7 +205,7 @@ cmake --preset cirrus-gnu-release
 cmake --build --preset build-cirrus-gnu-release
 ```
 
-These Cirrus presets use `cc` and `CC`, Cray MPICH, Unix Makefiles, and build entirely below `out/build/`. The checked-in vcpkg manifest remains only for the existing CI jobs.
+These Cirrus presets use `cc` and `CC`, Cray MPICH, Unix Makefiles, and build entirely below `out/build/`. Neither the portable Unix presets nor the Cirrus presets select the checked-in vcpkg manifest.
 
 For user-submitted Cirrus test jobs, the test presets enable `BUILD_TESTING` and use `srun` for each MPI test. They require a compatible Catch2 3 installation, but keep its prefix out of portable project presets. The account-specific Slurm scripts supply their own prefix only at configure time, run CTest sequentially, and inherit the normal exclusion of `large` and `performance` labels. They have not been run by local validation or CI.
 
@@ -220,6 +220,71 @@ Use an appropriately sized allocation for an opt-in large suite, for example:
 
 ```console
 ctest --test-dir out/build/cirrus-cray-tests --output-on-failure -L large
+```
+
+### Cirrus cube scale probe
+
+The dedicated GNU and Cray scale runners accept the exported
+`KAHIP_SCALE_PROBE_SIDE` value and default to the `600^3` regression. Each
+supported side has exactly one valid allocation; the runner rejects any other
+side, node count, task count, tasks-per-node value, or CPUs-per-task value
+before loading modules or configuring the build.
+
+| Cube | Nodes | MPI ranks | Ranks per node | Expected balance bound |
+|---:|---:|---:|---:|---:|
+| `600^3` | 8 | 2304 | 288 | 96562 |
+| `755^3` | 16 | 4608 | 288 | 96198 |
+| `900^3` | 27 | 7776 | 288 | 96562 |
+| `1008^3` | 38 | 10944 | 288 | 96392 |
+
+The jobs use account `e609`, the standard partition and QoS, exclusive nodes,
+one CPU per rank, and `OMP_NUM_THREADS=1`. They fresh-configure the existing
+`cirrus-gnu-tests` or `cirrus-cray-tests` build tree, pass the existing
+`/work/e609/e609/eriche609/opt/catch2` prefix only to that configure command,
+and build only `parhip_cube_scale_probe`; they do not install anything. The
+launch is unfiltered and uses `srun` with `--hint=nomultithread`,
+`--distribution=block:block`, `--kill-on-bad-exit`, and `--unbuffered` so that
+failure diagnostics remain in the Slurm record.
+
+Before configuring, each runner reads the checkout's exact `HEAD` and checks
+tracked changes with repository-confined, read-only Git commands. A tracked
+difference appends `-dirty`; the resulting token is configured as
+`KAHIP_SCALE_PROBE_SOURCE_REVISION`, and an invalid or `unknown` revision is
+rejected. Build products, temporary files, and Slurm output remain below
+`/work/e609/e609/eriche609/KaHIP`. The `out/slurm` directory must exist before
+submission because Slurm opens the output file before starting the script.
+
+These are user-owned scale runs. They have not been submitted or executed by
+local validation or CI. From the Cirrus checkout, create the output directory,
+then submit the GNU gates in order. Continue only after the preceding job's
+canonical probe record passes all invariants:
+
+```console
+cd /work/e609/e609/eriche609/KaHIP
+mkdir -p /work/e609/e609/eriche609/KaHIP/out/slurm
+sbatch ci/cirrus/run-gnu-scale-probe.slurm
+sbatch --nodes=16 --ntasks=4608 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=755 ci/cirrus/run-gnu-scale-probe.slurm
+sbatch --nodes=27 --ntasks=7776 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=900 ci/cirrus/run-gnu-scale-probe.slurm
+sbatch --nodes=38 --ntasks=10944 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=1008 ci/cirrus/run-gnu-scale-probe.slurm
+```
+
+Confirm the baseline with Cray after GNU passes `600^3`:
+
+```console
+sbatch ci/cirrus/run-cray-scale-probe.slurm
+```
+
+Then confirm the largest GNU-passing gate with the matching exact command
+below. If `600^3` is the largest pass, the baseline Cray job above is already
+that confirmation.
+
+```console
+# Largest GNU pass: 755^3
+sbatch --nodes=16 --ntasks=4608 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=755 ci/cirrus/run-cray-scale-probe.slurm
+# Largest GNU pass: 900^3
+sbatch --nodes=27 --ntasks=7776 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=900 ci/cirrus/run-cray-scale-probe.slurm
+# Largest GNU pass: 1008^3
+sbatch --nodes=38 --ntasks=10944 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=1008 ci/cirrus/run-cray-scale-probe.slurm
 ```
 
 See the [Cirrus application-development guide](https://docs.cirrus.ac.uk/user-guide/development/) and [Cirrus batch-job guide](https://docs.cirrus.ac.uk/user-guide/batch/) for the supported environments and scheduler guidance.

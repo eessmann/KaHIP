@@ -581,6 +581,25 @@ if(BUILD_TESTING)
         cmake-mpi-capability-profiles
         PROPERTIES LABELS "cmake;mpi"
     )
+    if(UNIX)
+        find_program(KAHIP_TEST_BASH_EXECUTABLE NAMES bash REQUIRED)
+        add_test(
+            NAME unit-cirrus-scale-runners
+            COMMAND
+                "${CMAKE_COMMAND}"
+                "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                "-DBASH_EXECUTABLE=${KAHIP_TEST_BASH_EXECUTABLE}"
+                "-DTEST_ROOT=${PROJECT_BINARY_DIR}/test-cirrus-scale-runners"
+                -P
+                "${PROJECT_SOURCE_DIR}/ci/cirrus/VerifyScaleRunners.cmake"
+        )
+        set_tests_properties(
+            unit-cirrus-scale-runners
+            PROPERTIES
+                TIMEOUT 30
+                LABELS "unit;script;cirrus;scale"
+        )
+    endif()
     add_test(NAME integration-kahip-interface COMMAND interface_test)
     set_tests_properties(
         integration-kahip-interface
