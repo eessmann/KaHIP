@@ -53,6 +53,33 @@ catch_discover_tests(
 )
 
 add_executable(
+    cube_scale_probe_core_test
+    scale/cube_scale_probe_core_test.cpp
+)
+target_sources(
+    cube_scale_probe_core_test
+    PRIVATE
+        FILE_SET cube_scale_probe_headers
+        TYPE HEADERS
+        BASE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${PROJECT_SOURCE_DIR}/parallel/shared"
+        FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/scale/cube_scale_probe_core.h"
+            "${PROJECT_SOURCE_DIR}/parallel/shared/range_owner.h"
+)
+target_link_libraries(
+    cube_scale_probe_core_test
+    PRIVATE Catch2::Catch2WithMain kahip_options kahip_warnings
+)
+catch_discover_tests(
+    cube_scale_probe_core_test
+    TEST_PREFIX "unit-"
+    OUTPUT_DIR .
+    OUTPUT_PREFIX "unit-"
+)
+
+add_executable(
     bipartition_candidate_test
     initial_partitioning/bipartition_candidate_test.cpp
 )
@@ -2269,6 +2296,238 @@ foreach(mpi_ranks RANGE 1 5)
             TIMEOUT 10
     )
 endforeach()
+
+add_executable(
+    cube_scale_probe_protocol_mpi_test
+    scale/cube_scale_probe_protocol_mpi_test.cpp
+)
+target_sources(
+    cube_scale_probe_protocol_mpi_test
+    PRIVATE
+        FILE_SET cube_scale_probe_protocol_headers
+        TYPE HEADERS
+        BASE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${PROJECT_SOURCE_DIR}/parallel/shared"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib"
+            "${PARHIP_GENERATED_INCLUDE_DIR}"
+        FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/scale/cube_scale_probe_core.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scale/cube_scale_probe_protocol.h"
+            "${PROJECT_SOURCE_DIR}/parallel/shared/range_owner.h"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/mpi_adapter.h"
+            "${PARHIP_GENERATED_INCLUDE_DIR}/kahip_mpi_capabilities.h"
+)
+target_link_libraries(
+    cube_scale_probe_protocol_mpi_test
+    PRIVATE
+        catch_mpi_runner
+        parhip_interface
+        MPI::MPI_CXX
+        kahip_options
+        kahip_warnings
+)
+foreach(mpi_ranks IN ITEMS 1 3)
+    add_test(
+        NAME unit-cube-scale-protocol-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:cube_scale_probe_protocol_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-cube-scale-protocol-${mpi_ranks}-rank
+        PROPERTIES
+            PROCESSORS ${mpi_ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT 30
+            LABELS "unit;mpi;scale;protocol"
+    )
+endforeach()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+add_executable(
+    parhip_cube_scale_probe
+    scale/parhip_cube_scale_probe.cpp
+)
+set(
+    KAHIP_SCALE_PROBE_SOURCE_REVISION
+    "unknown"
+    CACHE STRING
+    "Source revision recorded by parhip_cube_scale_probe"
+)
+if(NOT KAHIP_SCALE_PROBE_SOURCE_REVISION MATCHES "^[0-9A-Za-z._+-]+$")
+    message(
+        FATAL_ERROR
+        "KAHIP_SCALE_PROBE_SOURCE_REVISION must be a simple revision token"
+    )
+endif()
+target_sources(
+    parhip_cube_scale_probe
+    PRIVATE
+        FILE_SET parhip_cube_scale_probe_headers
+        TYPE HEADERS
+        BASE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${PROJECT_SOURCE_DIR}/parallel/shared"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib"
+            "${PARHIP_GENERATED_INCLUDE_DIR}"
+            "${PROJECT_SOURCE_DIR}/lib/version"
+        FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/scale/cube_scale_probe_core.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scale/cube_scale_probe_protocol.h"
+            "${PROJECT_SOURCE_DIR}/parallel/shared/imbalance.h"
+            "${PROJECT_SOURCE_DIR}/parallel/shared/range_owner.h"
+            "${PROJECT_SOURCE_DIR}/parallel/shared/serial_kernel_profile.h"
+            "${PROJECT_SOURCE_DIR}/parallel/shared/serial_kernel_structure.h"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/mpi_adapter.h"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/mpi_tools.h"
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/communication/serial_kernel_profile_observer.h"
+            "${PARHIP_GENERATED_INCLUDE_DIR}/kahip_mpi_capabilities.h"
+            "${PROJECT_SOURCE_DIR}/lib/version/version.h"
+        FILE_SET parhip_cube_scale_probe_tool_headers
+        TYPE HEADERS
+        BASE_DIRS "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/tools"
+        FILES
+            "${PROJECT_SOURCE_DIR}/parallel/parallel_src/lib/tools/macros_assertions.h"
+)
+target_compile_definitions(
+    parhip_cube_scale_probe
+    PRIVATE
+        KAHIP_SCALE_PROBE_PROJECT_VERSION="${PROJECT_VERSION}"
+        KAHIP_SCALE_PROBE_SOURCE_REVISION="${KAHIP_SCALE_PROBE_SOURCE_REVISION}"
+        KAHIP_SCALE_PROBE_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}"
+        KAHIP_SCALE_PROBE_COMPILER_VERSION="${CMAKE_CXX_COMPILER_VERSION}"
+        KAHIP_SCALE_PROBE_BUILD_TYPE="$<CONFIG>"
+        KAHIP_SCALE_PROBE_CXX_STANDARD=23
+)
+target_compile_features(parhip_cube_scale_probe PRIVATE cxx_std_23)
+# The observer scope and public C call must resolve through this one shared
+# image. In particular, do not add the `parallel` target here.
+target_link_libraries(
+    parhip_cube_scale_probe
+    PRIVATE
+        parhip_interface
+        kahip_version
+        MPI::MPI_CXX
+        kahip_options
+        kahip_warnings
+)
+
+add_test(
+    NAME unit-cube-scale-probe-cli-failures
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DPROBE=$<TARGET_FILE:parhip_cube_scale_probe>"
+        "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+        "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+        "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+        "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/scale/verify_cube_scale_probe_cli.cmake"
+)
+set_tests_properties(
+    unit-cube-scale-probe-cli-failures
+    PROPERTIES
+        PROCESSORS 1
+        RUN_SERIAL TRUE
+        TIMEOUT 30
+        LABELS "unit;mpi;scale;cli"
+)
+
+function(
+    add_cube_scale_probe_test
+    name
+    side
+    ranks
+    vertices
+    undirected_edges
+    directed_edges
+    maximum_local_nodes
+    bound
+    graph_digest
+    labels
+    timeout
+)
+    math(EXPR command_timeout "${timeout} - 10")
+    add_test(
+        NAME ${name}
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DPROBE=$<TARGET_FILE:parhip_cube_scale_probe>"
+            "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+            "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+            "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+            "-DWORK_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/${name}"
+            "-DSIDE=${side}"
+            "-DRANKS=${ranks}"
+            "-DEXPECTED_VERTICES=${vertices}"
+            "-DEXPECTED_UNDIRECTED_EDGES=${undirected_edges}"
+            "-DEXPECTED_DIRECTED_EDGES=${directed_edges}"
+            "-DEXPECTED_MAXIMUM_LOCAL_NODES=${maximum_local_nodes}"
+            "-DEXPECTED_BOUND=${bound}"
+            "-DEXPECTED_GRAPH_DIGEST=${graph_digest}"
+            "-DEXPECTED_PROJECT_VERSION=${PROJECT_VERSION}"
+            "-DEXPECTED_PLATFORM=${CMAKE_SYSTEM_NAME}"
+            "-DEXECUTION_TIMEOUT=${command_timeout}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/scale/verify_cube_scale_probe_result.cmake"
+    )
+    set_tests_properties(
+        ${name}
+        PROPERTIES
+            PROCESSORS ${ranks}
+            RUN_SERIAL TRUE
+            TIMEOUT ${timeout}
+            LABELS "${labels}"
+    )
+endfunction()
+
+add_cube_scale_probe_test(
+    integration-cube-scale-probe-side4-2-rank
+    4 2 64 144 288 32 32
+    "f12b9a02fe2a75b7,e6a832aefcaa2a99,dd15134b3a2a0e43,30789a9a367d34f9"
+    "integration;mpi;scale"
+    120
+)
+add_cube_scale_probe_test(
+    integration-cube-scale-probe-side10-5-rank
+    10 5 1000 2700 5400 200 206
+    "73e09509b201c17a,402fd2d71ea65a5b,d002e5024a1072db,bcc02b4ee29b27bd"
+    "integration;mpi;scale"
+    180
+)
+
+add_cube_scale_probe_test(
+    large-cube-scale-probe-side600-2304-rank
+    600 2304 216000000 646920000 1293840000 93750 96562
+    ""
+    "large;scale;mpi"
+    7200
+)
+add_cube_scale_probe_test(
+    large-cube-scale-probe-side755-4608-rank
+    755 4608 430368875 1289396550 2578793100 93397 96198
+    ""
+    "large;scale;mpi"
+    7200
+)
+add_cube_scale_probe_test(
+    large-cube-scale-probe-side900-7776-rank
+    900 7776 729000000 2184570000 4369140000 93750 96562
+    ""
+    "large;scale;mpi"
+    7200
+)
+add_cube_scale_probe_test(
+    large-cube-scale-probe-side1008-10944-rank
+    1008 10944 1024192512 3069529344 6139058688 93585 96392
+    ""
+    "large;scale;mpi"
+    7200
+)
+endif()
 
 add_test(
     NAME unit-mpi-semantic-exit-policy
