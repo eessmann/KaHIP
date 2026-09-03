@@ -19,6 +19,7 @@
 #include "kaHIP_evolutionary_interface_internal.h"
 #include "parallel_contraction_projection/parallel_projection.h"
 #include "io/parallel_graph_io.h"
+#include "serial_kernel_bridge.h"
 #include "tools/distributed_quality_metrics.h"
 namespace parhip {
 namespace {
@@ -117,6 +118,19 @@ void distributed_evolutionary_partitioning::perform_partitioning( MPI_Comm commu
   auto* vwgt = serial_input->node_weights.data();
   auto* adjwgt = serial_input->edge_weights.data();
   auto* partition_map = serial_input->partition.data();
+
+  [[maybe_unused]] int trivial_edgecut = 0;
+  [[maybe_unused]] double trivial_balance = 0.0;
+  if (kahip::serial_kernel::solve_trivial_single_block(
+          nparts, std::span<int>{partition_map, static_cast<std::size_t>(n)},
+          trivial_edgecut, trivial_balance)) {
+    forall_local_nodes(Q_bar, node) {
+      Q_bar.setNodeLabel(node, 0);
+    } endfor
+    parallel_projection parallel_project_init;
+    parallel_project_init.initial_assignment(Q, Q_bar);
+    return;
+  }
 
   auto const mpi_communicator = mpi::communicator_view{communicator};
   PEID const rank = mpi_communicator.rank();

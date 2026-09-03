@@ -1,10 +1,13 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "serial_kernel_profile.h"
+#include "serial_kernel_bridge.h"
+#include "serial_kernel_structure.h"
 #include "range_owner.h"
 
 namespace {
@@ -33,6 +36,10 @@ TEST_CASE("serial-kernel profile accounts for a safe weighted quotient",
   CHECK(profile.csr_bytes == 60);
   CHECK(profile.partition_bytes == 12);
   CHECK(profile.serial_input_bytes == 72);
+  CHECK(profile.complete_graph_bytes == 192);
+  CHECK(profile.structural_validation_bytes == 96);
+  CHECK(profile.base_memory_bytes == 448);
+  CHECK(profile.flat_payload_elements == 15);
 }
 
 TEST_CASE("serial-kernel profile rejects each narrowed scalar one past its domain",
@@ -169,7 +176,56 @@ TEST_CASE("serial-kernel profile rejects vectors beyond their capacity",
       .labels_are_valid = true,
   };
   auto limits = profile_limits::native();
-  limits.int_elements = 1;
+  limits.xadj_elements = 2;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
+        profile_reason::vector_capacity_exceeded);
+}
+
+TEST_CASE("serial-kernel profile accounts for both complete-graph sentinels",
+          "[serial-kernel][profile]") {
+  auto const input = profile_input{
+      .global_nodes = 2,
+      .global_directed_edges = 0,
+      .total_node_weight = 2,
+      .maximum_node_weight = 1,
+      .block_count = 1,
+      .absolute_bound = 2,
+  };
+  auto limits = profile_limits::native();
+  limits.complete_node_elements = 3;
+  limits.complete_node_data_elements = 3;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).safe());
+
+  limits.complete_node_data_elements = 2;
+  CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
+        profile_reason::vector_capacity_exceeded);
+}
+
+TEST_CASE("serial-kernel profile checks the combined distribution payload",
+          "[serial-kernel][profile]") {
+  auto const input = profile_input{
+      .global_nodes = 2,
+      .global_directed_edges = 3,
+      .total_node_weight = 2,
+      .maximum_node_weight = 1,
+      .total_directed_edge_weight = 3,
+      .maximum_directed_edge_weight = 1,
+      .block_count = 1,
+      .absolute_bound = 2,
+  };
+  auto limits = profile_limits::native();
+  // Each array fits independently: xadj=3, adjncy=3, node=2, edge=3.
+  limits.xadj_elements = 3;
+  limits.adjncy_elements = 3;
+  limits.node_weight_elements = 2;
+  limits.edge_weight_elements = 3;
+  limits.partition_elements = 2;
+  limits.flat_payload_elements = 11;
+  auto const profile = kahip::serial_kernel::make_profile(input, limits);
+  CHECK(profile.flat_payload_elements == 11);
+  CHECK(profile.safe());
+
+  limits.flat_payload_elements = 10;
   CHECK(kahip::serial_kernel::make_profile(input, limits).reason ==
         profile_reason::vector_capacity_exceeded);
 }
@@ -223,5 +279,37 @@ TEST_CASE("range owner lookup retains first and last ordinary owners",
   CHECK(kahip::range_owner::from_boundaries(ranges, 13) == 1);
   CHECK(kahip::range_owner::from_boundaries(ranges, 18) == 2);
   CHECK(kahip::range_owner::from_boundaries(ranges, 19) == -1);
+}
+
+TEST_CASE("serial kernel accepts only reciprocal loop-free weighted arcs",
+          "[serial-kernel][structure]") {
+  using kahip::serial_kernel::directed_arc;
+  auto const valid_unsorted = std::vector<directed_arc>{
+      {1, 0, 7}, {0, 2, 3}, {2, 0, 3}, {0, 1, 7},
+      {1, 0, 7}, {0, 1, 7}};
+  CHECK(kahip::serial_kernel::is_loop_free_reciprocal_undirected(
+      valid_unsorted));
+  CHECK_FALSE(kahip::serial_kernel::is_loop_free_reciprocal_undirected(
+      std::vector<directed_arc>{{0, 0, 1}}));
+  CHECK_FALSE(kahip::serial_kernel::is_loop_free_reciprocal_undirected(
+      std::vector<directed_arc>{{0, 1, 1}}));
+  CHECK_FALSE(kahip::serial_kernel::is_loop_free_reciprocal_undirected(
+      std::vector<directed_arc>{{0, 1, 1}, {1, 0, 2}}));
+  CHECK_FALSE(kahip::serial_kernel::is_loop_free_reciprocal_undirected(
+      std::vector<directed_arc>{{0, 1, 1}, {1, 0, 1}, {0, 1, 1}}));
+}
+
+TEST_CASE("single-block bridge avoids the undefined generic kernel domain",
+          "[serial-kernel][bridge]") {
+  auto partition = std::array<int, 3>{9, 8, 7};
+  auto edgecut = -1;
+  auto balance = -1.0;
+  CHECK(kahip::serial_kernel::solve_trivial_single_block(
+      1, partition, edgecut, balance));
+  CHECK(partition == std::array<int, 3>{0, 0, 0});
+  CHECK(edgecut == 0);
+  CHECK(balance == 0.0);
+  CHECK_FALSE(kahip::serial_kernel::solve_trivial_single_block(
+      2, partition, edgecut, balance));
 }
 }  // namespace

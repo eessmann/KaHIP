@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "communication/mpi_fixed_broadcast.h"
+#include "communication/mpi_fixed_reduction.h"
+#include "serial_kernel_structure.h"
 #include "tools/fatal_diagnostics.h"
 
 namespace parhip {
@@ -31,8 +33,6 @@ using serial_kernel_profile = kahip::serial_kernel::serial_kernel_profile;
 using serial_profile_input = kahip::serial_kernel::profile_input;
 using serial_profile_limits = kahip::serial_kernel::profile_limits;
 using serial_profile_reason = kahip::serial_kernel::profile_reason;
-
-constexpr auto serial_profile_fields = std::size_t{12};
 
 struct local_serial_observation final {
   std::uint64_t local_nodes{};
@@ -61,7 +61,14 @@ constexpr auto all_local_observation_flags = csr_offsets_are_valid |
 
 [[nodiscard]] auto native_serial_profile_limits() -> serial_profile_limits {
   auto result = serial_profile_limits::native();
-  result.int_elements = std::vector<int>{}.max_size();
+  result.xadj_elements = std::vector<int>{}.max_size();
+  result.adjncy_elements = std::vector<int>{}.max_size();
+  result.node_weight_elements = std::vector<int>{}.max_size();
+  result.edge_weight_elements = std::vector<int>{}.max_size();
+  result.partition_elements = std::vector<int>{}.max_size();
+  result.flat_payload_elements = std::vector<int>{}.max_size();
+  result.structural_validation_elements =
+      std::vector<kahip::serial_kernel::directed_arc>{}.max_size();
   result.wire_node_elements = std::vector<graph_node_record>{}.max_size();
   result.wire_edge_elements = std::vector<graph_edge_record>{}.max_size();
   result.complete_node_elements = std::vector<Node>{}.max_size();
@@ -72,6 +79,8 @@ constexpr auto all_local_observation_flags = csr_offsets_are_valid |
   result.complete_node_bytes = sizeof(Node);
   result.complete_node_data_bytes = sizeof(NodeData);
   result.complete_edge_bytes = sizeof(Edge);
+  result.structural_validation_arc_bytes =
+      sizeof(kahip::serial_kernel::directed_arc);
   return result;
 }
 
@@ -227,6 +236,41 @@ constexpr auto all_local_observation_flags = csr_offsets_are_valid |
   return profile;
 }
 
+[[nodiscard]] auto serial_profile_from_reductions(
+    local_serial_observation const& root_observation,
+    std::array<std::uint64_t, 4> const& sums,
+    std::array<std::uint64_t, 2> const& maxima,
+    std::array<std::uint64_t, 4> const& valid,
+    bool sums_are_exact, bool common_metadata) -> serial_kernel_profile {
+  auto const input = serial_profile_input{
+      .global_nodes = sums[0],
+      .global_directed_edges = sums[1],
+      .total_node_weight = sums[2],
+      .maximum_node_weight = maxima[0],
+      .total_directed_edge_weight = sums[3],
+      .maximum_directed_edge_weight = maxima[1],
+      .block_count = root_observation.block_count,
+      .absolute_bound = root_observation.absolute_bound,
+      .csr_offsets_are_valid = valid[0] != 0,
+      .targets_are_valid = valid[1] != 0,
+      .labels_are_valid = valid[2] != 0,
+      .social_mode = (root_observation.flags & social_mode) != 0,
+      .bank_factor_twice = root_observation.bank_factor_twice,
+  };
+  auto profile = kahip::serial_kernel::make_profile(
+      input, native_serial_profile_limits());
+  if (!sums_are_exact || valid[3] == 0) {
+    profile.reason = serial_profile_reason::collective_aggregate_overflow;
+  } else if (!common_metadata) {
+    profile.reason = serial_profile_reason::collective_configuration_mismatch;
+  } else if (input.global_nodes != root_observation.reported_global_nodes) {
+    profile.reason = serial_profile_reason::global_node_count_mismatch;
+  } else if (input.global_directed_edges != root_observation.reported_global_edges) {
+    profile.reason = serial_profile_reason::global_directed_edge_count_mismatch;
+  }
+  return profile;
+}
+
 [[noreturn]] void abort_unsafe_serial_profile(
     MPI_Comm communicator,
     int rank,
@@ -248,6 +292,7 @@ constexpr auto all_local_observation_flags = csr_offsets_are_valid |
         ", partition bytes=", profile.partition_bytes,
         ", serial input bytes=", profile.serial_input_bytes,
         ", complete graph bytes=", profile.complete_graph_bytes,
+        ", structural validation bytes=", profile.structural_validation_bytes,
         ", base memory bytes=", profile.base_memory_bytes);
   }
   static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
@@ -339,14 +384,20 @@ template <mpi::mpi_datatype Record>
     mpi::segmented_buffer<graph_edge_record> const& received_edges,
     NodeID global_nodes,
     EdgeID global_edges,
-    std::size_t communicator_size) -> bool {
+    std::size_t communicator_size,
+    bool require_serial_kernel_structure) -> bool {
   if (received_nodes.segment_count() != communicator_size ||
-      received_edges.segment_count() != communicator_size) {
+      received_edges.segment_count() != communicator_size ||
+      !std::in_range<std::size_t>(global_edges)) {
     return false;
   }
 
   auto next_global_node = std::uint64_t{0};
   auto total_received_edges = std::uint64_t{0};
+  auto arcs = std::vector<kahip::serial_kernel::directed_arc>{};
+  if (require_serial_kernel_structure) {
+    arcs.reserve(static_cast<std::size_t>(global_edges));
+  }
   for (std::size_t source = 0; source < communicator_size; ++source) {
     auto const node_segment = received_nodes.segment(source);
     auto const edge_segment = received_edges.segment(source);
@@ -365,6 +416,13 @@ template <mpi::mpi_datatype Record>
         if (edge.target_global_id >= static_cast<std::uint64_t>(global_nodes)) {
           return false;
         }
+        if (require_serial_kernel_structure) {
+          arcs.push_back(kahip::serial_kernel::directed_arc{
+              .source = next_global_node,
+              .target = edge.target_global_id,
+              .weight = edge.weight,
+          });
+        }
       }
       parsed_edges += degree;
       ++next_global_node;
@@ -382,7 +440,10 @@ template <mpi::mpi_datatype Record>
     total_received_edges += received_edge_count;
   }
   return next_global_node == static_cast<std::uint64_t>(global_nodes) &&
-         total_received_edges == static_cast<std::uint64_t>(global_edges);
+         total_received_edges == static_cast<std::uint64_t>(global_edges) &&
+         (!require_serial_kernel_structure ||
+          kahip::serial_kernel::is_loop_free_reciprocal_undirected(
+              std::move(arcs)));
 }
 
 void construct_complete_graph(
@@ -479,9 +540,21 @@ enum class distribution_status : std::uint64_t {
   add(edges);
   add(nodes);
   add(edges);
+  if (total > std::vector<int>{}.max_size()) {
+    mpi::abort_on_capacity_failure(
+        communicator, "complete graph distribution",
+        "serial graph payload exceeds vector<int>::max_size()");
+  }
   return total;
 }
 }  // namespace
+
+void collect_parallel_graph_to_local_graph_impl(
+    MPI_Comm communicator,
+    PPartitionConfig const& config,
+    parallel_graph_access& distributed,
+    complete_graph_access& complete,
+    bool require_serial_kernel_structure);
 
 auto mpi_tools::preflight_serial_kernel(
     MPI_Comm communicator,
@@ -492,21 +565,77 @@ auto mpi_tools::preflight_serial_kernel(
       collective, "serial kernel profile requires a live intracommunicator");
   auto const local = observe_serial_kernel(graph, config);
   auto const rank = collective.rank();
-  auto const size = static_cast<std::size_t>(collective.size());
-  auto received = std::vector<local_serial_observation>(size);
-  static_assert(sizeof(local_serial_observation) ==
-                serial_profile_fields * sizeof(std::uint64_t));
+  auto const local_sums = std::array<std::uint64_t, 4>{
+      local.local_nodes, local.local_edges, local.total_node_weight,
+      local.total_edge_weight};
+  auto const local_maxima = std::array<std::uint64_t, 2>{
+      local.maximum_node_weight, local.maximum_edge_weight};
+  auto const local_validity = std::array<std::uint64_t, 4>{
+      (local.flags & csr_offsets_are_valid) != 0,
+      (local.flags & targets_are_valid) != 0,
+      (local.flags & labels_are_valid) != 0,
+      (local.flags & sums_are_valid) != 0,
+  };
+  auto global_maxima = std::array<std::uint64_t, 2>{};
+  auto global_validity = std::array<std::uint64_t, 4>{};
+  mpi::all_reduce_bounded(std::span<std::uint64_t const>{local_maxima},
+                          std::span<std::uint64_t>{global_maxima},
+                          mpi::reduction_kind::maximum, collective,
+                          "MPI_Allreduce(serial kernel profile maxima)");
+  mpi::all_reduce_bounded(std::span<std::uint64_t const>{local_validity},
+                          std::span<std::uint64_t>{global_validity},
+                          mpi::reduction_kind::minimum, collective,
+                          "MPI_Allreduce(serial kernel profile validity)");
+
+  auto const local_metadata = std::array<std::uint64_t, 6>{
+      local.reported_global_nodes, local.reported_global_edges,
+      local.block_count, local.absolute_bound, local.bank_factor_twice,
+      (local.flags & social_mode) != 0};
+  auto minimum_metadata = std::array<std::uint64_t, 6>{};
+  auto maximum_metadata = std::array<std::uint64_t, 6>{};
+  mpi::all_reduce_bounded(std::span<std::uint64_t const>{local_metadata},
+                          std::span<std::uint64_t>{minimum_metadata},
+                          mpi::reduction_kind::minimum, collective,
+                          "MPI_Allreduce(serial kernel profile metadata min)");
+  mpi::all_reduce_bounded(std::span<std::uint64_t const>{local_metadata},
+                          std::span<std::uint64_t>{maximum_metadata},
+                          mpi::reduction_kind::maximum, collective,
+                          "MPI_Allreduce(serial kernel profile metadata max)");
+  auto const common_metadata = minimum_metadata == maximum_metadata;
+
+  auto root_sums = std::vector<std::array<std::uint64_t, 4>>{};
+  if (rank == static_cast<int>(ROOT)) {
+    try {
+      root_sums.resize(static_cast<std::size_t>(collective.size()));
+    } catch (...) {
+      mpi::abort_on_exception(communicator,
+                              "serial kernel profile root sum allocation failure");
+    }
+  }
   mpi::check_or_abort(
-      MPI_Allgather(&local, static_cast<int>(serial_profile_fields), MPI_UINT64_T,
-                    received.data(), static_cast<int>(serial_profile_fields),
-                    MPI_UINT64_T, communicator),
-      communicator, "MPI_Allgather(serial kernel profile)");
+      MPI_Gather(local_sums.data(), static_cast<int>(local_sums.size()),
+                 MPI_UINT64_T,
+                 rank == static_cast<int>(ROOT) ? root_sums.data() : nullptr,
+                 static_cast<int>(local_sums.size()), MPI_UINT64_T, ROOT,
+                 communicator),
+      communicator, "MPI_Gather(serial kernel profile sums)");
 
   auto profile = serial_kernel_profile{};
   if (rank == static_cast<int>(ROOT)) {
-    profile = serial_profile_from_observations(received);
+    auto sums = std::array<std::uint64_t, 4>{};
+    auto sums_are_exact = true;
+    for (auto const& rank_sums : root_sums) {
+      for (auto index = std::size_t{0}; index < sums.size(); ++index) {
+        sums_are_exact = sums_are_exact && kahip::serial_kernel::checked_add(
+            sums[index], rank_sums[index],
+            std::numeric_limits<std::uint64_t>::max(), sums[index]);
+      }
+    }
+    profile = serial_profile_from_reductions(
+        local, sums, global_maxima, global_validity, sums_are_exact,
+        common_metadata);
   }
-  auto packed = std::array<std::uint64_t, 15>{
+  auto packed = std::array<std::uint64_t, 17>{
       profile.global_nodes,
       profile.global_directed_edges,
       profile.total_node_weight,
@@ -520,7 +649,9 @@ auto mpi_tools::preflight_serial_kernel(
       profile.partition_bytes,
       profile.serial_input_bytes,
       profile.complete_graph_bytes,
+      profile.structural_validation_bytes,
       profile.base_memory_bytes,
+      profile.flat_payload_elements,
       static_cast<std::uint64_t>(profile.reason),
   };
   mpi::check_or_abort(
@@ -541,8 +672,10 @@ auto mpi_tools::preflight_serial_kernel(
       .partition_bytes = packed[10],
       .serial_input_bytes = packed[11],
       .complete_graph_bytes = packed[12],
-      .base_memory_bytes = packed[13],
-      .reason = static_cast<serial_profile_reason>(packed[14]),
+      .structural_validation_bytes = packed[13],
+      .base_memory_bytes = packed[14],
+      .flat_payload_elements = packed[15],
+      .reason = static_cast<serial_profile_reason>(packed[16]),
   };
   if (!profile.safe()) {
     abort_unsafe_serial_profile(communicator, rank, profile);
@@ -556,15 +689,16 @@ void mpi_tools::collect_parallel_graph_to_checked_serial_graph(
     parallel_graph_access& distributed,
     complete_graph_access& complete) {
   static_cast<void>(preflight_serial_kernel(communicator, config, distributed));
-  collect_parallel_graph_to_local_graph(communicator, config, distributed,
-                                        complete);
+  collect_parallel_graph_to_local_graph_impl(communicator, config, distributed,
+                                             complete, true);
 }
 
-void mpi_tools::collect_parallel_graph_to_local_graph(
+void collect_parallel_graph_to_local_graph_impl(
     MPI_Comm communicator,
     PPartitionConfig const&,
     parallel_graph_access& distributed,
-    complete_graph_access& complete) {
+    complete_graph_access& complete,
+    bool require_serial_kernel_structure) {
   auto const communicator_view = mpi::communicator_view{communicator};
   mpi::require_live_intracommunicator(
       communicator_view,
@@ -615,18 +749,37 @@ void mpi_tools::collect_parallel_graph_to_local_graph(
     try {
       payload_is_valid = complete_graph_payload_is_valid(
           *received_nodes, *received_edges, static_cast<NodeID>(global_nodes),
-          static_cast<EdgeID>(global_edges), communicator_size);
+          static_cast<EdgeID>(global_edges), communicator_size,
+          require_serial_kernel_structure);
     } catch (...) {
       mpi::abort_on_exception(
           communicator, "complete graph collection payload inspection failed");
     }
   }
-  try {
-    mpi::validate_collectively(payload_is_valid, communicator_view,
-                               "complete graph collection payload is invalid");
-  } catch (...) {
-    mpi::abort_on_exception(communicator,
-                            "complete graph collection validation failure");
+  if (require_serial_kernel_structure) {
+    auto const local_valid = payload_is_valid ? 1 : 0;
+    auto all_valid = 0;
+    mpi::check_or_abort(
+        MPI_Allreduce(&local_valid, &all_valid, 1, MPI_INT, MPI_MIN,
+                      communicator),
+        communicator, "MPI_Allreduce(serial kernel structure validation)");
+    if (all_valid == 0) {
+      if (rank == static_cast<int>(ROOT)) {
+        kahip::diagnostics::critical(
+            "ParHIP serial kernel structural validation failure: expected "
+            "loop-free reciprocal-undirected weighted adjacency");
+      }
+      static_cast<void>(MPI_Abort(communicator, EXIT_FAILURE));
+      std::abort();
+    }
+  } else {
+    try {
+      mpi::validate_collectively(payload_is_valid, communicator_view,
+                                 "complete graph collection payload is invalid");
+    } catch (...) {
+      mpi::abort_on_exception(communicator,
+                              "complete graph collection validation failure");
+    }
   }
 
   if (rank == static_cast<int>(ROOT)) {
@@ -639,6 +792,15 @@ void mpi_tools::collect_parallel_graph_to_local_graph(
                               "complete graph collection construction failed");
     }
   }
+}
+
+void mpi_tools::collect_parallel_graph_to_local_graph(
+    MPI_Comm communicator,
+    PPartitionConfig const& config,
+    parallel_graph_access& distributed,
+    complete_graph_access& complete) {
+  collect_parallel_graph_to_local_graph_impl(communicator, config, distributed,
+                                             complete, false);
 }
 
 void mpi_tools::distribute_local_graph(MPI_Comm communicator,
@@ -686,12 +848,12 @@ void mpi_tools::distribute_local_graph(MPI_Comm communicator,
 
   auto const nodes = static_cast<std::size_t>(header[0]);
   auto const edges = static_cast<std::size_t>(header[1]);
+  auto const payload_size =
+      checked_payload_size(nodes, edges, collective.native_handle());
   auto const xadj_offset = std::size_t{0};
   auto const adjncy_offset = nodes + std::size_t{1};
   auto const node_weight_offset = adjncy_offset + edges;
   auto const edge_weight_offset = node_weight_offset + nodes;
-  auto const payload_size =
-      checked_payload_size(nodes, edges, collective.native_handle());
 
   auto payload = std::vector<int>{};
   try {

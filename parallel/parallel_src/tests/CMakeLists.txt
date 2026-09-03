@@ -1990,6 +1990,18 @@ target_link_libraries(
     PRIVATE parallel kahip_options kahip_warnings
 )
 add_test(
+    NAME unit-pmpi-callback-safety-mpi-tools-failure
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/communication/mpi_tools_failure_probe.cpp"
+        -DPROFILE=mpi-tools-failure
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_pmpi_callback_safety.cmake"
+)
+set_tests_properties(
+    unit-pmpi-callback-safety-mpi-tools-failure
+    PROPERTIES TIMEOUT 5
+)
+add_test(
     NAME unit-mpi-tools-count-exchange-backend-failure
     COMMAND
         "${CMAKE_COMMAND}"
@@ -2008,6 +2020,50 @@ add_test(
 )
 set_tests_properties(
     unit-mpi-tools-count-exchange-backend-failure
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+)
+
+add_test(
+    NAME unit-mpi-tools-unsafe-profile-aborts-before-payload
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DPROBE=$<TARGET_FILE:mpi_tools_failure_probe>"
+        -DMODE=unsafe-profile
+        -DEXPECT_FAILURE=ON
+        -DMPI_RANKS=2
+        "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+        "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+        "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+        "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+        "-DEXPECTED_MARKER=mpi-tools-unsafe-profile affected-communicator; payload all-to-all calls are zero"
+        "-DEXPECTED_DIAGNOSTIC=ParHIP serial kernel profile failure: reason=block-count-out-of-range"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+)
+set_tests_properties(
+    unit-mpi-tools-unsafe-profile-aborts-before-payload
+    PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
+)
+
+add_test(
+    NAME unit-mpi-tools-structural-gate-rejects-self-loop
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DPROBE=$<TARGET_FILE:mpi_tools_failure_probe>"
+        -DMODE=structural-self-loop
+        -DEXPECT_FAILURE=ON
+        -DMPI_RANKS=2
+        "-DMPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE}"
+        "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+        "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+        "-DMPIEXEC_POSTFLAGS=${MPIEXEC_POSTFLAGS}"
+        "-DEXPECTED_MARKER=mpi-tools-structural-self-loop affected-communicator"
+        "-DEXPECTED_DIAGNOSTIC=ParHIP serial kernel structural validation failure: expected loop-free reciprocal-undirected weighted adjacency"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/communication/verify_mpi_fail_fast_probe.cmake"
+)
+set_tests_properties(
+    unit-mpi-tools-structural-gate-rejects-self-loop
     PROPERTIES PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 12
 )
 
@@ -3855,6 +3911,30 @@ catch_discover_tests(
     OUTPUT_DIR .
     OUTPUT_PREFIX "unit-"
 )
+
+add_executable(
+    serial_kernel_profile_mpi_test
+    distributed_partitioning/serial_kernel_profile_mpi_test.cpp
+)
+target_link_libraries(
+    serial_kernel_profile_mpi_test
+    PRIVATE catch_mpi_runner parallel kahip_options kahip_warnings
+)
+foreach(mpi_ranks RANGE 1 5)
+    add_test(
+        NAME unit-serial-kernel-profile-agreement-${mpi_ranks}-rank
+        COMMAND
+            "${MPIEXEC_EXECUTABLE}" "${MPIEXEC_NUMPROC_FLAG}" ${mpi_ranks}
+            ${MPIEXEC_PREFLAGS}
+            $<TARGET_FILE:serial_kernel_profile_mpi_test>
+            ${MPIEXEC_POSTFLAGS}
+    )
+    set_tests_properties(
+        unit-serial-kernel-profile-agreement-${mpi_ranks}-rank
+        PROPERTIES PROCESSORS ${mpi_ranks} RUN_SERIAL TRUE TIMEOUT 15
+                   LABELS "unit;mpi;serial-kernel;profile"
+    )
+endforeach()
 
 foreach(
     failure_mode

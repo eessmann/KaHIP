@@ -363,6 +363,21 @@ elseif(PROFILE STREQUAL "kaffpae-runtime-failure")
         [=[static_assert *\( *noexcept *\( *write_text *\([^)]*\) *\) *\) *[;]]=]
         [=[static_assert *\( *noexcept *\( *operation_communicator_matches *\([^)]*\) *\) *\) *[;]]=]
     )
+elseif(PROFILE STREQUAL "mpi-tools-failure")
+    set(
+        required_noexcept_patterns
+        [=[void[ \t\r\n]+write_text\([^)]*\)[ \t\r\n]+noexcept]=]
+        [=[valid_count_exchange]=]
+        [=[auto[ \t\r\n]+expected_abort_state\(\)[ \t\r\n]+noexcept[ \t\r\n]+->[ \t\r\n]+bool]=]
+        [=[void[ \t\r\n]+observed_abort\([^)]*\)[ \t\r\n]+noexcept]=]
+    )
+    set(
+        required_compile_time_check_patterns
+        [=[static_assert *\( *noexcept *\( *mpi_tools_failure_probe::write_text *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *mpi_tools_failure_probe::valid_count_exchange *\([^)]*\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *mpi_tools_failure_probe::expected_abort_state *\( *\) *\) *\) *[;]]=]
+        [=[static_assert *\( *noexcept *\( *mpi_tools_failure_probe::observed_abort *\([^)]*\) *\) *\) *[;]]=]
+    )
 else()
     message(FATAL_ERROR "unknown PMPI callback audit PROFILE: ${PROFILE}")
 endif()

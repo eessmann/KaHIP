@@ -50,7 +50,18 @@ struct profile_limits final {
       std::numeric_limits<unsigned>::max();
   std::uint64_t int_max = std::numeric_limits<int>::max();
   std::uint64_t size_limit = std::numeric_limits<std::size_t>::max();
-  std::uint64_t int_elements = std::numeric_limits<std::size_t>::max();
+  std::uint64_t xadj_elements = std::numeric_limits<std::size_t>::max();
+  std::uint64_t adjncy_elements = std::numeric_limits<std::size_t>::max();
+  std::uint64_t node_weight_elements =
+      std::numeric_limits<std::size_t>::max();
+  std::uint64_t edge_weight_elements =
+      std::numeric_limits<std::size_t>::max();
+  std::uint64_t partition_elements =
+      std::numeric_limits<std::size_t>::max();
+  std::uint64_t flat_payload_elements =
+      std::numeric_limits<std::size_t>::max();
+  std::uint64_t structural_validation_elements =
+      std::numeric_limits<std::size_t>::max();
   std::uint64_t wire_node_elements = std::numeric_limits<std::size_t>::max();
   std::uint64_t wire_edge_elements = std::numeric_limits<std::size_t>::max();
   std::uint64_t complete_node_elements =
@@ -64,6 +75,7 @@ struct profile_limits final {
   std::uint64_t complete_node_bytes = 8;
   std::uint64_t complete_node_data_bytes = 24;
   std::uint64_t complete_edge_bytes = 16;
+  std::uint64_t structural_validation_arc_bytes = 3 * sizeof(std::uint64_t);
 
   [[nodiscard]] static constexpr auto native() noexcept -> profile_limits {
     return {};
@@ -84,7 +96,9 @@ struct serial_kernel_profile final {
   std::uint64_t partition_bytes{};
   std::uint64_t serial_input_bytes{};
   std::uint64_t complete_graph_bytes{};
+  std::uint64_t structural_validation_bytes{};
   std::uint64_t base_memory_bytes{};
+  std::uint64_t flat_payload_elements{};
   profile_reason reason = profile_reason::none;
 
   [[nodiscard]] constexpr auto safe() const noexcept -> bool {
@@ -233,6 +247,9 @@ struct serial_kernel_profile final {
   auto complete_node_data_bytes = std::uint64_t{};
   auto complete_edges_bytes = std::uint64_t{};
   auto serial_arrays_bytes = std::uint64_t{};
+  auto structural_validation_bytes = std::uint64_t{};
+  auto doubled_nodes = std::uint64_t{};
+  auto doubled_edges = std::uint64_t{};
 
   auto const arithmetic =
       checked_add(input.global_nodes, 1, limits.size_limit, nodes_plus_one) &&
@@ -260,29 +277,47 @@ struct serial_kernel_profile final {
                        profile.partition_bytes) &&
       checked_add(profile.csr_bytes, profile.partition_bytes,
                   limits.size_limit, profile.serial_input_bytes) &&
+      checked_multiply(input.global_nodes, 2, limits.size_limit,
+                       doubled_nodes) &&
+      checked_multiply(input.global_directed_edges, 2, limits.size_limit,
+                       doubled_edges) &&
+      checked_add(doubled_nodes, doubled_edges, limits.size_limit,
+                  profile.flat_payload_elements) &&
+      checked_add(profile.flat_payload_elements, 1, limits.size_limit,
+                  profile.flat_payload_elements) &&
       checked_multiply(nodes_plus_one, limits.complete_node_bytes,
                        limits.size_limit, complete_nodes_bytes) &&
-      checked_multiply(input.global_nodes, limits.complete_node_data_bytes,
+      checked_multiply(nodes_plus_one, limits.complete_node_data_bytes,
                        limits.size_limit, complete_node_data_bytes) &&
       checked_multiply(input.global_directed_edges, limits.complete_edge_bytes,
                        limits.size_limit, complete_edges_bytes) &&
+      checked_multiply(input.global_directed_edges,
+                       limits.structural_validation_arc_bytes,
+                       limits.size_limit, structural_validation_bytes) &&
       checked_add(complete_nodes_bytes, complete_node_data_bytes,
                   limits.size_limit, profile.complete_graph_bytes) &&
       checked_add(profile.complete_graph_bytes, complete_edges_bytes,
                   limits.size_limit, profile.complete_graph_bytes) &&
       checked_add(profile.wire_record_bytes, profile.complete_graph_bytes,
+                  limits.size_limit, profile.base_memory_bytes) &&
+      checked_add(profile.base_memory_bytes, structural_validation_bytes,
                   limits.size_limit, profile.base_memory_bytes);
+  profile.structural_validation_bytes = structural_validation_bytes;
   if (!arithmetic) {
     fail(profile_reason::byte_count_overflow);
   }
 
-  if (nodes_plus_one > limits.int_elements ||
-      input.global_nodes > limits.int_elements ||
-      input.global_directed_edges > limits.int_elements ||
+  if (nodes_plus_one > limits.xadj_elements ||
+      input.global_directed_edges > limits.adjncy_elements ||
+      input.global_nodes > limits.node_weight_elements ||
+      input.global_directed_edges > limits.edge_weight_elements ||
+      input.global_nodes > limits.partition_elements ||
+      profile.flat_payload_elements > limits.flat_payload_elements ||
+      input.global_directed_edges > limits.structural_validation_elements ||
       input.global_nodes > limits.wire_node_elements ||
       input.global_directed_edges > limits.wire_edge_elements ||
       nodes_plus_one > limits.complete_node_elements ||
-      input.global_nodes > limits.complete_node_data_elements ||
+      nodes_plus_one > limits.complete_node_data_elements ||
       input.global_directed_edges > limits.complete_edge_elements) {
     fail(profile_reason::vector_capacity_exceeded);
   }
