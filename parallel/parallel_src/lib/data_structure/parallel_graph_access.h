@@ -8,8 +8,10 @@
 #ifndef PARALLEL_GRAPH_ACCESS_X6O9MRS8
 #define PARALLEL_GRAPH_ACCESS_X6O9MRS8
 
-
+#include <algorithm>
+#include <memory>
 #include <mpi.h>
+#include <optional>
 #include <unordered_map>
 #include <iostream>
 #include <ostream>
@@ -17,40 +19,43 @@
 #include <vector>
 
 #include "data_structure/balance_management.h"
+#include "communication/mpi_trace.h"
 #include "definitions.h"
 #include "partition_config.h"
+#include "range_owner.h"
 #include "tools/timer.h"
-
+namespace parhip {
 struct Node {
-    EdgeID firstEdge;
+        EdgeID firstEdge;
 };
+
 struct NodeData {
-    NodeID     label;
-    PartitionID block; // a given partition of the graph (for v-cycles)
-    NodeWeight weight; // save a little bit of memory
-    bool       is_interface_node; // save a little bit of memory
+        NodeID     label;
+        PartitionID block; // a given partition of the graph (for v-cycles)
+        NodeWeight weight; // save a little bit of memory
+        bool       is_interface_node; // save a little bit of memory
 };
 
 //struct NodeData {
-    //NodeID     label;
-    //PartitionID block:15; // a given partition of the graph (for v-cycles)
-    //NodeWeight weight:47; // save a little bit of memory
-    //bool       is_interface_node:1; // save a little bit of memory
+//NodeID     label;
+//PartitionID block:15; // a given partition of the graph (for v-cycles)
+//NodeWeight weight:47; // save a little bit of memory
+//bool       is_interface_node:1; // save a little bit of memory
 //};
 
 //struct AdditionalNonLocalNodeData {
-    //PEID   peID:15; // save a little bit of memory
-    //NodeID globalID:48;
+//PEID   peID:15; // save a little bit of memory
+//NodeID globalID:48;
 //};
 
 struct AdditionalNonLocalNodeData {
-    PEID   peID; // save a little bit of memory
-    NodeID globalID;
+        PEID   peID; // save a little bit of memory
+        NodeID globalID;
 };
 
 struct Edge {
-    NodeID     local_target;
-    EdgeWeight weight;
+        NodeID     local_target;
+        EdgeWeight weight;
 };
 
 //makros - graph access
@@ -60,125 +65,50 @@ struct Edge {
 #define forall_out_edges(G,e,n) { for(EdgeID e = G.get_first_edge(n), end = G.get_first_invalid_edge(n); e < end; ++e) {
 #define endfor }}
 
+
 class parallel_graph_access;
+class ghost_exchange_plan;
 
-//handle communication of data associated with ghost nodes
+// handle communication of data associated with ghost nodes
 class ghost_node_communication {
-public:
-        ghost_node_communication(MPI_Comm communicator) : m_iteration_counter(0), m_first_send(true) {
-                m_communicator     = communicator;
+ public:
+  ghost_node_communication(MPI_Comm communicator, PEID rank, PEID size);
 
-                MPI_Comm_rank( m_communicator, &m_rank);
-                MPI_Comm_size( m_communicator, &m_size);
-                
-                m_PE_packed.resize(m_size); 
-                m_adjacent_processors.resize(m_size); 
-                for( PEID peID = 0; peID < (PEID) m_PE_packed.size(); peID++) {
-                        m_PE_packed[ peID ]           = false;
-                        m_adjacent_processors[ peID ] = false;
-                }
+  ~ghost_node_communication();
 
-                m_send_buffers_A.resize(m_size);
-                m_send_buffers_B.resize(m_size);
-                m_send_buffers_ptr = & m_send_buffers_A;
-                m_send_iteration   = 1;
-                m_recv_iteration   = 1;
+  ghost_node_communication(ghost_node_communication const&) = delete;
+  auto operator=(ghost_node_communication const&)
+      -> ghost_node_communication& = delete;
+  ghost_node_communication(ghost_node_communication&&) = delete;
+  auto operator=(ghost_node_communication&&)
+      -> ghost_node_communication& = delete;
 
-                m_send_tag         = 100*m_size;
-                m_recv_tag         = 100*m_size;
+  void setGraphReference(parallel_graph_access* graph) noexcept;
+  void init() noexcept;
+  void add_adjacent_processor(PEID pe_id) noexcept;
+  void set_skip_limit(ULONG skip_limit) noexcept;
+  void set_desired_rounds(ULONG desired_rounds) noexcept;
 
-        };
+  void update_ghost_node_data(bool check_iteration_counter);
+  void update_ghost_node_data_finish();
+  void update_ghost_node_data_global();
+  void addLabel(NodeID node, NodeID label);
 
-        virtual ~ghost_node_communication() {};
+  [[nodiscard]] bool is_adjacent_PE(PEID pe_id) const noexcept;
+  [[nodiscard]] PEID getNumberOfAdjacentPEs() const noexcept;
 
-        inline 
-        void setGraphReference( parallel_graph_access * G ) {
-                m_G = G;
-        }; 
+ private:
+  friend class parallel_graph_access;
 
-        inline 
-        void init( ) {
-                m_num_adjacent = 0;
-                for( PEID peID = 0; peID < (PEID)m_adjacent_processors.size(); peID++) {
-                        if( m_adjacent_processors[peID] ) {
-                                m_num_adjacent++;
-                        }
-                }
-        }; 
+  [[nodiscard]] bool generation_is_idle() const noexcept;
+  void reset_generation() noexcept;
 
+  void receive_messages_of_neighbors();
+  void post_pending_round();
+  void validate_incremental_protocol(ghost_exchange_plan const& plan);
 
-        inline 
-        void add_adjacent_processor( PEID peID) {
-                m_adjacent_processors[peID] = true;
-        }; 
-
-        inline 
-        void set_skip_limit( ULONG skip_limit ) {
-                m_skip_limit = skip_limit;
-        }
-
-        inline 
-        void set_desired_rounds( ULONG desired_rounds) {
-                m_desired_rounds = desired_rounds;
-        }
-
-        inline 
-        void update_ghost_node_data( bool check_iteration_counter );
-
-        inline 
-        void update_ghost_node_data_finish();
-
-        inline 
-        void update_ghost_node_data_global();
-
-        inline
-        void addLabel(NodeID node, NodeID label);
-
-        inline
-        bool is_adjacent_PE(PEID peID) {
-                return m_adjacent_processors[peID];
-        }
-
-        inline
-        PEID getNumberOfAdjacentPEs() {
-                PEID counter = 0;
-                for( PEID peID = 0; peID < (PEID)m_adjacent_processors.size(); peID++) {
-                        if( m_adjacent_processors[peID] ) counter++;
-                }
-                return counter;
-        }
-
-private:
-
-        inline 
-        void receive_messages_of_neighbors();
-
-        parallel_graph_access * m_G;
-        PEID m_size;
-        PEID m_rank;
-        NodeID m_iteration_counter; // this counter is used to manage the communication rounds
-        ULONG m_skip_limit; 
-        bool m_first_send;
-
-        ULONG m_send_iteration;
-        ULONG m_recv_iteration;
-
-        ULONG m_send_tag;
-        ULONG m_recv_tag;
-
-        ULONG m_desired_rounds;
-
-        // store the number of adjacent processors ( a block is a neighbor iff there is an edge between the subgraphs )
-        PEID m_num_adjacent; 
-
-        std::vector< bool >                   m_PE_packed;
-        std::vector< std::vector< NodeID > >  m_send_buffers_A; // buffers to send messages
-        std::vector< std::vector< NodeID > >  m_send_buffers_B; // buffers to send messages
-        std::vector< std::vector< NodeID > >* m_send_buffers_ptr; // pointer to current buffers to send messages
-        std::vector< bool >                   m_adjacent_processors; // buffers to send messages
-        std::vector< MPI_Request* >           m_isend_requests;
-
-        MPI_Comm m_communicator;
+  struct state;
+  std::unique_ptr<state> state_;
 };
 
 
@@ -186,60 +116,38 @@ class parallel_graph_access {
 public:
 
         friend class ghost_node_communication;
+        friend auto make_ghost_exchange_plan(
+            parallel_graph_access const& graph)
+            -> std::unique_ptr<ghost_exchange_plan>;
 
-        parallel_graph_access( ) : m_num_local_nodes(0), 
-                                     from(0), 
-                                     to(0),
-                                     m_num_ghost_nodes(0), m_max_node_degree(0), m_bm(NULL)  { 
-                                             m_communicator = MPI_COMM_WORLD;
-                                             MPI_Comm_rank( m_communicator, &rank);
-                                             MPI_Comm_size( m_communicator, &size);
-
-                                             m_gnc = new ghost_node_communication(m_communicator);
-                                             m_gnc->setGraphReference(this);
-                                     };
+        parallel_graph_access();
 
         parallel_graph_access( MPI_Comm communicator );
 
         virtual ~parallel_graph_access();
 
+        parallel_graph_access(parallel_graph_access const&) = delete;
+        auto operator=(parallel_graph_access const&)
+            -> parallel_graph_access& = delete;
+        parallel_graph_access(parallel_graph_access&&) = delete;
+        auto operator=(parallel_graph_access&&)
+            -> parallel_graph_access& = delete;
+
         /* ============================================================= */
         /* build methods */
         /* ============================================================= */
-        void start_construction(NodeID n, EdgeID m, NodeID global_n, NodeID global_m, bool update_comm_rounds = true) {
-                m_building_graph             = true;
-                node                         = 0;
-                e                            = 0;
-                m_last_source                = -1;
-                m_num_nodes                  = n+1;
-                m_num_local_nodes            = n;
-                m_global_n                   = global_n;
-                m_global_m                   = global_m;
-                m_ghost_adddata_array_offset = n+1;
-                m_bm                         = NULL;
-		m_cur_degree                 = 0;
-
-                //resizes property arrays
-                m_nodes.resize(n+1);
-                m_nodes_data.resize(n+1);
-                m_edges.resize(m);
-
-                m_nodes[node].firstEdge = e;
-                m_divisor = ceil(global_n / (double)size);
-                // every PE has to make same amount communication iterations 
-                // we use ceil an check afterwards wether everyone has done the right 
-                // amount of communication rounds 
-                if( update_comm_rounds ) {
-                        m_comm_rounds = std::max(m_comm_rounds, 8ULL);
-                        m_gnc->set_desired_rounds(m_comm_rounds); 
-                        m_gnc->set_skip_limit(ceil(n/(double)m_comm_rounds)); 
-                }
-        };
+        void start_construction(NodeID n, EdgeID m, NodeID global_n,
+                                NodeID global_m,
+                                bool update_comm_rounds = true);
 
         void set_range(NodeID l, NodeID r) {
                 from        = l;
                 to          = r;
         };
+
+        [[nodiscard]] bool contains_global_node(NodeID global_id) const noexcept {
+                return global_id >= from && global_id - from < m_num_local_nodes;
+        }
 
         NodeID get_from_range() {
                 return from;
@@ -266,17 +174,11 @@ public:
         };
 
         PEID get_PEID_from_range_array(NodeID node) {
-                // TODO optimize with binary search
-                for( PEID peID = 1; peID < (PEID)m_range_array.size(); peID++) {
-                        if( node < m_range_array[peID] ) {
-                                return (peID-1);
-                        }
-                }
-                return -1;
+                return kahip::range_owner::from_boundaries(m_range_array, node);
         };
 
         NodeID new_node() {
-		m_cur_degree = 0;
+                m_cur_degree = 0;
                 ASSERT_TRUE(m_building_graph);
                 return node++;
         };
@@ -286,26 +188,26 @@ public:
                 ASSERT_TRUE(e < m_edges.size());
 
                 // build ghost nodes on the fly
-                if( from <= target && target <= to) {
-                        m_edges[e].local_target = target - from; 
+                if( contains_global_node(target) ) {
+                        m_edges[e].local_target = target - from;
                 } else {
                         m_nodes_data[source].is_interface_node = true;
 
                         // check wether this is already a ghost node
                         if(m_global_to_local_id.find(target) != m_global_to_local_id.end()) {
                                 // this node is already a ghost node
-                                m_edges[e].local_target = m_global_to_local_id[target]; 
+                                m_edges[e].local_target = m_global_to_local_id[target];
                         } else {
                                 // we need to create a new ghost node
                                 m_global_to_local_id[target] = m_num_nodes++;
-                                m_edges[e].local_target      = m_global_to_local_id[target]; 
+                                m_edges[e].local_target      = m_global_to_local_id[target];
 
                                 //create the ghost node in the array
                                 Node dummy;
                                 dummy.firstEdge = 0;
                                 m_nodes.push_back(dummy);
 
-                                NodeData dummy_data; 
+                                NodeData dummy_data;
                                 dummy_data.label             = target;
                                 dummy_data.block             = 0;
                                 dummy_data.is_interface_node = false;
@@ -314,8 +216,8 @@ public:
 
                                 // add addtional data
                                 AdditionalNonLocalNodeData add_data;
-                                //has to be changed once we implement better load balancing 
-                                //add_data.peID     = target / m_divisor; 
+                                //has to be changed once we implement better load balancing
+                                //add_data.peID     = target / m_divisor;
                                 add_data.peID     = get_PEID_from_range_array(target);
                                 add_data.globalID = target;
 
@@ -337,11 +239,11 @@ public:
                         }
                 }
                 m_last_source = source;
-		m_cur_degree++;
+                m_cur_degree++;
 
-		if( m_cur_degree > m_max_node_degree ) {
-			m_max_node_degree = m_cur_degree;
-		}
+                if( m_cur_degree > m_max_node_degree ) {
+                        m_max_node_degree = m_cur_degree;
+                }
                 return e_bar;
         };
 
@@ -349,6 +251,7 @@ public:
         void finish_construction() {
                 m_edges.resize(e);
                 m_building_graph = false;
+                m_graph_construction_complete = true;
 
                 //fill isolated sources at the end
                 if ((NodeID)(m_last_source) != node-1) {
@@ -361,9 +264,9 @@ public:
                 m_gnc->init();
         };
 
-	NodeID get_max_degree() {
-		return m_max_node_degree;
-	}
+        NodeID get_max_degree() {
+                return m_max_node_degree;
+        }
         /* ============================================================= */
         /* methods handeling balance */
         /* ============================================================= */
@@ -380,7 +283,12 @@ public:
         /* parallel graph access methods */
         /* ============================================================= */
         NodeID number_of_local_nodes() {return m_num_local_nodes;};
-        NodeID number_of_ghost_nodes() {return m_nodes.size() - m_num_local_nodes - 1;};
+        NodeID number_of_ghost_nodes() {
+                return m_nodes.empty()
+                           ? NodeID{0}
+                           : static_cast<NodeID>(m_nodes.size()) -
+                                 m_num_local_nodes - 1;
+        };
         NodeID number_of_global_nodes() {return m_global_n;};
         EdgeID number_of_local_edges() {return m_edges.size();};
         EdgeID number_of_global_edges() {return m_global_m;};
@@ -389,6 +297,10 @@ public:
         void allocate_node_to_cnode() {
                 m_nodes_to_cnode.resize( m_nodes.size() );
         }
+
+        [[nodiscard]] auto node_to_cnode_storage_size() const noexcept
+            -> std::size_t;
+        void replace_node_to_cnode(std::vector<NodeID>&& replacement) noexcept;
 
         void setCNode( NodeID node, NodeID cnode) {
                 m_nodes_to_cnode[ node ] = cnode;
@@ -401,15 +313,15 @@ public:
         EdgeID get_first_edge(NodeID node);
         EdgeID get_first_invalid_edge(NodeID node);
 
-        NodeID getNodeLabel(NodeID node); 
-        void setNodeLabel(NodeID node, NodeID label); 
+        NodeID getNodeLabel(NodeID node);
+        void setNodeLabel(NodeID node, NodeID label);
 
 
-        NodeID getSecondPartitionIndex(NodeID node); 
-        void setSecondPartitionIndex(NodeID node, NodeID label); 
+        NodeID getSecondPartitionIndex(NodeID node);
+        void setSecondPartitionIndex(NodeID node, NodeID label);
 
-        NodeWeight getNodeWeight(NodeID node); 
-        void setNodeWeight(NodeID node, NodeWeight weight); 
+        NodeWeight getNodeWeight(NodeID node);
+        void setNodeWeight(NodeID node, NodeWeight weight);
 
         EdgeID getNodeDegree(NodeID node);
         EdgeID getNodeNumGhostNodes(NodeID node);
@@ -430,8 +342,8 @@ public:
                 return m_communicator;
         }
 
-        EdgeWeight getEdgeWeight(EdgeID e); 
-        void setEdgeWeight(EdgeID e, EdgeWeight weight); 
+        EdgeWeight getEdgeWeight(EdgeID e);
+        void setEdgeWeight(EdgeID e, EdgeWeight weight);
 
         NodeID getEdgeTarget(EdgeID e);
 
@@ -439,15 +351,23 @@ public:
         //these methods are usally called to communicate data
         PEID getTargetPE(NodeID node);
 
-        //input is a global id 
+        //input is a global id
         //output is the local id
         NodeID getLocalID(NodeID node) {
-                if( from <= node && node <= to ) {
+                if( contains_global_node(node) ) {
                         return node - from;
                 } else {
                         return m_global_to_local_id[node];
                 }
         };
+
+        [[nodiscard]] auto find_local_id(NodeID global_id) const noexcept
+            -> std::optional<NodeID>;
+        [[nodiscard]] auto find_ghost_local_id(NodeID global_id,
+                                               PEID expected_owner)
+            const noexcept -> std::optional<NodeID>;
+
+        [[nodiscard]] auto ghost_plan() -> ghost_exchange_plan const&;
 
         //methods for local nodes only
         NodeID getGlobalID(NodeID node);
@@ -470,8 +390,8 @@ public:
         void update_ghost_node_data_finish();
         void update_ghost_node_data_global();
 
-        static void set_comm_rounds(ULONG comm_rounds); 
-        static void set_comm_rounds_up(ULONG comm_rounds); 
+        static void set_comm_rounds(ULONG comm_rounds);
+        static void set_comm_rounds_up(ULONG comm_rounds);
 
         /* ============================================================= */
         /* info  */
@@ -504,11 +424,13 @@ public:
         /* parallel graph data structure  */
         /* ============================================================= */
 private:
+        void reset_graph_generation();
+
         // the graph representation itself
-        // local and ghost nodes in one array, 
+        // local and ghost nodes in one array,
         // local nodes are stored in the beginning
         // ghost nodes in the end of the array
-        std::vector<Node>                       m_nodes; 
+        std::vector<Node>                       m_nodes;
         std::vector<NodeData>                   m_nodes_data;
         std::vector<Edge>                       m_edges;
 
@@ -516,7 +438,7 @@ private:
         std::vector<AdditionalNonLocalNodeData> m_add_non_local_node_data;
 
         // NodeID to CNode for ghost nodes and local nodes
-        std::vector<NodeID>                     m_nodes_to_cnode; 
+        std::vector<NodeID>                     m_nodes_to_cnode;
 
         // stores the ranges for which a processor is responsible for
         // m_range_array[i]= starting position of PE i
@@ -525,32 +447,34 @@ private:
 
         std::unordered_map<NodeID, NodeID> m_global_to_local_id;
 
-        NodeID m_ghost_adddata_array_offset; // node id of ghost node - offset to get the position in add data  
+        NodeID m_ghost_adddata_array_offset; // node id of ghost node - offset to get the position in add data
         NodeID m_divisor; // needed to compute the target id of a ghost node
         NodeID m_num_local_nodes; // store the number of local / non-ghost nodes
         NodeID from; // each process stores nodes [from. to]
-        NodeID to; 
-        
+        NodeID to;
+
         // construction properties
         bool   m_building_graph;
+        bool   m_graph_construction_complete;
         NodeID m_last_source;
         NodeID m_num_ghost_nodes;
         NodeID node; //current node that is constructed
         EdgeID e;    //current edge that is constructed
-        NodeID m_num_nodes; 
+        NodeID m_num_nodes;
 
         NodeID m_global_n; // global number of nodes
         NodeID m_global_m; // global number of edges
         static ULONG m_comm_rounds; // global number of edges
         static ULONG m_comm_rounds_up; // global number of edges
 
-	NodeID m_max_node_degree;
-	NodeID m_cur_degree;
+        NodeID m_max_node_degree;
+        NodeID m_cur_degree;
 
         PEID size;
         PEID rank;
 
         ghost_node_communication* m_gnc;
+        std::unique_ptr<ghost_exchange_plan> m_ghost_exchange_plan;
         balance_management* m_bm;
         MPI_Comm m_communicator;
 
@@ -648,7 +572,7 @@ inline bool parallel_graph_access::is_interface_node(NodeID node) {
 }
 
 inline bool parallel_graph_access::is_local_node_from_global_id(NodeID node) {
-        return from <= node && node <= to;
+        return contains_global_node(node);
 }
 
 inline bool parallel_graph_access::is_local_node(NodeID node) {
@@ -787,256 +711,38 @@ inline int parallel_graph_access::build_from_metis_weighted(int n, int* xadj, in
 }
 
 
-//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-//%%%%%%%%%%%%%%%%% Handle Communication of Ghost Node Data %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-inline 
-void ghost_node_communication::addLabel(NodeID node, NodeID label) {
-        forall_out_edges((*m_G), e, node) {
-                NodeID target = m_G->getEdgeTarget(e);
-                if( !m_G->is_local_node(target)  ) {
-                        PEID peID = m_G->getTargetPE(target);
-                        if( !m_PE_packed[peID] ) { // make sure a node is sent at most once
-                                (*m_send_buffers_ptr)[peID].push_back(m_G->getGlobalID(node));
-                                (*m_send_buffers_ptr)[peID].push_back(label);
-                                m_PE_packed[peID] = true;
-                        }
-                }
-        } endfor
-        forall_out_edges((*m_G), e, node) {
-                NodeID target = m_G->getEdgeTarget(e);
-                if( !m_G->is_local_node(target)  ) {
-                        m_PE_packed[m_G->getTargetPE(target)] = false;
-                }
-        } endfor
+// Modern and safe graph traversal functions
+// Function to iterate over all local nodes
+template <typename Func>
+void for_all_local_nodes(parallel_graph_access& G, Func func) {
+        for (NodeID n = 0; n < G.number_of_local_nodes(); ++n) {
+                func(n);
+        }
 }
 
-// we want to interleave computation and communication
-// check_iteration_counter default is true
-inline void ghost_node_communication::update_ghost_node_data( bool check_iteration_counter ) {
-        if( check_iteration_counter ) {
-                if( ++m_iteration_counter <= m_skip_limit || m_size == 1 ) return; 
+// Function to iterate over all ghost nodes
+template <typename Func>
+void for_all_ghost_nodes(parallel_graph_access& G, Func func) {
+        for (NodeID node = G.number_of_local_nodes()+1, end = G.number_of_local_nodes()+1+G.number_of_ghost_nodes(); node < end; ++node) {
+                func(node);
         }
-        m_iteration_counter = 0;
-        m_send_iteration++;
-        m_send_tag++;
-
-        //send all neighbors their packages using Isends
-        //a neighbor that does not receive something gets a specific token
-        if( m_first_send ) {
-                for( PEID peID = 0; peID < m_size; peID++) {
-                        if( m_adjacent_processors[peID] ) {
-                                //now we have to send a message
-                                if( (*m_send_buffers_ptr)[peID].size() == 0 ){
-                                        // length 1 encode no message
-                                        (*m_send_buffers_ptr)[peID].push_back(0);
-                                }
-
-                                MPI_Request * request = new MPI_Request();
-                                MPI_Isend( &(*m_send_buffers_ptr)[peID][0], 
-                                           (*m_send_buffers_ptr)[peID].size(), 
-                                           MPI_UNSIGNED_LONG_LONG, 
-                                           peID, m_send_tag, m_communicator, request);
-                                
-                                m_isend_requests.push_back( request );
-                        }
-                }
-
-                m_first_send = false;
-                if( m_send_buffers_ptr == & m_send_buffers_A) {
-                        m_send_buffers_ptr = & m_send_buffers_B;
-                } else {
-                        m_send_buffers_ptr = & m_send_buffers_A;
-                }
-                return; // compute a little bit more
-        }
-
-        m_G->update_block_weights();
-
-        //receive incomming
-        receive_messages_of_neighbors();
-       
-        if( m_send_buffers_ptr == & m_send_buffers_A) {
-                for( int i = 0; i < m_size; i++) {
-                        m_send_buffers_B[i].clear();
-                }
-        } else {
-                for( int i = 0; i < m_size; i++) {
-                        m_send_buffers_A[i].clear();
-                }
-        }
-
-        for( PEID peID = 0; peID < (PEID)(*m_send_buffers_ptr).size(); peID++) {
-                if( m_adjacent_processors[peID] ) {
-                        //now we have to send a message
-                        if( (*m_send_buffers_ptr)[peID].size() == 0 ){
-                                // length 1 encode no message
-                                (*m_send_buffers_ptr)[peID].push_back(0);
-                        }
-
-                        MPI_Request * request = new MPI_Request();
-                        MPI_Isend( &(*m_send_buffers_ptr)[peID][0], 
-                                   (*m_send_buffers_ptr)[peID].size(), 
-                                   MPI_UNSIGNED_LONG_LONG, 
-                                   peID, m_send_tag, m_communicator, request);
-                        
-                        m_isend_requests.push_back( request );
-                }
-        }
-
-        // switch send buffers
-        if( m_send_buffers_ptr == & m_send_buffers_A) {
-                m_send_buffers_ptr = & m_send_buffers_B;
-        } else {
-                m_send_buffers_ptr = & m_send_buffers_A;
-        }
-
 }
 
-inline 
-void ghost_node_communication::receive_messages_of_neighbors() {
-        PEID counter = 0;
-        m_recv_iteration++;
-        m_recv_tag++;
-        while( counter < m_num_adjacent ) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st;
-                MPI_Probe(MPI_ANY_SOURCE, m_recv_tag, m_communicator,  &st);
-
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-
-                std::vector<NodeID> message; message.resize(message_length);
-                MPI_Status rst;
-                MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, m_recv_tag, m_communicator, &rst); 
-
-                counter++;
-
-                // now integrate the changes
-                if(message_length == 1) continue; // nothing to do
-
-                for( int i = 0; i < message_length-1; i+=2) {
-                        NodeID global_id = message[i];
-                        NodeID label     = message[i+1];
-
-                        NodeID local_id = m_G->m_global_to_local_id[global_id];
-                        m_G->update_non_contained_block_balance(m_G->getNodeLabel(local_id), label, m_G->getNodeWeight(local_id));
-                        m_G->setNodeLabel(local_id, label);
-                }
+// Function to iterate over all local edges
+template <typename Func>
+void for_all_local_edges(parallel_graph_access& G, Func func) {
+        for (EdgeID e = 0; e < G.number_of_local_edges(); ++e) {
+                func(e);
         }
-
-        // wait for previous iteration to finish
-        for( unsigned i = 0; i < m_isend_requests.size(); i++) {
-                MPI_Status st;
-                MPI_Wait( m_isend_requests[i], &st);
-                delete m_isend_requests[i];
-        }
-        m_isend_requests.clear();
-
 }
 
-inline void ghost_node_communication::update_ghost_node_data_finish() {
-        while( m_send_iteration < m_desired_rounds) {
-                // we have to do another send
-                update_ghost_node_data( false ); // flush the lokal buffers to our neighbors
+// Function to iterate over all outgoing edges of a node
+template <typename Func>
+void for_all_out_edges(parallel_graph_access& G, NodeID n, Func func) {
+        for (EdgeID e = G.get_first_edge(n); e < G.get_first_invalid_edge(n); ++e) {
+                func(e);
         }
-        
-        while( m_recv_iteration < m_desired_rounds) {
-                receive_messages_of_neighbors(); // last receive
-        }
-        
-        m_first_send = true; // last send
-        update_ghost_node_data(false);
-        m_G->update_block_weights();
-        receive_messages_of_neighbors();
-
-        m_send_iteration = 0;
-        m_recv_iteration = 0;
-
-        m_send_tag = 100*m_size-1;
-        m_recv_tag = 100*m_size-1;
-        m_first_send     = true;
-
-        for( int i = 0; i < m_size; i++) {
-                m_send_buffers_B[i].clear();
-        }
-
-        for( int i = 0; i < m_size; i++) {
-                m_send_buffers_A[i].clear();
-        }
-
-        MPI_Barrier(m_communicator);
-        
 }
 
-inline void ghost_node_communication::update_ghost_node_data_global() {
-        std::vector< std::vector< NodeID > > send_buffers; // buffers to send messages
-        send_buffers.resize(m_size);
-        forall_local_nodes((*m_G), node) {
-                forall_out_edges((*m_G), e, node) {
-                        NodeID target = m_G->getEdgeTarget(e);
-                        if( !m_G->is_local_node(target)  ) {
-                                PEID peID = m_G->getTargetPE(target);
-                                if( !m_PE_packed[peID] ) { // make sure a node is sent at most once
-                                        send_buffers[peID].push_back(m_G->getGlobalID(node));
-                                        send_buffers[peID].push_back(m_G->getNodeLabel(node));
-                                        m_PE_packed[peID] = true;
-                                }
-                        }
-                } endfor
-                forall_out_edges((*m_G), e, node) {
-                        NodeID target = m_G->getEdgeTarget(e);
-                        if( !m_G->is_local_node(target)  ) {
-                                m_PE_packed[m_G->getTargetPE(target)] = false;
-                        }
-                } endfor
-        } endfor
-
-        //send all neighbors their packages using Isends
-        //a neighbor that does not receive something gets a specific token
-        for( PEID peID = 0; peID < (PEID)send_buffers.size(); peID++) {
-                if( m_adjacent_processors[peID] ) {
-                        //now we have to send a message
-                        if( send_buffers[peID].size() == 0 ){
-                                // length 1 encode no message
-                                send_buffers[peID].push_back(0);
-                        }
-
-                        MPI_Request rq; 
-                        MPI_Isend( &send_buffers[peID][0], 
-                                    send_buffers[peID].size(), MPI_UNSIGNED_LONG_LONG, peID, peID+3*m_size, m_communicator, &rq);
-                }
-        }
-
-        //receive incomming
-        PEID counter = 0;
-        while( counter < m_num_adjacent ) {
-                // wait for incomming message of an adjacent processor
-                MPI_Status st; unsigned int tag = m_rank+3*m_size;
-                MPI_Probe(MPI_ANY_SOURCE, tag, m_communicator,  &st);
-
-                int message_length;
-                MPI_Get_count(&st, MPI_UNSIGNED_LONG_LONG, &message_length);
-                std::vector<NodeID> message; message.resize(message_length);
-
-                MPI_Status rst;
-                MPI_Recv( &message[0], message_length, MPI_UNSIGNED_LONG_LONG, st.MPI_SOURCE, tag, m_communicator, &rst); 
-                counter++;
-
-                // now integrate the changes
-                if(message_length == 1) continue; // nothing to do
-
-                for( int i = 0; i < message_length-1; i+=2) {
-                        NodeID global_id = message[i];
-                        NodeID label     = message[i+1];
-
-                        m_G->setNodeLabel( m_G->m_global_to_local_id[global_id], label);
-                }
-        }
-
-        MPI_Barrier(m_communicator);
 }
-
 #endif /* end of include guard: PARALLEL_GRAPH_ACCESS_X6O9MRS8 */

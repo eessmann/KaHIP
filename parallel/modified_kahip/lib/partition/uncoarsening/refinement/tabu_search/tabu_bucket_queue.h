@@ -9,47 +9,48 @@
 #define TABU_BUCKET_PQ_EM8YJPA9
 
 #include <limits>
-
 //this PQ is specalized for Tabu Search, it only contains non-tabu moves
 //there is a second PQ that contains tabu moves
 #include "data_structure/matrix/normal_matrix.h"
 #include "data_structure/priority_queues/priority_queue_interface.h"
 #include "random_functions.h"
 
+namespace kahip::modified {
+
 class tabu_bucket_queue  {
-        public:
-                tabu_bucket_queue( PartitionConfig & config, const EdgeWeight & gain_span, NodeID number_of_nodes ); 
+public:
+        tabu_bucket_queue( PartitionConfig & config, const EdgeWeight & gain_span, NodeID number_of_nodes );
 
-                virtual ~tabu_bucket_queue() { delete m_queue_index; delete m_gains;};
+        virtual ~tabu_bucket_queue() { delete m_queue_index; delete m_gains;};
 
-                NodeID size();  
-                void insert(NodeID id, PartitionID block, Gain gain); 
-                bool empty();
+        NodeID size();
+        void insert(NodeID id, PartitionID block, Gain gain);
+        bool empty();
 
-                Gain maxValue();
-                std::pair<NodeID, PartitionID> maxElement();
-                std::pair<NodeID, PartitionID> deleteMax();
+        Gain maxValue();
+        std::pair<NodeID, PartitionID> maxElement();
+        std::pair<NodeID, PartitionID> deleteMax();
 
-                void decreaseKey(NodeID node, PartitionID block, Gain newGain);
-                void increaseKey(NodeID node, PartitionID block, Gain newGain);
+        void decreaseKey(NodeID node, PartitionID block, Gain newGain);
+        void increaseKey(NodeID node, PartitionID block, Gain newGain);
 
-                void changeKey(NodeID element, PartitionID block, Gain newKey);
-                Gain getKey(NodeID element, PartitionID block);
-                void deleteNode(NodeID node, PartitionID block);
+        void changeKey(NodeID element, PartitionID block, Gain newKey);
+        Gain getKey(NodeID element, PartitionID block);
+        void deleteNode(NodeID node, PartitionID block);
 
-                bool contains(NodeID node, PartitionID block);
-        private:
-                normal_matrix* m_queue_index;
-                normal_matrix* m_gains;
-                NodeID         m_elements;
-                EdgeWeight     m_gain_span;
-                unsigned       m_max_idx; //points to the non-empty bucket with the largest gain
-                
-                std::vector< std::vector< std::pair<NodeID, PartitionID> > > m_buckets;
+        bool contains(NodeID node, PartitionID block);
+private:
+        normal_matrix* m_queue_index;
+        normal_matrix* m_gains;
+        NodeID         m_elements;
+        EdgeWeight     m_gain_span;
+        unsigned       m_max_idx; //points to the non-empty bucket with the largest gain
+
+        std::vector< std::vector< std::pair<NodeID, PartitionID> > > m_buckets;
 };
 
-inline tabu_bucket_queue::tabu_bucket_queue( PartitionConfig & config, 
-                                             const EdgeWeight & gain_span_input, 
+inline tabu_bucket_queue::tabu_bucket_queue( PartitionConfig & config,
+                                             const EdgeWeight & gain_span_input,
                                              NodeID number_of_nodes ) {
         m_elements    = 0;
         m_gain_span   = gain_span_input;
@@ -60,62 +61,62 @@ inline tabu_bucket_queue::tabu_bucket_queue( PartitionConfig & config,
 }
 
 inline NodeID tabu_bucket_queue::size() {
-        return m_elements;  
+        return m_elements;
 }
 
 inline void tabu_bucket_queue::insert(NodeID node, PartitionID block, Gain gain) {
         unsigned address = gain + m_gain_span;
         if(address > m_max_idx) {
-                m_max_idx = address; 
+                m_max_idx = address;
         }
-       
+
         std::pair< NodeID, PartitionID > p;
         p.first  = node;
         p.second = block;
 
-        m_buckets[address].push_back( p ); 
+        m_buckets[address].push_back( p );
         m_queue_index->set_xy(node, block, m_buckets[address].size() - 1); //store position
         m_gains->set_xy(node, block, gain);
- 
+
         m_elements++;
 }
 
 inline bool tabu_bucket_queue::empty( ) {
-        return m_elements == 0;        
+        return m_elements == 0;
 }
 
 inline Gain tabu_bucket_queue::maxValue( ) {
-        return m_max_idx - m_gain_span;        
+        return m_max_idx - m_gain_span;
 }
 
 inline std::pair<NodeID, PartitionID> tabu_bucket_queue::maxElement( ) {
-        return m_buckets[m_max_idx].back();        
+        return m_buckets[m_max_idx].back();
 }
 
 inline std::pair<NodeID, PartitionID> tabu_bucket_queue::deleteMax() {
-       unsigned rnd_idx = random_functions::nextInt(0, m_buckets[m_max_idx].size()-1);
-       swap(m_buckets[m_max_idx][rnd_idx], m_buckets[m_max_idx].back());
-       m_queue_index->set_xy(m_buckets[m_max_idx][rnd_idx].first, m_buckets[m_max_idx][rnd_idx].second, rnd_idx); 
+        unsigned rnd_idx = random_functions::nextInt(0, m_buckets[m_max_idx].size()-1);
+        swap(m_buckets[m_max_idx][rnd_idx], m_buckets[m_max_idx].back());
+        m_queue_index->set_xy(m_buckets[m_max_idx][rnd_idx].first, m_buckets[m_max_idx][rnd_idx].second, rnd_idx);
 
-       std::pair< NodeID, PartitionID > p;
-       p = m_buckets[m_max_idx].back();
-       m_buckets[m_max_idx].pop_back();
+        std::pair< NodeID, PartitionID > p;
+        p = m_buckets[m_max_idx].back();
+        m_buckets[m_max_idx].pop_back();
 
-       m_queue_index->set_xy(p.first, p.second, NOTINQUEUE); //erase(node, block);
-       m_gains->set_xy(p.first, p.second, NOTINQUEUE);
+        m_queue_index->set_xy(p.first, p.second, NOTINQUEUE); //erase(node, block);
+        m_gains->set_xy(p.first, p.second, NOTINQUEUE);
 
-       if( m_buckets[m_max_idx].size() == 0 ) {
-             //update max_idx
-             while( m_max_idx != 0 )  {
-                     m_max_idx--;
-                     if(m_buckets[m_max_idx].size() > 0) {
-                        break;
-                     }
-             }
-       }
+        if( m_buckets[m_max_idx].size() == 0 ) {
+                //update max_idx
+                while( m_max_idx != 0 )  {
+                        m_max_idx--;
+                        if(m_buckets[m_max_idx].size() > 0) {
+                                break;
+                        }
+                }
+        }
 
-       m_elements--;
-       return p;        
+        m_elements--;
+        return p;
 }
 
 inline void tabu_bucket_queue::decreaseKey(NodeID node, PartitionID block, Gain new_gain) {
@@ -170,6 +171,6 @@ inline void tabu_bucket_queue::deleteNode(NodeID node, PartitionID block) {
 inline bool tabu_bucket_queue::contains(NodeID node, PartitionID block) {
         return m_queue_index->get_xy(node, block) != NOTINQUEUE;
 }
-
+}
 
 #endif /* end of include guard: BUCKET_PQ_EM8YJPA9 */

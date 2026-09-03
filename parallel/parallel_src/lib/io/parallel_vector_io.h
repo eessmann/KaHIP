@@ -8,17 +8,18 @@
 #ifndef PARALLEL_VECTOR_IO_BZVNZ570A
 #define PARALLEL_VECTOR_IO_BZVNZ570A
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <ostream>
-#include <stdio.h>
-#include <stdlib.h>
+#include <sstream>
 #include <vector>
 
 #include "parallel_graph_io.h"
 #include "partition_config.h"
-
+namespace parhip {
 const ULONG fileTypeVersionNumberPartition = 1;
 const ULONG header_count_partition         = 2;
 
@@ -68,18 +69,19 @@ void parallel_vector_io::readVectorSequentially(std::vector<vectortype> & vec, s
         }
 
         ULONG pos = 0;
-        std::getline(in, line);
-        while( !in.eof() ) {
-                if (line[0] == '%') { //Comment
-                        continue;
-                }
+        while (pos < vec.size() && std::getline(in, line)) {
+          if (line.empty() || line.front() == '%') {
+            continue;
+          }
 
-                vectortype value = (vectortype) atof(line.c_str());
-                vec[pos++] = value;
-                std::getline(in, line);
+          auto parser = std::istringstream{line};
+          auto value = vectortype{};
+          if (parser >> value) {
+            vec[static_cast<std::size_t>(pos++)] = value;
+          }
         }
 
         in.close();
 }
-
+}
 #endif /* end of include guard: PARALLEL_VECTOR_IO_BZVNZ570 */

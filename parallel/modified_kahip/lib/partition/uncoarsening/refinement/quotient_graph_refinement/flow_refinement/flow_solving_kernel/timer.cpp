@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "timer.h"
-
+namespace kahip::modified {
 float timer ()
 {
   struct rusage r;
@@ -14,6 +14,6 @@ float timer ()
   getrusage(0, &r);
   return (float)(r.ru_utime.tv_sec+r.ru_utime.tv_usec/(float)1000000);
 }
-
+}
 
 

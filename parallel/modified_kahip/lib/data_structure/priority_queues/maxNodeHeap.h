@@ -14,82 +14,79 @@
 #include <execinfo.h>
 
 #include "data_structure/priority_queues/priority_queue_interface.h"
-             
-typedef int Key;
+namespace kahip::modified {
+using Key = int;
 
 template < typename Data >
 class QElement {
-        public:
-                QElement( Data data, Key key, int index ) : m_data(data), m_key (key), m_index(index) {}; 
-                virtual ~QElement() {};
+public:
+        QElement( Data data, Key key, int index ) : m_data(data), m_key (key), m_index(index) {};
 
-                Data & get_data() { 
-                        return m_data; 
-                }
+        Data & get_data() {
+                return m_data;
+        }
 
-                void set_data(Data & data) { 
-                        m_data = data;
-                }
+        void set_data(Data & data) {
+                m_data = data;
+        }
 
-                Key get_key() {
-                        return m_key;
-                }
+        Key get_key() {
+                return m_key;
+        }
 
-                void set_key(Key key) {
-                        m_key = key;
-                }
+        void set_key(Key key) {
+                m_key = key;
+        }
 
-                int get_index() {
-                        return m_index;
-                }
+        int get_index() {
+                return m_index;
+        }
 
-                void set_index(int index) {
-                        m_index = index;
-                }
+        void set_index(int index) {
+                m_index = index;
+        }
 
-        private:
-                Data m_data;
-                Key  m_key;
-                int  m_index; // the index of the element in the heap
+private:
+        Data m_data;
+        Key  m_key;
+        int  m_index; // the index of the element in the heap
 
 };
 
 class maxNodeHeap : public priority_queue_interface {
-        public:
-                              
-                struct Data {
-                        NodeID node;
-                        Data( NodeID node ) : node(node) {};
-                };
+public:
 
-                typedef QElement<Data> PQElement;
-                
-                maxNodeHeap() {};
-                virtual ~maxNodeHeap() {};
+        struct Data {
+                NodeID node;
+                Data( NodeID node ) : node(node) {};
+        };
 
-                NodeID size();  
-                bool empty();
+        using PQElement = QElement<Data>;
 
-                bool contains(NodeID node);
-                void insert(NodeID id, Gain gain); 
 
-                NodeID deleteMax();
-                void deleteNode(NodeID node);
-                NodeID maxElement();
-                Gain maxValue();
+        NodeID size() override;
+        bool empty() override;
 
-                void decreaseKey(NodeID node, Gain gain);
-                void increaseKey(NodeID node, Gain gain);
-                void changeKey(NodeID node, Gain gain); 
-                Gain getKey(NodeID node); 
+        bool contains(NodeID node) override;
+        void insert(NodeID node, Gain gain) override;
 
-        private:
-                std::vector< PQElement >               m_elements;      // elements that contain the data
-                std::unordered_map<NodeID, int>   m_element_index; // stores index of the node in the m_elements array
-                std::vector< std::pair<Key, int> >     m_heap;          // key and index in elements (pointer)
+        NodeID deleteMax() override;
+        void deleteNode(NodeID node) override;
+        NodeID maxElement() override;
+        Gain maxValue() override;
 
-                void siftUp( int pos );
-                void siftDown( int pos ); 
+        void decreaseKey(NodeID node, Gain gain) override;
+        void increaseKey(NodeID node, Gain gain) override;
+        void changeKey(NodeID node, Gain gain) override;
+        Gain getKey(NodeID node) override;
+
+private:
+        std::vector< PQElement >               m_elements;      // elements that contain the data
+        std::unordered_map<NodeID, int>   m_element_index; // stores index of the node in the m_elements array
+        std::vector< std::pair<Key, int> >     m_heap;          // key and index in elements (pointer)
+
+        void siftUp( int pos );
+        void siftDown( int pos );
 
 };
 
@@ -128,7 +125,7 @@ inline void maxNodeHeap::siftDown( int pos ) {
 
                         siftDown(swap_pos);
                         return;
-                } 
+                }
 
         } else if ( lhsChild < (int)m_heap.size()) {
                 if( m_heap[pos].first < m_heap[lhsChild].first) {
@@ -149,31 +146,31 @@ inline void maxNodeHeap::siftDown( int pos ) {
 }
 
 inline void maxNodeHeap::siftUp( int pos ) {
-            if( pos > 0 ) {
-                    int parentPos = (int)(pos-1)/2;
-                    if(  m_heap[parentPos].first < m_heap[pos].first) {
-                            //heap condition not fulfulled
-                            std::swap(m_heap[parentPos], m_heap[pos]);
+        if( pos > 0 ) {
+                int parentPos = (int)(pos-1)/2;
+                if(  m_heap[parentPos].first < m_heap[pos].first) {
+                        //heap condition not fulfulled
+                        std::swap(m_heap[parentPos], m_heap[pos]);
 
-                            int element_pos = m_heap[pos].second;
-                            m_elements[element_pos].set_index(pos);
+                        int element_pos = m_heap[pos].second;
+                        m_elements[element_pos].set_index(pos);
 
-                            // update the heap index in the element
-                            element_pos = m_heap[parentPos].second;
-                            m_elements[element_pos].set_index(parentPos);
+                        // update the heap index in the element
+                        element_pos = m_heap[parentPos].second;
+                        m_elements[element_pos].set_index(parentPos);
 
-                            siftUp( parentPos );
-                    }
+                        siftUp( parentPos );
+                }
 
-            }
+        }
 }
 
 inline NodeID maxNodeHeap::size() {
-        return m_heap.size();  
+        return m_heap.size();
 }
 
 inline bool maxNodeHeap::empty( ) {
-        return m_heap.empty();        
+        return m_heap.empty();
 }
 
 inline void maxNodeHeap::insert(NodeID node, Gain gain) {
@@ -185,11 +182,11 @@ inline void maxNodeHeap::insert(NodeID node, Gain gain) {
                 m_heap.push_back( std::pair< Key, int>(gain, element_index) );
                 m_element_index[node] = element_index;
                 siftUp( heap_size );
-        } 
+        }
 }
 
 inline void maxNodeHeap::deleteNode(NodeID node) {
-        int element_index = m_element_index[node]; 
+        int element_index = m_element_index[node];
         int heap_index    = m_elements[element_index].get_index();
 
         m_element_index.erase(node);
@@ -244,13 +241,13 @@ inline NodeID maxNodeHeap::deleteMax() {
                 }
 
                 return node;
-        } 
+        }
 
         return -1;
 }
 
 inline void maxNodeHeap::changeKey(NodeID node, Gain gain) {
-        Gain old_gain = m_heap[m_elements[m_element_index[node]].get_index()].first; 
+        Gain old_gain = m_heap[m_elements[m_element_index[node]].get_index()].first;
         if( old_gain > gain ) {
                 decreaseKey(node, gain);
         } else if ( old_gain < gain ) {
@@ -260,7 +257,7 @@ inline void maxNodeHeap::changeKey(NodeID node, Gain gain) {
 
 inline void maxNodeHeap::decreaseKey(NodeID node, Gain gain) {
         ASSERT_TRUE(m_element_index.find(node) != m_element_index.end());
-        int queue_idx = m_element_index[node]; 
+        int queue_idx = m_element_index[node];
         int heap_idx  = m_elements[queue_idx].get_index();
         m_elements[queue_idx].set_key(gain);
         m_heap[heap_idx].first = gain;
@@ -269,7 +266,7 @@ inline void maxNodeHeap::decreaseKey(NodeID node, Gain gain) {
 
 inline void maxNodeHeap::increaseKey(NodeID node, Gain gain) {
         ASSERT_TRUE(m_element_index.find(node) != m_element_index.end());
-        int queue_idx = m_element_index[node]; 
+        int queue_idx = m_element_index[node];
         int heap_idx  = m_elements[queue_idx].get_index();
         m_elements[queue_idx].set_key(gain);
         m_heap[heap_idx].first = gain;
@@ -277,12 +274,12 @@ inline void maxNodeHeap::increaseKey(NodeID node, Gain gain) {
 }
 
 inline Gain maxNodeHeap::getKey(NodeID node) {
-        return m_heap[m_elements[m_element_index[node]].get_index()].first; 
+        return m_heap[m_elements[m_element_index[node]].get_index()].first;
 };
 
 
 inline bool maxNodeHeap::contains(NodeID node) {
-       return m_element_index.find(node) != m_element_index.end(); 
+        return m_element_index.find(node) != m_element_index.end();
 }
-
+}
 #endif

@@ -16,7 +16,7 @@
 #include "problem_factory.h"
 #include "uncoarsening/refinement/kway_graph_refinement/kway_graph_refinement_commons.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/complete_boundary.h"
-
+namespace kahip::modified {
 class greedy_neg_cycle {
 public:
         greedy_neg_cycle();
@@ -283,5 +283,5 @@ inline void greedy_neg_cycle::init_gains( PartitionConfig & partition_config,
 
 
 }
-
+}
 #endif /* end of include guard: GREEDY_NEG_CYCLE_IVBKH6WD */

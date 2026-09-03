@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "refinement.h"
-
+namespace kahip::modified {
 refinement::refinement() {
                 
 }
@@ -14,6 +14,6 @@ refinement::refinement() {
 refinement::~refinement() {
                 
 }
-
+}
 
 

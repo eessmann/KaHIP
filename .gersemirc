@@ -1,0 +1,10 @@
+cache: true
+color: false
+definitions: [cmake]
+indent: 4
+line_length: 80
+list_expansion: favour-inlining
+quiet: false
+unsafe: false
+warn_about_unknown_commands: true
+workers: max

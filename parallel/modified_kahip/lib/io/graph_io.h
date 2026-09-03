@@ -18,32 +18,38 @@
 
 #include "definitions.h"
 #include "data_structure/graph_access.h"
-
+namespace kahip::modified {
 class graph_io {
-        public:
-                graph_io();
-                virtual ~graph_io () ;
+public:
+        graph_io() = default;  // Default constructor
+        virtual ~graph_io() = default; // Default destructor
 
-                static 
-                int readGraphWeighted(graph_access & G, std::string filename);
+        // Explicitly default the other special member functions
+        graph_io(const graph_io&) = default;            // Copy constructor
+        graph_io& operator=(const graph_io&) = default; // Copy assignment operator
+        graph_io(graph_io&&) = default;                 // Move constructor
+        graph_io& operator=(graph_io&&) = default;      // Move assignment operator
 
-                static
-                int writeGraphWeighted(graph_access & G, std::string filename);
+        static
+        int readGraphWeighted(graph_access & G, std::string filename);
 
-                static
-                int writeGraph(graph_access & G, std::string filename);
+        static
+        int writeGraphWeighted(graph_access & G, std::string filename);
 
-                static 
-                int readPartition(graph_access& G, std::string filename); 
+        static
+        int writeGraph(graph_access & G, std::string filename);
 
-                static 
-                void writePartition(graph_access& G, std::string filename);
+        static
+        int readPartition(graph_access& G, std::string filename);
 
-                template<typename vectortype> 
-                static void writeVector(std::vector<vectortype> & vec, std::string filename);
+        static
+        void writePartition(graph_access& G, std::string filename);
 
-                template<typename vectortype> 
-                static void readVector(std::vector<vectortype> & vec, std::string filename);
+        template<typename vectortype>
+        static void writeVector(std::vector<vectortype> & vec, std::string filename);
+
+        template<typename vectortype>
+        static void readVector(std::vector<vectortype> & vec, std::string filename);
 
 
 };
@@ -84,5 +90,5 @@ void graph_io::readVector(std::vector<vectortype> & vec, std::string filename) {
 
         in.close();
 }
-
+}
 #endif /*GRAPHIO_H_*/

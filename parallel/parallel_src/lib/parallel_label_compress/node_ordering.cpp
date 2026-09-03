@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "node_ordering.h"
-
+namespace parhip {
 node_ordering::node_ordering() {
                 
 }
@@ -14,4 +14,4 @@ node_ordering::node_ordering() {
 node_ordering::~node_ordering() {
                 
 }
-
+}

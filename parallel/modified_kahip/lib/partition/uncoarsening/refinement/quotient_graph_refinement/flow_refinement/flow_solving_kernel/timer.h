@@ -10,7 +10,7 @@
 
 #include <sys/time.h>
 #include <sys/resource.h>
-
+namespace kahip::modified {
 float timer ();
-
+}
 #endif

@@ -1,7 +1,7 @@
 KaHIP v3.25
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![C++](https://img.shields.io/badge/C++-11/14-blue.svg)](https://isocpp.org/)
-[![CMake](https://img.shields.io/badge/CMake-3.10+-064F8C.svg)](https://cmake.org/)
+[![C++](https://img.shields.io/badge/C++-23-blue.svg)](https://isocpp.org/)
+[![CMake](https://img.shields.io/badge/CMake-4.0+-064F8C.svg)](https://cmake.org/)
 [![Build](https://github.com/KaHIP/KaHIP/actions/workflows/build.yml/badge.svg)](https://github.com/KaHIP/KaHIP/actions/workflows/build.yml)
 [![Windows CI](https://github.com/KaHIP/KaHIP/actions/workflows/build_windows.yml/badge.svg)](https://github.com/KaHIP/KaHIP/actions/workflows/build_windows.yml)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/9d0d08ba6b2d42699ab74fe5f9697bb9)](https://www.codacy.com/gh/KaHIP/KaHIP/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=KaHIP/KaHIP&amp;utm_campaign=Badge_Grade)
@@ -155,44 +155,155 @@ You can download KaHIP with the following command line:
 git clone https://github.com/KaHIP/KaHIP
 ```
 
-## Compiling KaHIP: 
-Before you can start, you need to install the following software packages:
+## Compiling KaHIP
 
-- if you want to use parallel algorithms contained within the framework (e.g. ParHIP), you need OpenMPI (https://www.open-mpi.org/). If you don't want to run ParHIP, you can easily get rid of this dependency.
+KaHIP requires a C++23 compiler and CMake 4.0 or newer. MPI 3.1 is the portable minimum for ParHIP, while MPI 4 implementations enable additional collective paths when available.
 
-Once you installed the packages, just type 
+The supported local development environment uses [devenv](https://devenv.sh/). Its checked-in lockfile supplies CMake 4, Clang, Ninja, pkg-config, Catch2 3, and MPICH without adding those packages to KaHIP's installed link interface. MPICH 4.3.2 is selected through [nixpkgs-multiverse](https://devenv.sh/packages/#installing-a-specific-version), independently of the rolling toolchain input:
+
 ```console
-./compile_withcmake.sh 
+devenv shell
+cmake --fresh --preset unix-clang-release -DNONATIVEOPTIMIZATIONS=ON
+cmake --build --preset build-unix-clang-release --parallel 2
+ctest --preset test-unix-clang-release
 ```
-In this case, all binaries, libraries and headers are in the folder ./deploy/ 
 
-Note that this script detects the amount of available cores on your machine and uses all of them for the compilation process. If you don't want that, set the variable NCORES to the number of cores that you would like to use for compilation. 
+From outside the shell, `devenv tasks run kahip:test` performs the same
+configure, build, and test sequence. Fresh configuration prevents cached MPI
+paths from surviving a development-package update.
 
-Alternatively use the standard cmake build process:
-```console 
-mkdir build
-cd build 
-cmake ../ -DCMAKE_BUILD_TYPE=Release     
-make 
-cd ..
+GCC debug and release presets are named `unix-gcc-debug` and `unix-gcc-release` on systems where GCC is available. Build output is placed below `out/build/<preset>` and staged installs below `out/install/<preset>`. `CMakeUserPresets.json.example` shows optional local Clang aliases; copy it to the ignored `CMakeUserPresets.json` only when those aliases are useful. Run `devenv update` only when intentionally refreshing the locked development packages.
+
+The ordinary CMake workflow remains supported for package builds and custom toolchains. Disable tests when Catch2 3 is not provided by the surrounding environment:
+
+```console
+cmake -S . -B out/build/release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=OFF
+cmake --build out/build/release --parallel 2
 ```
-In this case, the binaries, libraries and headers are in the folder ./build as well as ./build/parallel/parallel_src/
 
-We also provide the option to link against TCMalloc. If you have it installed, run cmake with the additional option -DUSE_TCMALLOC=On. 
+Set `-DNOMPI=ON -DPARHIP=OFF` for a serial-only build. Tests follow standard CMake/CTest behavior and can be disabled with `-DBUILD_TESTING=OFF`.
+
+On Cirrus, use the installed programming-environment modules and Cray compiler wrappers; do not install a second toolchain. The existing release presets remain `BUILD_TESTING=OFF`, so ordinary production builds do not require Catch2. From the KaHIP checkout, the Cray Clang 19 release path is:
+
+```console
+module restore
+module load PrgEnv-cray/8.6.0
+module load cmake/4.1.2
+cmake --preset cirrus-cray-release
+cmake --build --preset build-cirrus-cray-release
+```
+
+For the GNU release path, load the supplied Cirrus GNU module before configuring:
+
+```console
+module restore
+module load ccs/gnu-2026-06
+module load cmake/4.1.2
+cmake --preset cirrus-gnu-release
+cmake --build --preset build-cirrus-gnu-release
+```
+
+These Cirrus presets use `cc` and `CC`, Cray MPICH, Unix Makefiles, and build entirely below `out/build/`. Neither the portable Unix presets nor the Cirrus presets select the checked-in vcpkg manifest.
+
+For user-submitted Cirrus test jobs, the test presets enable `BUILD_TESTING` and use `srun` for each MPI test. They require a compatible Catch2 3 installation, but keep its prefix out of portable project presets. The account-specific Slurm scripts supply their own prefix only at configure time, run CTest sequentially, and inherit the normal exclusion of `large` and `performance` labels. They have not been run by local validation or CI.
+
+```console
+cd /work/e609/e609/eriche609/KaHIP
+mkdir -p out/slurm
+sbatch ci/cirrus/run-cray-tests.slurm
+sbatch ci/cirrus/run-gnu-tests.slurm
+```
+
+Use an appropriately sized allocation for an opt-in large suite, for example:
+
+```console
+ctest --test-dir out/build/cirrus-cray-tests --output-on-failure -L large
+```
+
+### Cirrus cube scale probe
+
+The dedicated GNU and Cray scale runners accept the exported
+`KAHIP_SCALE_PROBE_SIDE` value and default to the `600^3` regression. Each
+supported side has exactly one valid allocation; the runner rejects any other
+side, node count, task count, tasks-per-node value, or CPUs-per-task value
+before loading modules or configuring the build.
+
+| Cube | Nodes | MPI ranks | Ranks per node | Expected balance bound |
+|---:|---:|---:|---:|---:|
+| `600^3` | 8 | 2304 | 288 | 96562 |
+| `755^3` | 16 | 4608 | 288 | 96198 |
+| `900^3` | 27 | 7776 | 288 | 96562 |
+| `1008^3` | 38 | 10944 | 288 | 96392 |
+
+The jobs use account `e609`, the standard partition and QoS, exclusive nodes,
+one CPU per rank, and `OMP_NUM_THREADS=1`. They fresh-configure the existing
+`cirrus-gnu-tests` or `cirrus-cray-tests` build tree, pass the existing
+`/work/e609/e609/eriche609/opt/catch2` prefix only to that configure command,
+and build only `parhip_cube_scale_probe`; they do not install anything. The
+launch is unfiltered and uses `srun` with `--hint=nomultithread`,
+`--distribution=block:block`, `--kill-on-bad-exit`, and `--unbuffered` so that
+failure diagnostics remain in the Slurm record.
+
+Before configuring, each runner reads the checkout's exact `HEAD` and checks
+tracked changes with repository-confined, read-only Git commands. A tracked
+difference appends `-dirty`; the resulting token is configured as
+`KAHIP_SCALE_PROBE_SOURCE_REVISION`, and an invalid or `unknown` revision is
+rejected. Build products, temporary files, and Slurm output remain below
+`/work/e609/e609/eriche609/KaHIP`. The `out/slurm` directory must exist before
+submission because Slurm opens the output file before starting the script.
+
+These are user-owned scale runs. They have not been submitted or executed by
+local validation or CI. From the Cirrus checkout, create the output directory,
+then submit the GNU gates in order. Continue only after the preceding job's
+canonical probe record passes all invariants:
+
+```console
+cd /work/e609/e609/eriche609/KaHIP
+mkdir -p /work/e609/e609/eriche609/KaHIP/out/slurm
+sbatch ci/cirrus/run-gnu-scale-probe.slurm
+sbatch --nodes=16 --ntasks=4608 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=755 ci/cirrus/run-gnu-scale-probe.slurm
+sbatch --nodes=27 --ntasks=7776 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=900 ci/cirrus/run-gnu-scale-probe.slurm
+sbatch --nodes=38 --ntasks=10944 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=1008 ci/cirrus/run-gnu-scale-probe.slurm
+```
+
+Confirm the baseline with Cray after GNU passes `600^3`:
+
+```console
+sbatch ci/cirrus/run-cray-scale-probe.slurm
+```
+
+Then confirm the largest GNU-passing gate with the matching exact command
+below. If `600^3` is the largest pass, the baseline Cray job above is already
+that confirmation.
+
+```console
+# Largest GNU pass: 755^3
+sbatch --nodes=16 --ntasks=4608 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=755 ci/cirrus/run-cray-scale-probe.slurm
+# Largest GNU pass: 900^3
+sbatch --nodes=27 --ntasks=7776 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=900 ci/cirrus/run-cray-scale-probe.slurm
+# Largest GNU pass: 1008^3
+sbatch --nodes=38 --ntasks=10944 --ntasks-per-node=288 --cpus-per-task=1 --export=ALL,KAHIP_SCALE_PROBE_SIDE=1008 ci/cirrus/run-cray-scale-probe.slurm
+```
+
+See the [Cirrus application-development guide](https://docs.cirrus.ac.uk/user-guide/development/) and [Cirrus batch-job guide](https://docs.cirrus.ac.uk/user-guide/batch/) for the supported environments and scheduler guidance.
+
+We also provide the option to link against TCMalloc. If you have it installed, configure with `-DUSE_TCMALLOC=ON`.
 
 By default node ordering programs are also compiled. If you have Metis installed, the build script also compiles a faster node ordering program that uses reductions before calling Metis ND. Note that Metis requires GKlib (https://github.com/KarypisLab/GKlib).
 
-If you use the option -DUSE_ILP=On and you have Gurobi installed, the build script compiles the ILP programs to improve a given partition *ilp_improve* and an exact solver *ilp_exact*. Alternatively, you can also pass these options to ./compile_withmake.sh for example:
+If you use the option `-DUSE_ILP=ON` and have Gurobi installed, CMake builds the ILP program *ilp_improve* and the exact solver *ilp_exact*:
 
 ```console 
-./compile_withcmake -DUSE_ILP=On
+cmake --preset unix-gcc-release -DUSE_ILP=ON
 ```
-We also provide an option to support 64-bit edges. In order to use this, compile KaHIP with the option -D64BITMODE=On. When enabled, the C interface uses `kahip_idx` (typedef for `int64_t`) instead of `int32_t` for all edge-related arrays and values (xadj, adjncy, adjcwgt, edgecut, infinity_edge_weight). Node-related parameters (n, vwgt, nparts, part) remain `int`. No additional flags are needed; `-D64BITMODE=On` enables both the internal 64-bit edge types and the public `kahip_idx` typedef.
+We also provide an option to support 64-bit edges. Configure with `-D64BITMODE=ON`. When enabled, the C interface uses `kahip_idx` (an `int64_t` typedef) instead of `int32_t` for all edge-related arrays and values (`xadj`, `adjncy`, `adjcwgt`, `edgecut`, and `infinity_edge_weight`). Node-related parameters (`n`, `vwgt`, `nparts`, and `part`) remain `int`.
 
 
-Lastly, we provide an option for determinism in ParHIP, e.g. two runs with the same seed will give you the same result. Note however that this option can reduce the quality of partitions, as initial partitioning algorithms do not use sophisticated memetic algorithms, but only multilevel algorithms to compute initial partitionings. ONLY use this option if you use ParHIP as a tool. Do not use this option if you want to make quality comparisons against ParHIP. To make use of this option, run 
+Lastly, we provide an option for determinism in ParHIP, e.g. two runs with the same seed will give you the same result. Note however that this option can reduce the quality of partitions, as initial partitioning algorithms do not use sophisticated memetic algorithms, but only multilevel algorithms to compute initial partitionings. ONLY use this option if you use ParHIP as a tool. Do not use this option if you want to make quality comparisons against ParHIP. To make use of this option, configure with:
 ```console 
-./compile_withcmake -DDETERMINISTIC_PARHIP=On
+cmake --preset unix-gcc-release -DDETERMINISTIC_PARHIP=ON
 ```
 
 Running Programs

@@ -8,34 +8,26 @@
 #ifndef TIMER_9KPDEP
 #define TIMER_9KPDEP
 
-#include <sys/time.h>
-#include <sys/resource.h> 
-#include <unistd.h> 
+#include <chrono>
+
+namespace parhip {
 
 class timer {
-        public:
-                timer() {
-                        m_start = timestamp(); 
-                } 
+public:
+        timer() : m_start{clock::now()} {}
 
-                void restart() { 
-                        m_start = timestamp(); 
-                } 
+        void restart() {
+                m_start = clock::now();
+        }
 
-                double elapsed() { 
-                        return timestamp()-m_start;
-                }
+        [[nodiscard]] double elapsed() const noexcept {
+                return std::chrono::duration<double>(clock::now() - m_start).count();
+        }
 
-        private:
+private:
+        using clock = std::chrono::steady_clock;
+        std::chrono::time_point<clock> m_start;
+};
 
-                /** Returns a timestamp ('now') in seconds (incl. a fractional part). */
-                inline double timestamp() {
-                        struct timeval tp;
-                        gettimeofday(&tp, NULL);
-                        return double(tp.tv_sec) + tp.tv_usec / 1000000.;
-                }
-
-                double m_start;
-}; 
-
+}
 #endif /* end of include guard: TIMER_9KPDEP */

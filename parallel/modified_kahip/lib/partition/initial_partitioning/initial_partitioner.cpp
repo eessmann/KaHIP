@@ -6,12 +6,13 @@
  *****************************************************************************/
 
 #include "initial_partitioner.h"
-
+namespace kahip::modified {
 initial_partitioner::initial_partitioner() {
                 
 }
 
 initial_partitioner::~initial_partitioner() {
                 
+}
 }
 

@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "matching.h"
-
+namespace kahip::modified {
 matching::matching() {
 
 }
@@ -16,9 +16,9 @@ matching::~matching() {
 }
 
 void matching::print_matching(FILE * out, Matching & edge_matching) {
-        for (NodeID n = 0; n < edge_matching.size(); n++) {
-                fprintf(out, "%d:%d\n", n, edge_matching[n]);
-        }        
+  for (NodeID n = 0; n < edge_matching.size(); n++) {
+    fprintf(out, "%d:%d\n", n, edge_matching[n]);
+  }
 }
-
+}
 

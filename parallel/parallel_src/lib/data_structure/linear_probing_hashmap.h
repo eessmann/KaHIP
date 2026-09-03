@@ -9,7 +9,7 @@
 #define LINEAR_PROBING_HASHMAP_KQ738TKS
 
 #include <stack>
-
+namespace parhip {
 const NodeID NOT_CONTAINED = std::numeric_limits<NodeID>::max();
 
 struct KeyValuePair {
@@ -103,6 +103,6 @@ private:
         std::vector< KeyValuePair > m_internal_map;
         std::stack< NodeID > m_contained_key_positions;
 };
-
+}
 
 #endif /* end of include guard: LINEAR_PROBING_HASHMAP_KQ738TKS */

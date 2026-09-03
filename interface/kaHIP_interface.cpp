@@ -5,8 +5,15 @@
  *
  *****************************************************************************/
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <iostream>
-#include <sstream>
+#include <memory>
+#include <streambuf>
+#include <string_view>
+#include <vector>
 
 #ifdef USEMETIS
         #include "metis.h"
@@ -41,6 +48,67 @@ int kahip_sizeof_idx() {
 }
 
 using namespace std;
+
+namespace {
+class discard_stream_buffer final : public std::streambuf {
+ protected:
+        int_type overflow(int_type character) override {
+                return traits_type::not_eof(character);
+        }
+};
+
+class scoped_output_suppression final {
+public:
+        explicit scoped_output_suppression(bool suppress_output) {
+                if(suppress_output) {
+                        previous_ = std::cout.rdbuf(&sink_);
+                }
+        }
+
+        ~scoped_output_suppression() noexcept {
+                if(previous_ != nullptr) {
+                        try {
+                                std::cout.rdbuf(previous_);
+                        } catch(...) {
+                                // Restoration cannot replace the active failure.
+                        }
+                }
+        }
+
+        scoped_output_suppression(scoped_output_suppression const&) = delete;
+        scoped_output_suppression& operator=(scoped_output_suppression const&) = delete;
+
+private:
+        discard_stream_buffer sink_;
+        std::streambuf* previous_ = nullptr;
+};
+
+void write_serial_diagnostic(std::string_view operation,
+                             std::string_view detail) noexcept {
+        static constexpr auto prefix = std::string_view{"KaHIP serial C boundary "};
+        static constexpr auto separator = std::string_view{": "};
+        static constexpr auto newline = std::string_view{"\n"};
+        static_cast<void>(std::fwrite(prefix.data(), 1, prefix.size(), stderr));
+        static_cast<void>(std::fwrite(operation.data(), 1, operation.size(), stderr));
+        static_cast<void>(std::fwrite(separator.data(), 1, separator.size(), stderr));
+        static_cast<void>(std::fwrite(detail.data(), 1, detail.size(), stderr));
+        static_cast<void>(std::fwrite(newline.data(), 1, newline.size(), stderr));
+        static_cast<void>(std::fflush(stderr));
+}
+
+[[noreturn]] void abort_serial_boundary(std::string_view operation,
+                                        std::exception_ptr failure) noexcept {
+        try {
+                std::rethrow_exception(failure);
+        } catch(std::exception const& error) {
+                write_serial_diagnostic(operation, error.what());
+        } catch(...) {
+                write_serial_diagnostic(operation,
+                                        "unknown unrecoverable exception");
+        }
+        std::abort();
+}
+} // namespace
 
 void internal_kaffpa_set_configuration( configuration & cfg,
                                  PartitionConfig & partition_config,
@@ -111,13 +179,7 @@ void internal_kaffpa_call(PartitionConfig & partition_config,
                           bool perfectly_balance,
                           kahip_idx* edgecut,
                           int* part) {
-
-        //streambuf* backup = cout.rdbuf();
-        //ofstream ofs;
-        //ofs.open("/dev/null");
-        //if(suppress_output) {
-               //cout.rdbuf(ofs.rdbuf()); 
-        //}
+        scoped_output_suppression output_suppression(suppress_output);
 
         partition_config.imbalance = 100*(*imbalance);
         partition_config.kaffpa_perfectly_balance = perfectly_balance;
@@ -139,18 +201,16 @@ void internal_kaffpa_call(PartitionConfig & partition_config,
         }
 
 
+        quality_metrics qm;
+        auto const computed_edgecut = qm.edge_cut(G);
+
         forall_nodes(G, node) {
                 part[node] = G.getPartitionIndex(node);
         } endfor
-
-        quality_metrics qm;
-        *edgecut = qm.edge_cut(G);
-
-        //ofs.close();
-        //cout.rdbuf(backup);
+        *edgecut = computed_edgecut;
 }
 
-void kaffpa(int* n,
+static void kaffpa_impl(int* n,
                    int* vwgt,
                    kahip_idx* xadj,
                    kahip_idx* adjcwgt,
@@ -162,6 +222,7 @@ void kaffpa(int* n,
                    int mode,
                    kahip_idx* edgecut,
                    int* part) {
+        scoped_output_suppression output_suppression(suppress_output);
         configuration cfg;
         PartitionConfig partition_config;
         partition_config.k = *nparts;
@@ -169,10 +230,10 @@ void kaffpa(int* n,
         internal_kaffpa_set_configuration(cfg, partition_config, mode);
 
         partition_config.seed = seed;
-        internal_kaffpa_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, false, edgecut, part);
+        internal_kaffpa_call(partition_config, false, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, false, edgecut, part);
 }
 
-void kaffpa_balance(int* n,
+static void kaffpa_balance_impl(int* n,
                    int* vwgt,
                    kahip_idx* xadj,
                    kahip_idx* adjcwgt,
@@ -185,6 +246,7 @@ void kaffpa_balance(int* n,
                    int mode,
                    kahip_idx* edgecut,
                    int* part) {
+        scoped_output_suppression output_suppression(suppress_output);
         configuration cfg;
         PartitionConfig partition_config;
         partition_config.k = *nparts;
@@ -192,10 +254,10 @@ void kaffpa_balance(int* n,
         internal_kaffpa_set_configuration(cfg, partition_config, mode);
 
         partition_config.seed = seed;
-        internal_kaffpa_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, perfectly_balance, edgecut, part);
+        internal_kaffpa_call(partition_config, false, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, perfectly_balance, edgecut, part);
 }
 
-void kaffpa_balance_NE(int* n,
+static void kaffpa_balance_ne_impl(int* n,
                    int* vwgt,
                    kahip_idx* xadj,
                    kahip_idx* adjcwgt,
@@ -207,6 +269,7 @@ void kaffpa_balance_NE(int* n,
                    int mode,
                    kahip_idx* edgecut,
                    int* part) {
+        scoped_output_suppression output_suppression(suppress_output);
         configuration cfg;
         PartitionConfig partition_config;
         partition_config.k = *nparts;
@@ -215,7 +278,7 @@ void kaffpa_balance_NE(int* n,
 
         partition_config.seed = seed;
         partition_config.balance_edges = true;
-        internal_kaffpa_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, false, edgecut, part);
+        internal_kaffpa_call(partition_config, false, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, false, edgecut, part);
 }
 
 void internal_nodeseparator_call(PartitionConfig & partition_config,
@@ -232,12 +295,7 @@ void internal_nodeseparator_call(PartitionConfig & partition_config,
                           int** separator) {
 
         //first perform std partitioning using KaFFPa
-        streambuf* backup = cout.rdbuf();
-        ofstream ofs;
-        ofs.open("/dev/null");
-        if(suppress_output) {
-               cout.rdbuf(ofs.rdbuf()); 
-        }
+        scoped_output_suppression output_suppression(suppress_output);
 
         partition_config.k         = *nparts;
         partition_config.imbalance = 100*(*imbalance);
@@ -250,6 +308,9 @@ void internal_nodeseparator_call(PartitionConfig & partition_config,
                 area_bfs::m_deepth[node] = 0;
         } endfor
 
+        auto computed_count = 0;
+        auto computed_separator = std::unique_ptr<int[]>{};
+
         if( partition_config.k > 2 ) {
                 partitioner.perform_partitioning(partition_config, G);
 
@@ -261,11 +322,10 @@ void internal_nodeseparator_call(PartitionConfig & partition_config,
                 std::vector<NodeID> internal_separator;
                 vsa.compute_vertex_separator(partition_config, G, boundary, internal_separator);
 
-                // copy to output variables
-                *num_nodeseparator_vertices =  internal_separator.size();
-                *separator = new int[*num_nodeseparator_vertices];
+                computed_count = static_cast<int>(internal_separator.size());
+                computed_separator = std::make_unique<int[]>(computed_count);
                 for( unsigned int i = 0; i < internal_separator.size(); i++) {
-                        (*separator)[i] = internal_separator[i];
+                        computed_separator[i] = internal_separator[i];
                 }
         } else {
                 
@@ -304,23 +364,23 @@ void internal_nodeseparator_call(PartitionConfig & partition_config,
                                 ns_size++;
                         }
                 } endfor
-                *num_nodeseparator_vertices = ns_size;
-                *separator = new int[*num_nodeseparator_vertices];
+                computed_count = static_cast<int>(ns_size);
+                computed_separator = std::make_unique<int[]>(computed_count);
                 unsigned int i = 0;
                 forall_nodes(G, node) {
                         if(G.getPartitionIndex(node) == G.getSeparatorBlock()) {
-                                (*separator)[i] = node;
+                                computed_separator[i] = node;
                                 i++;
                         }
                 } endfor
         }
 
-        ofs.close();
-        cout.rdbuf(backup);
+        *num_nodeseparator_vertices = computed_count;
+        *separator = computed_separator.release();
 }
 
 
-void node_separator(int* n,
+static void node_separator_impl(int* n,
                     int* vwgt,
                     kahip_idx* xadj,
                     kahip_idx* adjcwgt,
@@ -332,6 +392,7 @@ void node_separator(int* n,
                     int mode,
                     int* num_separator_vertices,
                     int** separator) {
+        scoped_output_suppression output_suppression(suppress_output);
         configuration cfg;
         PartitionConfig partition_config;
         partition_config.k = *nparts;
@@ -361,20 +422,17 @@ void node_separator(int* n,
         }
         partition_config.seed = seed;
 
-        internal_nodeseparator_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, mode, num_separator_vertices, separator);
+        internal_nodeseparator_call(partition_config, false, n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance, mode, num_separator_vertices, separator);
 }
 
-void reduced_nd(int* n,
+static void reduced_nd_impl(int* n,
                 kahip_idx* xadj,
                 kahip_idx* adjncy,
                 bool suppress_output,
                 int seed,
                 int mode,
                 int* ordering) {
-        std::streambuf* backup = std::cout.rdbuf();
-        if(suppress_output) {
-                std::cout.rdbuf(nullptr);
-        }
+        scoped_output_suppression output_suppression(suppress_output);
 
         configuration cfg;
         PartitionConfig partition_config;
@@ -429,22 +487,16 @@ void reduced_nd(int* n,
         for (int i = 0; i < *n; ++i) {
                 ordering[i] = dissection.ordering()[i];
         }
-
-        // Restore cout output stream
-        std::cout.rdbuf(backup);
 }
 
 #ifdef USEMETIS
-void reduced_nd_fast(int* n,
+static void reduced_nd_fast_impl(int* n,
                       kahip_idx* xadj,
                       kahip_idx* adjncy,
                       bool suppress_output,
                       int seed,
                       int* ordering) {
-        std::streambuf* backup = std::cout.rdbuf();
-        if(suppress_output) {
-                std::cout.rdbuf(nullptr);
-        }
+        scoped_output_suppression output_suppression(suppress_output);
 
         configuration cfg;
         PartitionConfig partition_config;
@@ -514,10 +566,6 @@ void reduced_nd_fast(int* n,
         for (int i = 0; i < *n; ++i) {
                 ordering[i] = final_labels[i];
         }
-
-        // Restore cout output stream
-        std::cout.rdbuf(backup);
-
         // Delete temporary graph
         delete[] m_xadj;
         delete[] m_adjncy;
@@ -540,13 +588,7 @@ void internal_processmapping_call(PartitionConfig & partition_config,
                           kahip_idx* edgecut,
                           int* qap,
                           int* part) {
-
-        //streambuf* backup = cout.rdbuf();
-        //ofstream ofs;
-        //ofs.open("/dev/null");
-        //if(suppress_output) {
-               //cout.rdbuf(ofs.rdbuf()); 
-        //}
+        scoped_output_suppression output_suppression(suppress_output);
 
         partition_config.imbalance = 100*(*imbalance);
         graph_access G;     
@@ -559,12 +601,8 @@ void internal_processmapping_call(PartitionConfig & partition_config,
                 partitioner.perform_partitioning_krec_hierarchy(partition_config, G);
         }
 
-        forall_nodes(G, node) {
-                part[node] = G.getPartitionIndex(node);
-        } endfor
-
         quality_metrics qm;
-        *edgecut = qm.edge_cut(G);
+        auto const computed_edgecut = qm.edge_cut(G);
 
         int internal_qap = 0;
         //check if k is a power of 2 
@@ -607,20 +645,18 @@ void internal_processmapping_call(PartitionConfig & partition_config,
                 part[node] = G.getPartitionIndex(node);
         } endfor
 
+        *edgecut = computed_edgecut;
         *qap = (int)internal_qap;
-
-        //ofs.close();
-        //cout.rdbuf(backup);
 }
 
-void process_mapping(int* n, int* vwgt, kahip_idx* xadj,
+static void process_mapping_impl(int* n, int* vwgt, kahip_idx* xadj,
                    kahip_idx* adjcwgt, kahip_idx* adjncy,
                    int* hierarchy_parameter,  int* distance_parameter, int hierarchy_depth,
                    int mode_partitioning, int mode_mapping,
                    double* imbalance,
                    bool suppress_output, int seed,
                    kahip_idx* edgecut, int* qap, int* part) {
-
+        scoped_output_suppression output_suppression(suppress_output);
         configuration cfg;
         PartitionConfig partition_config;
         partition_config.k = 1;
@@ -662,14 +698,15 @@ void process_mapping(int* n, int* vwgt, kahip_idx* xadj,
         }
 
         partition_config.seed = seed;
-        internal_processmapping_call(partition_config, suppress_output, n, vwgt, xadj, adjcwgt, adjncy,  mode_mapping, imbalance, edgecut, qap, part);
+        internal_processmapping_call(partition_config, false, n, vwgt, xadj, adjcwgt, adjncy,  mode_mapping, imbalance, edgecut, qap, part);
 
 };
 
-void edge_partitioning(int* n, int* vwgt, kahip_idx* xadj,
+static void edge_partitioning_impl(int* n, int* vwgt, kahip_idx* xadj,
                    kahip_idx* adjcwgt, kahip_idx* adjncy, int* nparts,
                    double* imbalance, bool suppress_output, int seed, int mode,
                    int* vertexcut, int* part, kahip_idx infinity_edge_weight) {
+        scoped_output_suppression output_suppression(suppress_output);
         configuration cfg;
         PartitionConfig partition_config;
         partition_config.k = *nparts;
@@ -697,11 +734,128 @@ void edge_partitioning(int* n, int* vwgt, kahip_idx* xadj,
         splitter.fix_cut_dominant_edges();
         std::vector<PartitionID> edge_partition = splitter.project_partition();
 
-        *vertexcut = static_cast<int>(splitter.calculate_vertex_cut(edge_partition));
+        auto const computed_vertexcut =
+            static_cast<int>(splitter.calculate_vertex_cut(edge_partition));
 
         for (std::size_t i = 0; i < edge_partition.size(); ++i) {
             part[i] = edge_partition[i];
         }
+        *vertexcut = computed_vertexcut;
 }
 
+void kaffpa(int* n, int* vwgt, kahip_idx* xadj, kahip_idx* adjcwgt,
+            kahip_idx* adjncy, int* nparts, double* imbalance,
+            bool suppress_output, int seed, int mode, kahip_idx* edgecut,
+            int* part) noexcept {
+        try {
+                kaffpa_impl(n, vwgt, xadj, adjcwgt, adjncy, nparts,
+                            imbalance, suppress_output, seed, mode, edgecut,
+                            part);
+        } catch(...) {
+                abort_serial_boundary("kaffpa", std::current_exception());
+        }
+}
 
+void kaffpa_balance(int* n, int* vwgt, kahip_idx* xadj,
+                    kahip_idx* adjcwgt, kahip_idx* adjncy, int* nparts,
+                    double* imbalance, bool perfectly_balance,
+                    bool suppress_output, int seed, int mode,
+                    kahip_idx* edgecut, int* part) noexcept {
+        try {
+                kaffpa_balance_impl(
+                    n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
+                    perfectly_balance, suppress_output, seed, mode, edgecut,
+                    part);
+        } catch(...) {
+                abort_serial_boundary("kaffpa_balance",
+                                      std::current_exception());
+        }
+}
+
+void kaffpa_balance_NE(int* n, int* vwgt, kahip_idx* xadj,
+                       kahip_idx* adjcwgt, kahip_idx* adjncy, int* nparts,
+                       double* imbalance, bool suppress_output, int seed,
+                       int mode, kahip_idx* edgecut, int* part) noexcept {
+        try {
+                kaffpa_balance_ne_impl(
+                    n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
+                    suppress_output, seed, mode, edgecut, part);
+        } catch(...) {
+                abort_serial_boundary("kaffpa_balance_NE",
+                                      std::current_exception());
+        }
+}
+
+void process_mapping(
+    int* n, int* vwgt, kahip_idx* xadj, kahip_idx* adjcwgt,
+    kahip_idx* adjncy, int* hierarchy_parameter, int* distance_parameter,
+    int hierarchy_depth, int mode_partitioning, int mode_mapping,
+    double* imbalance, bool suppress_output, int seed, kahip_idx* edgecut,
+    int* qap, int* part) noexcept {
+        try {
+                process_mapping_impl(
+                    n, vwgt, xadj, adjcwgt, adjncy, hierarchy_parameter,
+                    distance_parameter, hierarchy_depth, mode_partitioning,
+                    mode_mapping, imbalance, suppress_output, seed, edgecut,
+                    qap, part);
+        } catch(...) {
+                abort_serial_boundary("process_mapping",
+                                      std::current_exception());
+        }
+}
+
+void node_separator(int* n, int* vwgt, kahip_idx* xadj,
+                    kahip_idx* adjcwgt, kahip_idx* adjncy, int* nparts,
+                    double* imbalance, bool suppress_output, int seed,
+                    int mode, int* num_separator_vertices,
+                    int** separator) noexcept {
+        try {
+                node_separator_impl(
+                    n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
+                    suppress_output, seed, mode, num_separator_vertices,
+                    separator);
+        } catch(...) {
+                abort_serial_boundary("node_separator",
+                                      std::current_exception());
+        }
+}
+
+void reduced_nd(int* n, kahip_idx* xadj, kahip_idx* adjncy,
+                bool suppress_output, int seed, int mode,
+                int* ordering) noexcept {
+        try {
+                reduced_nd_impl(n, xadj, adjncy, suppress_output, seed, mode,
+                                ordering);
+        } catch(...) {
+                abort_serial_boundary("reduced_nd", std::current_exception());
+        }
+}
+
+#ifdef USEMETIS
+void reduced_nd_fast(int* n, kahip_idx* xadj, kahip_idx* adjncy,
+                     bool suppress_output, int seed, int* ordering) noexcept {
+        try {
+                reduced_nd_fast_impl(n, xadj, adjncy, suppress_output, seed,
+                                     ordering);
+        } catch(...) {
+                abort_serial_boundary("reduced_nd_fast",
+                                      std::current_exception());
+        }
+}
+#endif
+
+void edge_partitioning(
+    int* n, int* vwgt, kahip_idx* xadj, kahip_idx* adjcwgt,
+    kahip_idx* adjncy, int* nparts, double* imbalance,
+    bool suppress_output, int seed, int mode, int* vertexcut, int* part,
+    kahip_idx infinity_edge_weight) noexcept {
+        try {
+                edge_partitioning_impl(
+                    n, vwgt, xadj, adjcwgt, adjncy, nparts, imbalance,
+                    suppress_output, seed, mode, vertexcut, part,
+                    infinity_edge_weight);
+        } catch(...) {
+                abort_serial_boundary("edge_partitioning",
+                                      std::current_exception());
+        }
+}

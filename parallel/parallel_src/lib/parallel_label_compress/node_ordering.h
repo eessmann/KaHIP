@@ -14,7 +14,7 @@
 #include "partition_config.h"
 #include "data_structure/parallel_graph_access.h"
 #include "tools/random_functions.h"
-
+namespace parhip {
 class node_ordering {
 public:
         node_ordering();
@@ -26,46 +26,48 @@ public:
                 } endfor
 
                 switch( config.node_ordering ) {
-                        case RANDOM_NODEORDERING:
+                        case NodeOrderingType::RANDOM_NODEORDERING:
                                 order_nodes_random(config, G, ordered_nodes);
-                             break;
-                        case DEGREE_NODEORDERING:
+                        break;
+                        case NodeOrderingType::DEGREE_NODEORDERING:
                                 order_nodes_degree(config, G, ordered_nodes);
-                             break;
-                        case LEASTGHOSTNODESFIRST_DEGREE_NODEODERING:
+                        break;
+                        case NodeOrderingType::
+                            LEASTGHOSTNODESFIRST_DEGREE_NODEODERING:
                                 order_leastghostnodes_nodes_degree(config, G, ordered_nodes);
-                             break;
-                        case DEGREE_LEASTGHOSTNODESFIRST_NODEODERING:
+                        break;
+                        case NodeOrderingType::
+                            DEGREE_LEASTGHOSTNODESFIRST_NODEODERING:
                                 order_nodes_degree_leastghostnodes(config, G, ordered_nodes);
-                             break;
-                 }
+                        break;
+                }
         }
 
-        void order_nodes_random(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) { 
+        void order_nodes_random(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) {
                 random_functions::permutate_vector_fast(ordered_nodes, false);
         }
 
-        void order_nodes_degree(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) { 
-                std::sort( ordered_nodes.begin(), ordered_nodes.end(), 
+        void order_nodes_degree(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) {
+                std::sort( ordered_nodes.begin(), ordered_nodes.end(),
                            [&]( const NodeID & lhs, const NodeID & rhs) -> bool {
                                 return (G.getNodeDegree(lhs) < G.getNodeDegree(rhs));
                            });
         }
 
-        void order_leastghostnodes_nodes_degree(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) { 
-                std::sort( ordered_nodes.begin(), ordered_nodes.end(), 
+        void order_leastghostnodes_nodes_degree(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) {
+                std::sort( ordered_nodes.begin(), ordered_nodes.end(),
                            [&]( const NodeID & lhs, const NodeID & rhs) -> bool {
                                 return (G.getNodeDegree(lhs) < G.getNodeDegree(rhs));
                            });
         }
 
-	void order_nodes_degree_leastghostnodes(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) { 
-                std::sort( ordered_nodes.begin(), ordered_nodes.end(), 
+        void order_nodes_degree_leastghostnodes(const PPartitionConfig & config, parallel_graph_access & G, std::vector< NodeID > & ordered_nodes) {
+                std::sort( ordered_nodes.begin(), ordered_nodes.end(),
                            [&]( const NodeID & lhs, const NodeID & rhs) -> bool {
-				return (G.getNodeDegree(lhs) < G.getNodeDegree(rhs));
+                                return (G.getNodeDegree(lhs) < G.getNodeDegree(rhs));
                            });
         }
 };
-
+}
 
 #endif /* end of include guard: NODE_ORDERING_HM1YMLB1 */

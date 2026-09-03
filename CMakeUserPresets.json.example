@@ -1,0 +1,67 @@
+{
+  "version": 9,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "local-common",
+      "description": "Settings shared by local workstation configurations",
+      "hidden": true
+    },
+    {
+      "name": "local-clang-debug",
+      "displayName": "Local Clang Debug",
+      "description": "Build KaHIP locally with the Clang supplied by devenv in Debug mode",
+      "inherits": [
+        "local-common",
+        "unix-clang-debug"
+      ]
+    },
+    {
+      "name": "local-clang-release",
+      "displayName": "Local Clang Release",
+      "description": "Build KaHIP locally with the Clang supplied by devenv in Release mode",
+      "inherits": [
+        "local-common",
+        "unix-clang-release"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-local-common",
+      "description": "Build settings shared by local workstation configurations",
+      "hidden": true,
+      "jobs": 2
+    },
+    {
+      "name": "build-local-clang-debug",
+      "description": "Build the local Clang Debug configuration",
+      "inherits": "build-local-common",
+      "configurePreset": "local-clang-debug"
+    },
+    {
+      "name": "build-local-clang-release",
+      "description": "Build the local Clang Release configuration",
+      "inherits": "build-local-common",
+      "configurePreset": "local-clang-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-local-clang-debug",
+      "displayName": "Local Clang Debug tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "local-clang-debug"
+    },
+    {
+      "name": "test-local-clang-release",
+      "displayName": "Local Clang Release tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "local-clang-release"
+    }
+  ]
+}

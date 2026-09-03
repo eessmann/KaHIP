@@ -1,0 +1,470 @@
+{
+  "version": 9,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "conf-common",
+      "description": "General settings that apply to all configurations",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "ci-vcpkg-common",
+      "description": "CI-only settings for using vcpkg",
+      "hidden": true,
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+      "name": "conf-unix-common",
+      "description": "Unix-like settings shared by GCC and Clang",
+      "hidden": true,
+      "inherits": "conf-common",
+      "generator": "Ninja",
+      "condition": {
+        "type": "inList",
+        "string": "${hostSystemName}",
+        "list": [
+          "Linux",
+          "Darwin"
+        ]
+      }
+    },
+    {
+      "name": "gcc-common",
+      "description": "General settings for GCC configurations",
+      "hidden": true,
+      "inherits": "conf-unix-common",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "clang-common",
+      "description": "General settings for Clang configurations",
+      "hidden": true,
+      "inherits": "conf-unix-common",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "unix-gcc-debug",
+      "displayName": "GCC Debug",
+      "description": "Build KaHIP for a Unix-like system with GCC in Debug mode",
+      "inherits": "gcc-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "unix-gcc-release",
+      "displayName": "GCC Release",
+      "description": "Build KaHIP for a Unix-like system with GCC in Release mode",
+      "inherits": "gcc-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "unix-clang-debug",
+      "displayName": "Clang Debug",
+      "description": "Build KaHIP for a Unix-like system with Clang in Debug mode",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "unix-clang-release",
+      "displayName": "Clang Release",
+      "description": "Build KaHIP for a Unix-like system with Clang in Release mode",
+      "inherits": "clang-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "cirrus-common",
+      "description": "Cirrus settings for the Cray compiler wrappers and system MPI",
+      "hidden": true,
+      "inherits": "conf-common",
+      "generator": "Unix Makefiles",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cc",
+        "CMAKE_CXX_COMPILER": "CC",
+        "NOMPI": "OFF",
+        "PARHIP": "ON",
+        "DETERMINISTIC_PARHIP": "ON",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "cirrus-gnu-release",
+      "displayName": "Cirrus GCC 14 release",
+      "description": "Build ParHIP after switching Cirrus to PrgEnv-gnu/8.6.0",
+      "inherits": "cirrus-common"
+    },
+    {
+      "name": "cirrus-cray-release",
+      "displayName": "Cirrus Cray Clang 19 release",
+      "description": "Build ParHIP in the default Cirrus PrgEnv-cray/8.6.0 environment",
+      "inherits": "cirrus-common"
+    },
+    {
+      "name": "cirrus-test-common",
+      "description": "Cirrus test settings using Slurm srun as the MPI launcher",
+      "hidden": true,
+      "inherits": "cirrus-common",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "MPIEXEC_EXECUTABLE": {
+          "type": "FILEPATH",
+          "value": "srun"
+        },
+        "MPIEXEC_NUMPROC_FLAG": {
+          "type": "STRING",
+          "value": "-n"
+        },
+        "MPIEXEC_PREFLAGS": {
+          "type": "STRING",
+          "value": "--hint=nomultithread;--distribution=block:block;--kill-on-bad-exit;--unbuffered"
+        },
+        "MPIEXEC_POSTFLAGS": {
+          "type": "STRING",
+          "value": ""
+        }
+      }
+    },
+    {
+      "name": "cirrus-gnu-tests",
+      "displayName": "Cirrus GCC 14 tests",
+      "description": "Build and register ParHIP tests after loading Cirrus ccs/gnu-2026-06",
+      "inherits": "cirrus-test-common"
+    },
+    {
+      "name": "cirrus-cray-tests",
+      "displayName": "Cirrus Cray Clang 19 tests",
+      "description": "Build and register ParHIP tests in the Cirrus PrgEnv-cray/8.6.0 environment",
+      "inherits": "cirrus-test-common"
+    },
+    {
+      "name": "ci-serial-gcc",
+      "displayName": "CI serial GCC",
+      "description": "Reproducible GCC release build without MPI",
+      "inherits": [
+        "gcc-common",
+        "ci-vcpkg-common"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-serial-gcc-64bit",
+      "displayName": "CI serial GCC 64-bit",
+      "description": "Reproducible GCC release build with the 64-bit KaHIP API",
+      "inherits": "ci-serial-gcc",
+      "cacheVariables": {
+        "64BITMODE": "ON"
+      }
+    },
+    {
+      "name": "ci-serial-clang",
+      "displayName": "CI serial Clang",
+      "description": "Reproducible Clang release build without MPI",
+      "inherits": [
+        "clang-common",
+        "ci-vcpkg-common"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-mpi-gcc",
+      "displayName": "CI MPI GCC",
+      "description": "Deterministic ParHIP release build with GCC",
+      "inherits": [
+        "gcc-common",
+        "ci-vcpkg-common"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "OFF",
+        "PARHIP": "ON",
+        "DETERMINISTIC_PARHIP": "ON",
+        "KAHIP_ENABLE_MPI_TRACE": "ON",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-mpi-clang",
+      "displayName": "CI MPI Clang",
+      "description": "Deterministic ParHIP release build with Clang",
+      "inherits": [
+        "clang-common",
+        "ci-vcpkg-common"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "OFF",
+        "PARHIP": "ON",
+        "DETERMINISTIC_PARHIP": "ON",
+        "KAHIP_ENABLE_MPI_TRACE": "ON",
+        "NONATIVEOPTIMIZATIONS": "ON"
+      }
+    },
+    {
+      "name": "ci-sanitizer-clang",
+      "displayName": "CI Clang ASan and UBSan",
+      "description": "Debug serial build with address and undefined-behaviour sanitizers",
+      "inherits": [
+        "clang-common",
+        "ci-vcpkg-common"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON",
+        "kahip_ENABLE_IPO": "OFF",
+        "kahip_ENABLE_SANITIZERS": "ON",
+        "kahip_ENABLE_SANITIZER_ADDRESS": "ON",
+        "kahip_ENABLE_SANITIZER_UNDEFINED": "ON",
+        "kahip_ENABLE_SANITIZER_LEAK": "OFF",
+        "kahip_ENABLE_SANITIZER_THREAD": "OFF",
+        "kahip_ENABLE_SANITIZER_MEMORY": "OFF"
+      }
+    },
+    {
+      "name": "ci-windows-serial",
+      "displayName": "CI Windows serial",
+      "description": "Reproducible MSVC release build without MPI",
+      "inherits": [
+        "conf-common",
+        "ci-vcpkg-common"
+      ],
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NOMPI": "ON",
+        "PARHIP": "OFF",
+        "NONATIVEOPTIMIZATIONS": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-unix-gcc-debug",
+      "description": "Build the GCC Debug configuration",
+      "configurePreset": "unix-gcc-debug"
+    },
+    {
+      "name": "build-unix-gcc-release",
+      "description": "Build the GCC Release configuration",
+      "configurePreset": "unix-gcc-release"
+    },
+    {
+      "name": "build-unix-clang-debug",
+      "description": "Build the Clang Debug configuration",
+      "configurePreset": "unix-clang-debug"
+    },
+    {
+      "name": "build-unix-clang-release",
+      "description": "Build the Clang Release configuration",
+      "configurePreset": "unix-clang-release"
+    },
+    {
+      "name": "build-cirrus-gnu-release",
+      "description": "Build the Cirrus GCC 14 configuration with at most two jobs",
+      "configurePreset": "cirrus-gnu-release",
+      "jobs": 2
+    },
+    {
+      "name": "build-cirrus-cray-release",
+      "description": "Build the Cirrus Cray Clang 19 configuration with at most two jobs",
+      "configurePreset": "cirrus-cray-release",
+      "jobs": 2
+    },
+    {
+      "name": "build-cirrus-gnu-tests",
+      "description": "Build the Cirrus GCC 14 test configuration with at most two jobs",
+      "configurePreset": "cirrus-gnu-tests",
+      "jobs": 2
+    },
+    {
+      "name": "build-cirrus-cray-tests",
+      "description": "Build the Cirrus Cray Clang 19 test configuration with at most two jobs",
+      "configurePreset": "cirrus-cray-tests",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-serial-gcc",
+      "description": "Build the CI serial GCC configuration with at most two jobs",
+      "configurePreset": "ci-serial-gcc",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-serial-gcc-64bit",
+      "description": "Build the CI serial GCC 64-bit configuration with at most two jobs",
+      "configurePreset": "ci-serial-gcc-64bit",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-serial-clang",
+      "description": "Build the CI serial Clang configuration with at most two jobs",
+      "configurePreset": "ci-serial-clang",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-mpi-gcc",
+      "description": "Build the CI MPI GCC configuration with at most two jobs",
+      "configurePreset": "ci-mpi-gcc",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-mpi-clang",
+      "description": "Build the CI MPI Clang configuration with at most two jobs",
+      "configurePreset": "ci-mpi-clang",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-sanitizer-clang",
+      "description": "Build the CI sanitizer configuration with at most two jobs",
+      "configurePreset": "ci-sanitizer-clang",
+      "jobs": 2
+    },
+    {
+      "name": "build-ci-windows-serial",
+      "description": "Build the CI Windows serial configuration with at most two jobs",
+      "configurePreset": "ci-windows-serial",
+      "jobs": 2
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-common",
+      "description": "Strict CTest settings shared by all configurations",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "(large|performance)"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
+    },
+    {
+      "name": "test-unix-gcc-debug",
+      "displayName": "GCC Debug tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-gcc-debug"
+    },
+    {
+      "name": "test-unix-gcc-release",
+      "displayName": "GCC Release tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-gcc-release"
+    },
+    {
+      "name": "test-unix-clang-debug",
+      "displayName": "Clang Debug tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-clang-debug"
+    },
+    {
+      "name": "test-unix-clang-release",
+      "displayName": "Clang Release tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "unix-clang-release"
+    },
+    {
+      "name": "test-cirrus-gnu-tests",
+      "displayName": "Cirrus GCC 14 tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "cirrus-gnu-tests"
+    },
+    {
+      "name": "test-cirrus-cray-tests",
+      "displayName": "Cirrus Cray Clang 19 tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "cirrus-cray-tests"
+    },
+    {
+      "name": "test-ci-serial-gcc",
+      "displayName": "CI serial GCC tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-serial-gcc"
+    },
+    {
+      "name": "test-ci-serial-gcc-64bit",
+      "displayName": "CI serial GCC 64-bit tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-serial-gcc-64bit"
+    },
+    {
+      "name": "test-ci-serial-clang",
+      "displayName": "CI serial Clang tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-serial-clang"
+    },
+    {
+      "name": "test-ci-mpi-gcc",
+      "displayName": "CI MPI GCC tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-mpi-gcc"
+    },
+    {
+      "name": "test-ci-mpi-clang",
+      "displayName": "CI MPI Clang tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-mpi-clang"
+    },
+    {
+      "name": "test-ci-sanitizer-clang",
+      "displayName": "CI Clang sanitizer tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-sanitizer-clang"
+    },
+    {
+      "name": "test-ci-windows-serial",
+      "displayName": "CI Windows serial tests (strict)",
+      "inherits": "test-common",
+      "configurePreset": "ci-windows-serial"
+    }
+  ]
+}

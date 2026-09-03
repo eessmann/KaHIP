@@ -9,7 +9,7 @@
 #define BALANCE_MANAGEMENT_COARSENING_TS6EZN5A
 
 #include "balance_management.h"
-
+namespace parhip {
 class parallel_graph_access;
 
 class balance_management_coarsening : public balance_management {
@@ -57,5 +57,5 @@ void balance_management_coarsening::update_non_contained_block_balance( Partitio
                 m_fuzzy_block_weights[to] += node_weight;
         }
 }
-
+}
 #endif /* end of include guard: BALANCE_MANAGEMENT_COARSENING_TS6EZN5A */

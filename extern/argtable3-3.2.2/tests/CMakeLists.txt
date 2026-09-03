@@ -29,75 +29,81 @@
 ################################################################################
 
 if(ARGTABLE3_ENABLE_ARG_REX_DEBUG)
-  add_definitions(-DARG_REX_DEBUG)
+    add_definitions(-DARG_REX_DEBUG)
 endif()
 
 if(NOT ARGTABLE3_REPLACE_GETOPT)
-  add_definitions(-DARG_REPLACE_GETOPT=0)
+    add_definitions(-DARG_REPLACE_GETOPT=0)
 endif()
 
 if(ARGTABLE3_LONG_ONLY)
-  add_definitions(-DARG_LONG_ONLY)
+    add_definitions(-DARG_LONG_ONLY)
 endif()
 
 set(TEST_PUBLIC_SRC_FILES
-  testall.c
-  testarglit.c
-  testargstr.c
-  testargint.c
-  testargdate.c
-  testargdbl.c
-  testargfile.c
-  testargrex.c
-  testargdstr.c
-  testargcmd.c
-  CuTest.c
+    testall.c
+    testarglit.c
+    testargstr.c
+    testargint.c
+    testargdate.c
+    testargdbl.c
+    testargfile.c
+    testargrex.c
+    testargdstr.c
+    testargcmd.c
+    CuTest.c
 )
 
-set(TEST_SRC_FILES
-  ${TEST_PUBLIC_SRC_FILES}
-  testarghashtable.c
-)
+set(TEST_SRC_FILES ${TEST_PUBLIC_SRC_FILES} testarghashtable.c)
 
 if(UNIX)
-  set(ARGTABLE3_EXTRA_LIBS m)
+    set(ARGTABLE3_EXTRA_LIBS m)
 endif()
 
 if(BUILD_SHARED_LIBS)
-  add_executable(test_shared ${TEST_PUBLIC_SRC_FILES})
-  target_compile_definitions(test_shared PRIVATE -DARGTABLE3_TEST_PUBLIC_ONLY)
-  target_include_directories(test_shared PRIVATE ${PROJECT_SOURCE_DIR}/src)
-  target_link_libraries(test_shared argtable3 ${ARGTABLE3_EXTRA_LIBS})
-  add_custom_command(TARGET test_shared POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "$<TARGET_FILE:argtable3>"
-    "$<TARGET_FILE_DIR:test_shared>"
-  )
+    add_executable(test_shared ${TEST_PUBLIC_SRC_FILES})
+    target_compile_definitions(test_shared PRIVATE -DARGTABLE3_TEST_PUBLIC_ONLY)
+    target_include_directories(test_shared PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(test_shared argtable3 ${ARGTABLE3_EXTRA_LIBS})
+    add_custom_command(
+        TARGET test_shared
+        POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:argtable3>"
+            "$<TARGET_FILE_DIR:test_shared>"
+    )
 
-  add_test(NAME test_shared COMMAND "$<TARGET_FILE:test_shared>")
+    add_test(NAME test_shared COMMAND "$<TARGET_FILE:test_shared>")
 else()
-  add_executable(test_static ${TEST_SRC_FILES})
-  target_include_directories(test_static PRIVATE ${PROJECT_SOURCE_DIR}/src)
-  target_link_libraries(test_static argtable3 ${ARGTABLE3_EXTRA_LIBS})
+    add_executable(test_static ${TEST_SRC_FILES})
+    target_include_directories(test_static PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(test_static argtable3 ${ARGTABLE3_EXTRA_LIBS})
 
-  add_test(NAME test_static COMMAND "$<TARGET_FILE:test_static>")
+    add_test(NAME test_static COMMAND "$<TARGET_FILE:test_static>")
 endif()
 
 add_executable(test_src ${TEST_SRC_FILES} ${ARGTABLE3_SRC_FILES})
 target_include_directories(test_src PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(test_src ${ARGTABLE3_EXTRA_LIBS})
 
-add_custom_command(OUTPUT ${ARGTABLE3_AMALGAMATION_SRC_FILE}
-  COMMAND "${PROJECT_SOURCE_DIR}/tools/build" dist
-  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tools"
+add_custom_command(
+    OUTPUT ${ARGTABLE3_AMALGAMATION_SRC_FILE}
+    COMMAND "${PROJECT_SOURCE_DIR}/tools/build" dist
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tools"
 )
 
-add_executable(test_amalgamation ${TEST_SRC_FILES} ${ARGTABLE3_AMALGAMATION_SRC_FILE})
+add_executable(
+    test_amalgamation
+    ${TEST_SRC_FILES}
+    ${ARGTABLE3_AMALGAMATION_SRC_FILE}
+)
 target_include_directories(test_amalgamation PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(test_amalgamation ${ARGTABLE3_EXTRA_LIBS})
-add_custom_command(TARGET test_amalgamation PRE_BUILD
-  COMMAND "${PROJECT_SOURCE_DIR}/tools/build" dist
-  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tools"
+add_custom_command(
+    TARGET test_amalgamation
+    PRE_BUILD
+    COMMAND "${PROJECT_SOURCE_DIR}/tools/build" dist
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tools"
 )
 
 add_test(NAME test_src COMMAND "$<TARGET_FILE:test_src>")

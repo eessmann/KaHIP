@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 #include "path.h"
-
+namespace kahip::modified {
 path::path() : head(UNDEFINED_NODE), tail(UNDEFINED_NODE), length(0), active(false) {
                 
 }
@@ -18,4 +18,4 @@ path::path(const NodeID & v) : head(v), tail(v), length(0), active(true) {
 path::~path() {
                 
 }
-
+}

@@ -19,13 +19,17 @@
 #endif
 #endif
 #include "configuration.h"
+#include "parse_outcome.h"
 #include "version.h"
-
-int parse_parameters(int argn, char **argv, 
+namespace parhip {
+parse_outcome parse_parameters(int argn, char **argv,
                      PPartitionConfig & partition_config, 
-                     std::string & graph_filename) {
+                     std::string & graph_filename,
+                     mpi::communicator_view communicator) {
 
         const char *progname = argv[0];
+        auto const rank = communicator.rank();
+        auto const size = communicator.size();
 
         // Setup argtable parameters.
         struct arg_lit *help                           = arg_lit0(NULL, "help","Print help.");
@@ -65,10 +69,10 @@ int parse_parameters(int argn, char **argv,
         void* argtable[] = {
 #ifdef PARALLEL_LABEL_COMPRESSION
                 help, filename, user_seed, version, k, inbalance, preconfiguration, vertex_degree_weights,
-		save_partition, save_partition_binary,
-#elif defined TOOLBOX 
+                save_partition, save_partition_binary,
+#elif defined TOOLBOX
                 help, filename, k_opt, input_partition_filename, save_partition, save_partition_binary, converter_evaluate,
-#endif 
+#endif
                  end
         };
 
@@ -76,21 +80,15 @@ int parse_parameters(int argn, char **argv,
         int nerrors = arg_parse(argn, argv, argtable);
 
         if (version->count > 0) {
-                int rank;
-                MPI_Comm_rank( MPI_COMM_WORLD, &rank);
-
                 if( rank == ROOT ) {
                         std::cout <<  KAHIPVERSION  << std::endl;
                 }
                 arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                return 1;
+                return parse_outcome::early_success;
         }
 
         // Catch case that help was requested.
         if(help->count > 0) {
-                int rank;
-                MPI_Comm_rank( MPI_COMM_WORLD, &rank);
-
                 if( rank == ROOT ) {
                         printf("Usage: %s", progname);
                         arg_print_syntax(stdout, argtable, "\n");
@@ -98,29 +96,41 @@ int parse_parameters(int argn, char **argv,
                         printf("This is the experimental parallel partitioner program.\n");
                 }
                 arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                return 1;
+                return parse_outcome::early_success;
         }
 
 
         if(nerrors > 0) {
-                int rank;
-                MPI_Comm_rank( MPI_COMM_WORLD, &rank);
                 if( rank == ROOT ) {
                         arg_print_errors(stderr, end, progname);
                         printf("Try '%s --help' for more information.\n",progname);
                 }
                 arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                return 1; 
+                return parse_outcome::invalid_arguments;
         }
 
         configuration cfg;
         cfg.standard(partition_config);
 
         if(k->count > 0) {
+                if(k->ival[0] <= 0) {
+                        if(rank == ROOT) {
+                                fprintf(stderr, "Number of blocks must be positive.\n");
+                        }
+                        arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
+                        return parse_outcome::invalid_arguments;
+                }
                 partition_config.k = k->ival[0];
         }
 
         if(k_opt->count > 0) {
+                if(k_opt->ival[0] <= 0) {
+                        if(rank == ROOT) {
+                                fprintf(stderr, "Number of blocks must be positive.\n");
+                        }
+                        arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
+                        return parse_outcome::invalid_arguments;
+                }
                 partition_config.k = k_opt->ival[0];
         }
 
@@ -130,13 +140,15 @@ int parse_parameters(int argn, char **argv,
                 graph_filename = filename->sval[0];
         } else {
                 if(partition_config.generate_rgg == false && partition_config.generate_ba == false) {
-                        printf("You must specify a filename or enable the graph generator tag.\n");
+                        if(rank == ROOT) {
+                                printf("You must specify a filename or enable the graph generator tag.\n");
+                        }
                         arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                        return 1;
+                        return parse_outcome::invalid_arguments;
                 }
         }
 
-#else 
+#else
         if(filename->count > 0) {
                 graph_filename = filename->sval[0];
         }
@@ -147,13 +159,13 @@ int parse_parameters(int argn, char **argv,
 
         if(preconfiguration->count > 0) {
                 if (strcmp("ecosocial", preconfiguration->sval[0]) == 0) {
-                        cfg.eco(partition_config);
+                        cfg.eco(partition_config, communicator);
                 } else if (strcmp("fastsocial", preconfiguration->sval[0]) == 0) {
                         cfg.fast(partition_config);
                 } else if (strcmp("ultrafastsocial", preconfiguration->sval[0]) == 0) {
                         cfg.ultrafast(partition_config);
                 } else if (strcmp("ecomesh", preconfiguration->sval[0]) == 0) {
-                        cfg.eco(partition_config);
+                        cfg.eco(partition_config, communicator);
                         partition_config.cluster_coarsening_factor = 20000;
                 } else if (strcmp("fastmesh", preconfiguration->sval[0]) == 0) {
                         cfg.fast(partition_config);
@@ -162,9 +174,11 @@ int parse_parameters(int argn, char **argv,
                         cfg.ultrafast(partition_config);
                         partition_config.cluster_coarsening_factor = 20000;
                 } else {
-                        fprintf(stderr, "Invalid preconfconfiguration variant: \"%s\"\n", preconfiguration->sval[0]);
+                        if(rank == ROOT) {
+                                fprintf(stderr, "Invalid preconfconfiguration variant: \"%s\"\n", preconfiguration->sval[0]);
+                        }
                         arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                        exit(0);
+                        return parse_outcome::invalid_arguments;
                 }
         }
 
@@ -172,17 +186,17 @@ int parse_parameters(int argn, char **argv,
                 partition_config.vertex_degree_weights = true;
         }
 
-	if(converter_evaluate->count > 0) {
-		partition_config.converter_evaluate = true;
-	}
+        if(converter_evaluate->count > 0) {
+                partition_config.converter_evaluate = true;
+        }
 
-	if(save_partition->count > 0) {
-		partition_config.save_partition = true;
-	}
+        if(save_partition->count > 0) {
+                partition_config.save_partition = true;
+        }
 
-	if(save_partition_binary->count > 0) {
-		partition_config.save_partition_binary = true;
-	}
+        if(save_partition_binary->count > 0) {
+                partition_config.save_partition_binary = true;
+        }
 
         if(n->count > 0) {
                 partition_config.n = pow(10,n->ival[0]);
@@ -201,6 +215,13 @@ int parse_parameters(int argn, char **argv,
         }
 
         if (binary_io_window_size->count > 0) {
+                if(binary_io_window_size->ival[0] <= 0) {
+                        if(rank == ROOT) {
+                                fprintf(stderr, "Binary I/O window size must be positive.\n");
+                        }
+                        arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
+                        return parse_outcome::invalid_arguments;
+                }
                 partition_config.binary_io_window_size = binary_io_window_size->ival[0];
         }
 
@@ -222,8 +243,6 @@ int parse_parameters(int argn, char **argv,
 
 
         if (evolutionary_time_limit->count > 0) {
-                int size;
-                MPI_Comm_size( MPI_COMM_WORLD, &size);
                 partition_config.evolutionary_time_limit = evolutionary_time_limit->ival[0]/size;
         }
 
@@ -250,44 +269,59 @@ int parse_parameters(int argn, char **argv,
 
         if(initial_partitioning_algorithm->count > 0) {
                 if(strcmp("kaffpaEstrong", initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = KAFFPAESTRONG;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::KAFFPAESTRONG;
                 } else if (strcmp("kaffpaEeco",initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = KAFFPAEECO;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::KAFFPAEECO;
                 } else if (strcmp("kaffpaEfast", initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = KAFFPAEFAST;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::KAFFPAEFAST;
                 } else if (strcmp("fastsocial", initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = KAFFPAEFASTSNW;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::KAFFPAEFASTSNW;
                 } else if (strcmp("ecosocial", initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = KAFFPAEECOSNW;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::KAFFPAEECOSNW;
                 } else if (strcmp("strongsocial", initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = KAFFPAESTRONGSNW;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::KAFFPAESTRONGSNW;
                 } else if (strcmp("random", initial_partitioning_algorithm->sval[0]) == 0) {
-                        partition_config.initial_partitioning_algorithm = RANDOMIP;
+                        partition_config.initial_partitioning_algorithm =
+                      InitialPartitioningAlgorithm::RANDOMIP;
                 } else {
-                        fprintf(stderr, "Invalid initial partitioning algorithm: \"%s\"\n", initial_partitioning_algorithm->sval[0]);
+                        if(rank == ROOT) {
+                                fprintf(stderr, "Invalid initial partitioning algorithm: \"%s\"\n", initial_partitioning_algorithm->sval[0]);
+                        }
                         arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                        exit(0);
+                        return parse_outcome::invalid_arguments;
                 }
         }
 
         if(node_ordering->count > 0) {
                 if(strcmp("random", node_ordering->sval[0]) == 0) {
-                        partition_config.node_ordering = RANDOM_NODEORDERING;
+                        partition_config.node_ordering =
+                      NodeOrderingType::RANDOM_NODEORDERING;
                 } else if (strcmp("degree", node_ordering->sval[0]) == 0) {
-                        partition_config.node_ordering = DEGREE_NODEORDERING;
+                        partition_config.node_ordering =
+                      NodeOrderingType::DEGREE_NODEORDERING;
                 } else if (strcmp("leastghostnodesfirst_degree", node_ordering->sval[0]) == 0) {
-                        partition_config.node_ordering = LEASTGHOSTNODESFIRST_DEGREE_NODEODERING;
+                        partition_config.node_ordering =
+                      NodeOrderingType::LEASTGHOSTNODESFIRST_DEGREE_NODEODERING;
                 } else if (strcmp("degree_leastghostnodesfirst", node_ordering->sval[0]) == 0) {
-                        partition_config.node_ordering = DEGREE_LEASTGHOSTNODESFIRST_NODEODERING;
+                        partition_config.node_ordering =
+                      NodeOrderingType::DEGREE_LEASTGHOSTNODESFIRST_NODEODERING;
                 } else {
-                        fprintf(stderr, "Invalid node ordering variant: \"%s\"\n", node_ordering->sval[0]);
+                        if(rank == ROOT) {
+                                fprintf(stderr, "Invalid node ordering variant: \"%s\"\n", node_ordering->sval[0]);
+                        }
                         arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-                        exit(0);
+                        return parse_outcome::invalid_arguments;
                 }
         }
 
         arg_freetable(argtable_fordeletion, sizeof(argtable_fordeletion) / sizeof(argtable_fordeletion[0]));
-        return 0;
+        return parse_outcome::continue_execution;
 }
-
+}
 #endif /* end of include guard: PARSE_PARAMETERS_GPJMGSM8 */

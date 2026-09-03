@@ -16,45 +16,45 @@
 #include "random_functions.h"
 #include "uncoarsening/refinement/refinement.h"
 #include "uncoarsening/refinement/quotient_graph_refinement/2way_fm_refinement/vertex_moved_hashtable.h"
-
+namespace kahip::modified {
 class kway_graph_refinement_commons  {
-        public:
+public:
 
-                virtual ~kway_graph_refinement_commons();
+        virtual ~kway_graph_refinement_commons();
 
-                void init( PartitionConfig & config );
+        void init( PartitionConfig & config );
 
-                bool incident_to_more_than_two_partitions(graph_access & G, NodeID & node);
+        bool incident_to_more_than_two_partitions(graph_access & G, NodeID & node);
 
-                EdgeWeight compute_gain(graph_access & G, 
-                                        NodeID & node, 
-                                        PartitionID & max_gainer, 
-                                        EdgeWeight & ext_degree);
+        EdgeWeight compute_gain(graph_access & G,
+                                NodeID & node,
+                                PartitionID & max_gainer,
+                                EdgeWeight & ext_degree);
 
-                bool int_ext_degree( graph_access & G, 
-                                     const NodeID & node,
-                                     const PartitionID lhs,
-                                     const PartitionID rhs,
-                                     EdgeWeight & int_degree,
-                                     EdgeWeight & ext_degree);
+        bool int_ext_degree( graph_access & G,
+                             const NodeID & node,
+                             const PartitionID lhs,
+                             const PartitionID rhs,
+                             EdgeWeight & int_degree,
+                             EdgeWeight & ext_degree);
 
-                static kway_graph_refinement_commons* getInstance( PartitionConfig & config );
+        static kway_graph_refinement_commons* getInstance( PartitionConfig & config );
 
-                inline unsigned getUnderlyingK();
+        inline unsigned getUnderlyingK();
 
-        private:
-                kway_graph_refinement_commons( );
+private:
+        kway_graph_refinement_commons( );
 
-                //for efficient computation of internal and external degrees
-                struct round_struct {
-                        unsigned round;
-                        EdgeWeight local_degree;
-                };
+        //for efficient computation of internal and external degrees
+        struct round_struct {
+                unsigned round;
+                EdgeWeight local_degree;
+        };
 
-                static 
-                std::vector<kway_graph_refinement_commons*>* m_instances;
-                std::vector<round_struct>                    m_local_degrees;
-                unsigned                                     m_round;
+        static
+        std::vector<kway_graph_refinement_commons*>* m_instances;
+        std::vector<round_struct>                    m_local_degrees;
+        unsigned                                     m_round;
 };
 
 
@@ -178,7 +178,7 @@ inline Gain kway_graph_refinement_commons::compute_gain(graph_access & G,
 
         return max_degree-m_local_degrees[source_partition].local_degree;
 }
-
+}
 
 #endif /* end of include guard: KWAY_GRAPH_REFINEMENT_COMMONS_PVGY97EW */
 

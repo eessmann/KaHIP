@@ -7,7 +7,7 @@
 
 #ifndef KWAY_STOP_RULE_ULPK0ZTF
 #define KWAY_STOP_RULE_ULPK0ZTF
-
+namespace kahip::modified {
 class kway_stop_rule {
 public:
         kway_stop_rule(PartitionConfig & config) {};
@@ -90,7 +90,7 @@ inline bool kway_adaptive_stop_rule::search_should_stop(unsigned int min_cut_idx
         return m_steps*m_expected_gain*m_expected_gain > 
                 pconfig->kway_adaptive_limits_alpha * m_expected_variance2 + pconfig->kway_adaptive_limits_beta && (m_steps != 1);
 }
-
+}
 
 
 #endif /* end of include guard: KWAY_STOP_RULE_ULPK0ZTF */

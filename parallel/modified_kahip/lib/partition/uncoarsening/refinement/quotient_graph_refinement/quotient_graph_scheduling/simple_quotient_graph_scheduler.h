@@ -10,8 +10,8 @@
 
 #include "partition_config.h"
 #include "quotient_graph_scheduling.h"
-
-class simple_quotient_graph_scheduler : public quotient_graph_scheduling  { 
+namespace kahip::modified {
+class simple_quotient_graph_scheduler : public quotient_graph_scheduling  {
 public:
         simple_quotient_graph_scheduler(PartitionConfig & config, 
                                         QuotientGraphEdges & qgraph_edges,  
@@ -36,5 +36,5 @@ inline boundary_pair & simple_quotient_graph_scheduler::getNext( ) {
         m_quotient_graph_edges_pool.pop_back();
         return ret_value; 
 }
-
+}
 #endif /* end of include guard: SIMPLE_QUOTIENT_GRAPH_SCHEDULER_YG9BEBH0 */

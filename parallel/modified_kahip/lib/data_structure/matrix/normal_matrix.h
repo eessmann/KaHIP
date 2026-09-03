@@ -9,7 +9,7 @@
 #define NORMAL_MATRIX_DAUJ4JMM
 
 #include "matrix.h"
-
+namespace kahip::modified {
 class normal_matrix : public matrix {
 public:
         normal_matrix(unsigned int dim_x, unsigned int dim_y, int lazy_init_val = 0) : m_dim_x (dim_x), 
@@ -17,18 +17,17 @@ public:
                                                                                        m_lazy_init_val ( lazy_init_val ) {
                 m_internal_matrix.resize(m_dim_x); //allocate the rest lazy
         };
-        virtual ~normal_matrix() {};
 
-        inline int get_xy(unsigned int x, unsigned int y) {
-                if( m_internal_matrix[x].size() == 0 ) { 
+        int get_xy(unsigned int x, unsigned int y) override {
+                if( m_internal_matrix[x].empty() ) {
                         return m_lazy_init_val;
                 }
                 return m_internal_matrix[x][y];
         };
 
-        inline void set_xy(unsigned int x, unsigned int y, int value) {
+        void set_xy(unsigned int x, unsigned int y, int value) override {
                 //resize the fields lazy
-                if( m_internal_matrix[x].size() == 0 ) { 
+                if( m_internal_matrix[x].empty() ) {
                         m_internal_matrix[x].resize(m_dim_y);
                         for( unsigned y_1 = 0; y_1 < m_dim_y; y_1++) {
                                 m_internal_matrix[x][y_1] = m_lazy_init_val;
@@ -42,6 +41,6 @@ private:
         unsigned int m_dim_x, m_dim_y;
         int m_lazy_init_val;
 };
-
+}
 
 #endif /* end of include guard: NORMAL_MATRIX_DAUJ4JMM */
